@@ -144,11 +144,26 @@ def seed_zones():
     return tzif, posix
 
 
+def seed_duration():
+    out = reset("duration")
+    # The harness reads a date-time pair out of the first bytes and then tries
+    # the tail as ISO 8601 duration text, so a seed is a header plus a text.
+    header = bytes(range(24))
+    texts = [b"PT0S", b"P1Y2M3DT4H5M6S", b"-P1D", b"P-1D", b"PT0.5S",
+             b"P3W", b"P1Y2D", b"PT1H2S", b"PT0,5S", b"P1M-1D",
+             b"P999999999999999999999999D", b"P1.5Y", b"P1YT"]
+    for text in texts:
+        write(out, header + text)
+        write(out, text)
+    return out
+
+
 def main():
     parse = seed_parse()
     arith = seed_arith()
     tzif, posix = seed_zones()
-    for path in (parse, arith, tzif, posix):
+    duration = seed_duration()
+    for path in (parse, arith, tzif, posix, duration):
         count = len([p for p in path.iterdir() if p.is_file()
                      and p.name != ".gitignore"])
         print("%-34s %5d seeds" % (path.relative_to(ROOT), count))

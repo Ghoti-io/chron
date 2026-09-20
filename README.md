@@ -96,8 +96,8 @@ if a tier includes a higher tier's header.
 
 | Tier | Header | Holds | Needs |
 | --- | --- | --- | --- |
-| 0 | `core.h`, `civil.h` | result codes, limits, diagnostics; dates, times, epoch days, ISO weeks, ordinal dates, the nth weekday of a month | nothing |
-| 0/1 | `duration.h` | `GCHRON_Duration` and its sign invariant; `GCHRON_Overflow` | nothing |
+| 0 | `core.h`, `civil.h`, `calendar.h` | result codes, limits, diagnostics; dates, times, epoch days, ISO weeks, ordinal dates, the nth weekday of a month; the Gregorian, Julian, hybrid and tabular calendars | nothing |
+| 0/1 | `duration.h` | `GCHRON_Duration`, its sign invariant, `GCHRON_Overflow`, and the arithmetic: add, until, balance, round | nothing |
 | 1 | `instant.h`, `offset.h`, `parse.h` | instants, intervals, exact arithmetic, the Unix encodings; civil time with an offset; the RFC 3339 and TOML grammars in both directions | nothing |
 | 2 | `zone.h`, `zoned.h` | named zones, DST transitions, the gap and overlap policy, the local zone, RFC 9557 | TZif files |
 | 3 | `format.h` | LDML patterns, `strftime`, month and day names | a names provider |
@@ -105,6 +105,30 @@ if a tier includes a higher tier's header.
 Tier 3 is not built yet; `documentation/design.md` §16 says which phase each
 remaining piece arrives in, and what is deliberately absent rather than
 stubbed.
+
+### Calendars are open
+
+A calendar here is a small vtable, and the struct is public - because a
+library whose set of calendars is closed cannot have the one nobody
+anticipated. A calendar with fixed month lengths and a cyclic leap rule needs
+no code at all, just a filled-in `GCHRON_TabularCalendar`:
+
+```c
+/* Ten months of thirty-six days and a five-day festival. */
+static const uint16_t months[11] = { 36,36,36,36,36,36,36,36,36,36,5 };
+GCHRON_TabularCalendar shire = {
+  .id = "tabular:shire", .month_count = 11, .month_days = months,
+  .leap_month = 11, .leap_days = 1, .days_in_week = 5,
+  .leap_rule = { .cycle_years = 100, .pattern = bits, .pattern_bytes = 13 },
+};
+GCHRON_Calendar * calendar;
+gchron_calendar_tabular(&shire, NULL, &calendar);
+```
+
+The Gregorian and Julian calendars are *not* implemented that way - a
+closed-form algorithm is faster - but the tests build both as tabular
+calendars and prove them identical to the shipped ones over 800,000 days,
+which is what says the engine is right.
 
 ### The types
 
@@ -165,6 +189,8 @@ where a person's intuition about a calendar is the thing under test.
 | every transition of twenty zones | `zdump`, the reference implementation of the tzdb itself: 8,540 rows, each checking the offset, the daylight-saving flag, the abbreviation **and** the civil reading derived from the instant |
 | the POSIX `TZ` footer grammar | glibc's own `tzset`, over 548,960 probes covering **every distinct footer rule in this machine's database** - harvested from the TZif files rather than typed, which is how the corpus came to contain a negative daylight-saving offset, a thirty-minute shift and a rule that wraps a year |
 | every zone, not just twenty | Python's `zoneinfo`, reading the same files through different code: 105,948 probes over all 486 zones, by `make check-oracle-zoneinfo` |
+| the Julian and hybrid calendars | the `convertdate` package, which implements Reingold and Dershowitz's algorithms: 35,906 Julian vectors, and every day around each of the three cut-overs |
+| duration arithmetic | its own contract, checked as a property rather than against a table: **`from + until(from, to) == to`**, over hundreds of date pairs and every unit. Two defects came out of it that no oracle would have found, because no oracle is asked whether a library agrees with itself |
 
 Vectors are committed, so `make test` never needs an oracle;
 `tools/corpus/fetch.sh` and `make vectors` regenerate them, and a CI that runs
@@ -184,10 +210,10 @@ lookup disagreed with each other. `design.md` §16 has the detail. All three
 needed input no real database contains.
 
 ```bash
-make test                    # 172 tests, the conformance runners included
+make test                    # 210 tests, the conformance runners included
 make test-valgrind           # the same, clean
 make test-asan               # ASan + UBSan; the UBSan half proves no signed overflow
-make fuzz                    # text, arithmetic, TZif and the TZ grammar
+make fuzz                    # text, arithmetic, durations, TZif and the TZ grammar
 make check-symbols           # every exported symbol carries the version namespace
 make check-layering          # no tier includes a higher tier's header
 make check-oracle-zoneinfo   # every zone against Python's zoneinfo
@@ -202,13 +228,14 @@ make vectors                 # regenerate the committed vectors from their oracl
 
 ## Status
 
-Phases 0 and 1 of `documentation/design.md` §16. Tiers 0, 1 and 2 are built:
-civil arithmetic, instants, offsets, durations as a type and as RFC 3339 text,
-the RFC 3339 and TOML grammars in both directions, and time zones - TZif, the
-POSIX `TZ` footer, the gap and overlap policy, the local zone and RFC 9557.
+Phases 0, 1 and 2 of `documentation/design.md` §16. Tiers 0, 1 and 2 are
+built: civil arithmetic; the Gregorian, Julian, hybrid and tabular calendars;
+instants, offsets and durations with their full arithmetic; the RFC 3339,
+TOML, RFC 9557 and ISO 8601 duration grammars; and time zones - TZif, the
+POSIX `TZ` footer, the gap and overlap policy and the local zone.
 
-The other calendars, duration arithmetic, the LDML formatter, the interop
-conversions, the leap-second table and the embedded time-zone database are the
-later phases, and are absent rather than stubbed.
+The LDML formatter, the interop conversions, the clock, the leap-second table
+and the embedded time-zone database are the later phases, and are absent
+rather than stubbed.
 
 Version 0.0.0. MIT licensed.

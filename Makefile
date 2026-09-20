@@ -958,9 +958,11 @@ $(eval $(call fuzz-rule,fuzz_parse,parse))
 $(eval $(call fuzz-rule,fuzz_arith,arith))
 $(eval $(call fuzz-rule,fuzz_tzif,tzif))
 $(eval $(call fuzz-rule,fuzz_posix_tz,posix_tz))
+$(eval $(call fuzz-rule,fuzz_duration,duration))
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
-fuzz: fuzz-run-parse fuzz-run-arith fuzz-run-tzif fuzz-run-posix_tz
+fuzz: fuzz-run-parse fuzz-run-arith fuzz-run-tzif fuzz-run-posix_tz \
+	fuzz-run-duration
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 	-@rm -rf $(FUZZ_DIR)

@@ -1,6 +1,6 @@
 # The design of ghoti.io-chron
 
-**Status:** phases 0 and 1 have shipped; §16's later phases are still design. This
+**Status:** phases 0, 1 and 2 have shipped; §16's later phases are still design. This
 page says what exists and why, so that the code can be judged against it
 rather than the other way round. A change of mind lands here first, in the
 same commit as the code that needs it (`CONVENTIONS.md` §9), and §16 marks
@@ -1147,13 +1147,55 @@ for one engineer who knows the suite.
 | --- | --- | --- | --- |
 | 0 **(done)** | Scaffold from `model` (`CONVENTIONS.md` §12); `core.h`; `civil.h` with Gregorian; `instant.h`; `offset.h`; `duration.h`'s type and its Appendix A text; RFC 3339 and TOML grammars, both directions; the exhaustive civil tests; the JSON Schema format vectors | M | **M1: `text` can replace its timestamp side-car and pass the JSON Schema `format` vectors** - reached; all 207 vectors pass |
 | 1 **(done)** | `zone.h`: TZif, the POSIX TZ footer, `ZoneDb`, `Resolve`, transitions, the local zone (Linux/macOS); `zoned.h`; the `zdump`, `zoneinfo` and `tzset` differentials; RFC 9557 | L | **M2: `ctang` can render a date in a zone** - reached |
-| 2 | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** |
+| 2 **(done)** | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** - reached |
 | 3 | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** |
 | 4 | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** |
 
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz` and
 `check-symbols` clean from an empty build directory, serially and under
 `-j`, per `CONVENTIONS.md` §12 item 10.
+
+**What phase 2 built, and the two defects its own properties found.** The
+Julian, hybrid and tabular calendars; duration arithmetic in full - `add`,
+`until`, `balance`, `round` - and the permissive ISO 8601 duration grammar
+that phase 0 deferred. `convertdate`, which implements Reingold and
+Dershowitz's algorithms, supplies 35,906 Julian vectors and 120 rows around
+the three cut-overs.
+
+The two defects were both found by the round-trip property
+`from + until(from, to) == to`, which is the whole contract of a difference:
+
+1. **`until` composed its units differently from `add`.** `gchron_datetime_add`
+   applies years and months *together*, so `2000-02-29 + P26Y6M` is 2026-08-29
+   - the day survives because August has thirty-one. A `until` that found the
+   years first, re-anchored on the clamped 2026-02-28, and then found the
+   months from there produced `P26Y6M23D`, which adds back up to the wrong
+   day. `until` is now a refinement loop in which every probe re-adds the
+   **whole accumulated duration** from the start, so the two compose
+   identically by construction.
+2. **A difference held in nanoseconds spans only 292 years.** `int64_t`
+   nanoseconds reach 9.2e18, and three centuries is 9.5e18; every pair further
+   apart than that failed with `GCHRON_ERR_RANGE`. Differences and additions
+   now carry seconds plus a nanosecond remainder, which spans 292 *billion*
+   years - comfortably past what a nine-digit year can express.
+
+Both are the kind of defect no oracle finds, because no oracle is asked
+whether a library agrees with itself.
+
+**Where phase 2 departs from this page.** §5.2 says every function taking a
+`GCHRON_Date` takes a calendar argument, with `NULL` meaning Gregorian. The
+calendar-taking functions are in `calendar.h` instead, and `civil.h`'s keep
+their shorter Gregorian-only signatures - `gchron_date_to_epoch_day(date,
+&day)` rather than `gchron_date_to_epoch_day(NULL, date, &day)`. `text`,
+`compress` and `image` want the Gregorian case and nothing else, and a
+parameter they would always pass `NULL` to is noise in the header they
+actually read. The rule §5.2 states still holds wherever a calendar is
+accepted.
+
+§5.5 sketches a `leap_years_in_cycle` field beside the leap pattern.
+`GCHRON_LeapRule` does not have one: it is a popcount of the pattern, two ways
+of saying one thing are two ways for them to disagree, and this suite has the
+scar from `regex`'s unread table flags.
 
 **What phase 1 built, and what it found.** The TZif reader, the POSIX TZ
 footer, the database and its cache, `Resolve`, the local zone, `zoned.h` and

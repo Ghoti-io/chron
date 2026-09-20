@@ -3,12 +3,7 @@
  *
  * Durations: an amount of time, in calendar units, exact units, or both.
  *
- * Tier 0/1 (design.md section 3). This header carries the type, its
- * invariants and the policy that governs month-end overflow. The arithmetic -
- * `balance`, `until`, rounding, and applying a duration to a calendar - is
- * phase 2 (design.md section 16); what is here is what the phase 0 text
- * grammars need, and every function that is not here yet is absent rather
- * than stubbed.
+ * Tier 0/1 (design.md section 3).
  *
  * Reference: RFC 3339 appendix A; ISO 8601-1:2019 section 5.5.2.
  *
@@ -18,6 +13,8 @@
 #ifndef GHOTI_IO_GCHRON_DURATION_H
 #define GHOTI_IO_GCHRON_DURATION_H
 
+#include <ghoti.io/chron/calendar.h>
+#include <ghoti.io/chron/civil.h>
 #include <ghoti.io/chron/core.h>
 #include <ghoti.io/chron/macros.h>
 #include <stdbool.h>
@@ -90,6 +87,37 @@ typedef enum {
   /** Clamp to the last day of the target month: `Jan 31 + P1M` is Feb 28. */
   GCHRON_OVERFLOW_CONSTRAIN
 } GCHRON_Overflow;
+
+/**
+ * @brief What to do when a result cannot be expressed exactly.
+ *
+ * design.md section 3.7 again: the zero value refuses. A caller who did not
+ * think about rounding gets told that the answer was not exact, rather than
+ * an answer that quietly is not the one they asked for.
+ */
+typedef enum {
+  /** An inexact result is GCHRON_ERR_RANGE. */
+  GCHRON_ROUND_REJECT = 0,
+
+  /** Toward zero. What C's integer division does. */
+  GCHRON_ROUND_TRUNCATE,
+
+  /** Toward negative infinity. */
+  GCHRON_ROUND_FLOOR,
+
+  /** Toward positive infinity. */
+  GCHRON_ROUND_CEIL,
+
+  /**
+   * To the nearest, with a half going away from zero.
+   *
+   * What most people mean by "round", and Temporal's default.
+   */
+  GCHRON_ROUND_HALF_EXPAND,
+
+  /** To the nearest, with a half going to the even value. */
+  GCHRON_ROUND_HALF_EVEN
+} GCHRON_Rounding;
 
 /**
  * @brief Whether every non-zero field shares one sign, and @ref
@@ -184,6 +212,130 @@ GCHRON_API GCHRON_Result gchron_duration_from_exact_seconds(int64_t seconds,
  */
 GCHRON_API bool gchron_duration_identical(const GCHRON_Duration * a,
     const GCHRON_Duration * b);
+
+/*--------------------------------------------------------------------------*
+ * Arithmetic
+ *--------------------------------------------------------------------------*/
+
+/**
+ * @brief Carry a duration's fields into larger units.
+ *
+ * `90 minutes` and `1 hour 30 minutes` are the same exact duration, and the
+ * library never rewrites one as the other unless asked (design.md section
+ * 4.2). This is the asking.
+ *
+ * **A @p largest_unit of GCHRON_UNIT_DAY or above needs @p relative_to**, and
+ * is GCHRON_ERR_INVALID without it - not "assume twenty-four hours". The
+ * length of a day is not otherwise known: in a zone with a daylight-saving
+ * transition it is 23 or 25 hours, and a month is 28 to 31 days.
+ *
+ * @param d A valid duration.
+ * @param largest_unit The largest unit to carry into.
+ * @param relative_to The civil date-time the duration is measured from.
+ *   Required for GCHRON_UNIT_DAY and above; ignored below it, where every
+ *   unit has a fixed length.
+ * @param calendar The calendar @p relative_to is written in. NULL means
+ *   Gregorian.
+ * @param out Receives the balanced duration on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID; GCHRON_ERR_RANGE on overflow;
+ *   GCHRON_ERR_UNSUPPORTED for a calendar whose year length in months varies.
+ */
+GCHRON_API GCHRON_Result gchron_duration_balance(const GCHRON_Duration * d,
+    GCHRON_Unit largest_unit, const GCHRON_DateTime * relative_to,
+    const GCHRON_Calendar * calendar, GCHRON_Duration * out);
+
+/**
+ * @brief Add a duration to a civil date-time.
+ *
+ * Calendar units first, then exact units, in civil space - which is the order
+ * Temporal fixed on and the reason `Jan 31 + P1M + P1M` is not `Jan 31 +
+ * P2M`. The consequence is stated in the header for GCHRON_Overflow and is
+ * worth stating twice: **calendar-unit arithmetic is neither associative nor
+ * commutative.**
+ *
+ * @param dt A valid civil date-time.
+ * @param d A valid duration; either kind of unit, or both.
+ * @param calendar The calendar. NULL means Gregorian.
+ * @param overflow What to do when the day does not exist in the target month.
+ *   The zero value refuses.
+ * @param out Receives the result on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID; GCHRON_ERR_RANGE when the day does
+ *   not exist and @p overflow refuses, or on overflow; GCHRON_ERR_GAP when
+ *   the result lands on a day a calendar reform deleted;
+ *   GCHRON_ERR_UNSUPPORTED for a calendar whose year length in months varies.
+ */
+GCHRON_API GCHRON_Result gchron_datetime_add(const GCHRON_DateTime * dt,
+    const GCHRON_Duration * d, const GCHRON_Calendar * calendar,
+    GCHRON_Overflow overflow, GCHRON_DateTime * out);
+
+/**
+ * @brief Subtract a duration from a civil date-time.
+ *
+ * @param dt A valid civil date-time.
+ * @param d A valid duration.
+ * @param calendar The calendar. NULL means Gregorian.
+ * @param overflow What to do when the day does not exist.
+ * @param out Receives the result on success; untouched on failure.
+ * @return As gchron_datetime_add().
+ */
+GCHRON_API GCHRON_Result gchron_datetime_subtract(const GCHRON_DateTime * dt,
+    const GCHRON_Duration * d, const GCHRON_Calendar * calendar,
+    GCHRON_Overflow overflow, GCHRON_DateTime * out);
+
+/**
+ * @brief Add a duration's calendar units to a date.
+ *
+ * @param date A valid date.
+ * @param d A valid duration whose exact units are all zero; a date has no
+ *   time of day for them to act on.
+ * @param calendar The calendar. NULL means Gregorian.
+ * @param overflow What to do when the day does not exist.
+ * @param out Receives the result on success; untouched on failure.
+ * @return As gchron_datetime_add(); GCHRON_ERR_INVALID when @p d carries an
+ *   exact unit.
+ */
+GCHRON_API GCHRON_Result gchron_date_add(const GCHRON_Date * date,
+    const GCHRON_Duration * d, const GCHRON_Calendar * calendar,
+    GCHRON_Overflow overflow, GCHRON_Date * out);
+
+/**
+ * @brief The duration from one civil date-time to another.
+ *
+ * For calendar units this **walks the calendar forward from @p from**, which
+ * is why `Jan 31 until Mar 1` in months is `1 month 1 day` and not `1 month
+ * -2 days` - and why `until(a, b)` is not the negation of `until(b, a)`. That
+ * asymmetry is real, and is documented rather than hidden by symmetrising
+ * (design.md section 4.4).
+ *
+ * @param from The start.
+ * @param to The end. Earlier than @p from gives a negative duration.
+ * @param largest_unit The largest unit the result may use.
+ * @param calendar The calendar. NULL means Gregorian.
+ * @param out Receives the duration on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID; GCHRON_ERR_RANGE;
+ *   GCHRON_ERR_UNSUPPORTED.
+ */
+GCHRON_API GCHRON_Result gchron_datetime_until(const GCHRON_DateTime * from,
+    const GCHRON_DateTime * to, GCHRON_Unit largest_unit,
+    const GCHRON_Calendar * calendar, GCHRON_Duration * out);
+
+/**
+ * @brief Round a duration to a unit.
+ *
+ * @param d A valid duration.
+ * @param smallest_unit The finest unit the result may use.
+ * @param rounding How to round. The zero value refuses an inexact result.
+ * @param relative_to Required when @p smallest_unit is GCHRON_UNIT_DAY or
+ *   above, or when @p d carries a calendar unit; ignored otherwise.
+ * @param calendar The calendar. NULL means Gregorian.
+ * @param out Receives the rounded duration on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID; GCHRON_ERR_RANGE when the result is
+ *   inexact and @p rounding refuses, or on overflow.
+ */
+GCHRON_API GCHRON_Result gchron_duration_round(const GCHRON_Duration * d,
+    GCHRON_Unit smallest_unit, GCHRON_Rounding rounding,
+    const GCHRON_DateTime * relative_to, const GCHRON_Calendar * calendar,
+    GCHRON_Duration * out);
 
 /**
  * @brief Write a human-readable description of a duration to a stream.

@@ -418,7 +418,9 @@ TEST_F(Zones, TwentyFourHoursIsNotADayAcrossATransition) {
   GCHRON_Duration day{};
   day.hours = 24;
   GCHRON_ZonedDateTime after{};
-  ASSERT_EQ(GCHRON_OK, gchron_zoned_add(&before, &day, &after));
+  ASSERT_EQ(GCHRON_OK,
+      gchron_zoned_add(&before, &day, GCHRON_RESOLVE_REJECT,
+          GCHRON_OVERFLOW_REJECT, &after));
 
   GCHRON_DateTime reading{};
   ASSERT_EQ(GCHRON_OK, gchron_zoned_to_civil(&after, &reading));
@@ -427,11 +429,20 @@ TEST_F(Zones, TwentyFourHoursIsNotADayAcrossATransition) {
   // clocks went forward in between.
   EXPECT_EQ(13, reading.time.hour);
 
-  // A calendar unit is refused here rather than guessed at.
+  // And one *day* keeps the wall-clock time, skipping the hour the zone
+  // skipped: noon on the 7th plus a day is noon on the 8th, twenty-three
+  // hours later. This is the row of design.md section 4.1's table that
+  // matters.
   GCHRON_Duration calendar_day{};
   calendar_day.days = 1;
-  EXPECT_EQ(GCHRON_ERR_INVALID,
-      gchron_zoned_add(&before, &calendar_day, &after));
+  ASSERT_EQ(GCHRON_OK,
+      gchron_zoned_add(&before, &calendar_day, GCHRON_RESOLVE_REJECT,
+          GCHRON_OVERFLOW_REJECT, &after));
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_to_civil(&after, &reading));
+  EXPECT_EQ(8, reading.date.day);
+  EXPECT_EQ(12, reading.time.hour) << "the same wall-clock time";
+  EXPECT_EQ(23 * 3600, after.instant.sec - before.instant.sec)
+      << "twenty-three hours of elapsed time, not twenty-four";
 }
 
 TEST_F(Zones, TheZoneIsAskedAgainRatherThanTheCachedOffsetTrusted) {

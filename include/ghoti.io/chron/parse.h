@@ -409,6 +409,39 @@ GCHRON_API GCHRON_Result gchron_parse_rfc3339_duration(const char * text,
     size_t len, const GCHRON_ParseOptions * opts, GCHRON_Duration * out,
     GCHRON_ParseInfo * info, GCHRON_Error * err);
 
+/**
+ * @brief Parse an ISO 8601 duration.
+ *
+ * `P1Y2M3DT4H5M6.5S`, `P3W`, `PT0S`, `-P1D`, `P-1D`.
+ *
+ * The permissive grammar, and deliberately **not** the same one as
+ * gchron_parse_rfc3339_duration(). ISO 8601-1:2019 section 5.5.2 permits a
+ * fraction on the smallest unit present, ISO 8601-2 permits a sign inside a
+ * component, and neither nests its productions - so `P1Y2D`, which RFC 3339
+ * appendix A refuses, is an ISO 8601 duration. Two grammars, two functions;
+ * documentation/text-formats.md tabulates where they part company.
+ *
+ * `-P1D` and `P-1D` are both accepted; only `-P1D` is produced.
+ *
+ * A fraction is permitted on the smallest unit **present**, as the standard
+ * says, so `P1.5Y` is a duration and `P1.5Y2M` is not. A fraction on a
+ * calendar unit is GCHRON_ERR_UNSUPPORTED rather than a guess at how many
+ * days half a year is.
+ *
+ * @param text The input. Not assumed to be NUL-terminated.
+ * @param len Bytes of input.
+ * @param opts Options. NULL means gchron_parse_options_default().
+ * @param out Receives the duration on success; untouched on failure.
+ * @param info Receives what the text said. May be NULL.
+ * @param err Receives the failure and its position. May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_FORMAT; GCHRON_ERR_RANGE for a component too
+ *   large to hold; GCHRON_ERR_UNSUPPORTED for a fraction on a calendar unit;
+ *   GCHRON_ERR_LIMIT; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_parse_iso8601_duration(const char * text,
+    size_t len, const GCHRON_ParseOptions * opts, GCHRON_Duration * out,
+    GCHRON_ParseInfo * info, GCHRON_Error * err);
+
 /*--------------------------------------------------------------------------*
  * TOML v1.0.0
  *--------------------------------------------------------------------------*/
@@ -585,6 +618,26 @@ GCHRON_API GCHRON_Result gchron_write_rfc3339_full_date(
 GCHRON_API GCHRON_Result gchron_write_rfc3339_full_time(
     const GCHRON_OffsetTime * ot, const GCHRON_WriteOptions * opts, char * buf,
     size_t buf_len, size_t * out_len);
+
+/**
+ * @brief Write a duration as an ISO 8601 duration.
+ *
+ * Spells what appendix A cannot: a negative duration as `-P1D`, and a
+ * sub-second part as a fraction on the seconds. Weeks are written alone, as
+ * ISO 8601 requires, and a duration that mixes them with anything else is
+ * GCHRON_ERR_UNSUPPORTED - the library does not silently turn a week into
+ * seven days, because design.md section 4.2 says it never rewrites a
+ * duration's units unless asked.
+ *
+ * @param d A valid duration.
+ * @param buf Where to write; see gchron_write_rfc3339_date_time().
+ * @param buf_len Bytes available at @p buf.
+ * @param out_len Receives the length written, without the NUL. May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_LIMIT; GCHRON_ERR_UNSUPPORTED;
+ *   GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_write_iso8601_duration(
+    const GCHRON_Duration * d, char * buf, size_t buf_len, size_t * out_len);
 
 /**
  * @brief Write a duration as RFC 3339 appendix A `duration`.

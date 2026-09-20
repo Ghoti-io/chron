@@ -10,6 +10,7 @@
 #include <ghoti.io/chron/core.h>
 #include <ghoti.io/chron/instant.h>
 #include <ghoti.io/chron/macros.h>
+#include <ghoti.io/chron/duration.h>
 #include <ghoti.io/chron/offset.h>
 #include <ghoti.io/chron/zone.h>
 #include <ghoti.io/chron/zoned.h>
@@ -221,20 +222,108 @@ GCHRON_Result gchron_zoned_with_zone(const GCHRON_ZonedDateTime * zoned,
 }
 
 GCHRON_Result gchron_zoned_add(const GCHRON_ZonedDateTime * zoned,
-    const GCHRON_Duration * d, GCHRON_ZonedDateTime * out) {
+    const GCHRON_Duration * d, GCHRON_Resolve resolve,
+    GCHRON_Overflow overflow, GCHRON_ZonedDateTime * out) {
+  GCHRON_ZonedDateTime working;
+  GCHRON_Duration exact;
   GCHRON_Instant moved;
   GCHRON_Result result;
 
-  if (zoned == NULL || out == NULL) {
+  if (zoned == NULL || out == NULL || !gchron_duration_is_valid(d)) {
     return GCHRON_ERR_INVALID;
   }
-  /* Exact units only, and gchron_instant_add() is what refuses the rest:
-   * "tomorrow at this time" is a calendar-unit question and is phase 2's. */
-  result = gchron_instant_add(&zoned->instant, d, &moved);
+
+  working = *zoned;
+  if (gchron_duration_has_calendar_units(d)) {
+    /*
+     * The calendar units, in the zone's own civil space. This is what makes
+     * "+1 day" keep the wall-clock time across a daylight-saving change while
+     * "+24 hours" does not - and it is why this step can fail with
+     * GCHRON_ERR_GAP, which exact arithmetic on an instant never can.
+     */
+    GCHRON_DateTime civil;
+    GCHRON_DateTime shifted;
+    GCHRON_Duration calendar_part = *d;
+
+    calendar_part.hours = 0;
+    calendar_part.minutes = 0;
+    calendar_part.seconds = 0;
+    calendar_part.nsec = 0;
+
+    result = gchron_zoned_to_civil(zoned, &civil);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    result = gchron_datetime_add(&civil, &calendar_part, NULL, overflow,
+        &shifted);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    result = gchron_zoned_from_civil(shifted, zoned->zone, resolve, &working);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+  }
+
+  /* Then the exact units, on the instant, where they mean seconds. */
+  exact = *d;
+  exact.years = 0;
+  exact.months = 0;
+  exact.weeks = 0;
+  exact.days = 0;
+  if (!gchron_duration_has_exact_units(&exact)) {
+    *out = working;
+    return GCHRON_OK;
+  }
+  result = gchron_instant_add(&working.instant, &exact, &moved);
   if (result != GCHRON_OK) {
     return result;
   }
   return gchron_zoned_from_instant(moved, zoned->zone, out);
+}
+
+GCHRON_Result gchron_zoned_until(const GCHRON_ZonedDateTime * from,
+    const GCHRON_ZonedDateTime * to, GCHRON_Unit largest_unit,
+    GCHRON_Duration * out) {
+  GCHRON_DateTime from_civil;
+  GCHRON_ZonedDateTime to_here;
+  GCHRON_DateTime to_civil;
+  GCHRON_Result result;
+
+  if (from == NULL || to == NULL || out == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  if (largest_unit <= GCHRON_UNIT_HOUR) {
+    /* Nothing at or below an hour depends on a zone, so the instants answer
+     * it directly and no civil conversion is needed. */
+    GCHRON_Duration exact;
+    result = gchron_instant_until(&from->instant, &to->instant, &exact);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    return gchron_duration_balance(&exact, largest_unit, NULL, NULL, out);
+  }
+
+  /*
+   * Calendar units are counted in the *start*'s zone, so that "one month
+   * later" means what a person in that place would mean. The end is read in
+   * the same zone for the same reason: a difference measured against two
+   * different calendars is not a difference.
+   */
+  result = gchron_zoned_to_civil(from, &from_civil);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  result = gchron_zoned_with_zone(to, from->zone, &to_here);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  result = gchron_zoned_to_civil(&to_here, &to_civil);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  return gchron_datetime_until(&from_civil, &to_civil, largest_unit, NULL,
+      out);
 }
 
 int gchron_zoned_compare(const GCHRON_ZonedDateTime * a,

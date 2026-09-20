@@ -14,6 +14,7 @@
 #define GHOTI_IO_GCHRON_CHRON_H
 
 #include <ghoti.io/chron/allocator.h>
+#include <ghoti.io/chron/calendar.h>
 #include <ghoti.io/chron/civil.h>
 #include <ghoti.io/chron/core.h>
 #include <ghoti.io/chron/duration.h>

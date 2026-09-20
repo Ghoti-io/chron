@@ -159,20 +159,49 @@ GCHRON_API GCHRON_Result gchron_zoned_with_zone(
     GCHRON_ZonedDateTime * out);
 
 /**
- * @brief Add an exact duration to a zoned date-time.
+ * @brief Add a duration to a zoned date-time.
  *
- * Exact units only. Twenty-four hours is twenty-four hours, whatever the zone
- * does that night - which is a different question from "tomorrow at this
- * time", and phase 2's calendar-unit arithmetic is where that one is asked.
+ * **This is the row of design.md section 4.1's table that matters.** Calendar
+ * units are applied in the zone's civil space and resolved by @p resolve;
+ * exact units are then added to the instant. So "tomorrow at the same time"
+ * is `+1 day` and "in twenty-four hours" is `+24 hours`, and on the day the
+ * clocks change they are different instants. A library that gave the same
+ * answer to both would have picked one meaning for the caller.
+ *
+ * Adding a calendar unit can land on a reading that did not occur - `+1 day`
+ * onto the eve of a spring-forward morning, at an hour that morning skipped -
+ * which is why this takes a GCHRON_Resolve as well as a GCHRON_Overflow.
  *
  * @param zoned A valid zoned date-time.
- * @param d A valid duration with no calendar units.
+ * @param d A valid duration; either kind of unit, or both.
+ * @param resolve What to do when the civil result falls in a gap or an
+ *   overlap. The zero value refuses. Ignored when @p d has no calendar units,
+ *   because exact arithmetic on an instant cannot land in a gap.
+ * @param overflow What to do when the day does not exist in the target month.
+ *   The zero value refuses.
  * @param out Receives the value on success; untouched on failure.
- * @return GCHRON_OK; GCHRON_ERR_INVALID when @p d carries a calendar unit;
- *   GCHRON_ERR_RANGE.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID; GCHRON_ERR_RANGE; GCHRON_ERR_GAP;
+ *   GCHRON_ERR_AMBIGUOUS.
  */
 GCHRON_API GCHRON_Result gchron_zoned_add(const GCHRON_ZonedDateTime * zoned,
-    const GCHRON_Duration * d, GCHRON_ZonedDateTime * out);
+    const GCHRON_Duration * d, GCHRON_Resolve resolve,
+    GCHRON_Overflow overflow, GCHRON_ZonedDateTime * out);
+
+/**
+ * @brief The duration from one zoned date-time to another.
+ *
+ * Calendar units are counted in the **start**'s zone civil space, so that
+ * "one month later" means what a person in that place would mean.
+ *
+ * @param from The start.
+ * @param to The end. Its zone is ignored; only the instant matters.
+ * @param largest_unit The largest unit the result may use.
+ * @param out Receives the duration on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID; GCHRON_ERR_RANGE.
+ */
+GCHRON_API GCHRON_Result gchron_zoned_until(const GCHRON_ZonedDateTime * from,
+    const GCHRON_ZonedDateTime * to, GCHRON_Unit largest_unit,
+    GCHRON_Duration * out);
 
 /**
  * @brief Order two zoned date-times **by the instant they name**.
