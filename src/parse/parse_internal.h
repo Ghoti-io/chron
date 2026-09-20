@@ -59,6 +59,27 @@ typedef struct GCHRON_TimeParts {
 } GCHRON_TimeParts;
 
 /**
+ * The half of GCHRON_LEAP_TABLE that needs a date.
+ *
+ * A `full-time` production can check that a `:60` sits at 23:59 UTC, but not
+ * whether that particular day gained a second - that is a question about a
+ * date, and it has none. Every parser that reads a date and a time calls this
+ * once it has both.
+ *
+ * @param opts The effective options.
+ * @param date The date as the text wrote it, in local terms.
+ * @param parts The time, with its offset.
+ * @param err Receives the failure. May be NULL.
+ * @return GCHRON_OK when the policy is satisfied or does not apply;
+ *   GCHRON_ERR_FORMAT when the table lists no leap second that day;
+ *   GCHRON_ERR_INVALID when no table was supplied; GCHRON_ERR_EXPIRED or
+ *   GCHRON_ERR_RANGE when the table cannot answer for that date.
+ */
+GCHRON_Result gchron_scan_check_leap_table(const GCHRON_ParseOptions * opts,
+    const GCHRON_Date * date, const GCHRON_TimeParts * parts,
+    GCHRON_Error * err);
+
+/**
  * Resolve the options a parser was called with.
  *
  * @param opts What the caller passed; may be NULL.

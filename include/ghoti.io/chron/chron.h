@@ -24,6 +24,7 @@
 #include <ghoti.io/chron/offset.h>
 #include <ghoti.io/chron/clock.h>
 #include <ghoti.io/chron/interop.h>
+#include <ghoti.io/chron/leap.h>
 #include <ghoti.io/chron/parse.h>
 #include <ghoti.io/chron/zone.h>
 #include <ghoti.io/chron/zoned.h>

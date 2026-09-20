@@ -73,16 +73,81 @@ TEST(Policies, ZeroInitialisedOptionsRefuseALeapSecond) {
 // than quietly behave as GCHRON_LEAP_MINUTE: a caller who asked for the
 // strict reading and silently got the loose one has a check that passes for
 // the wrong reason.
-TEST(Policies, LeapTableRefusesUntilTheTableExists) {
+TEST(Policies, LeapTableRefusesWithoutATableRatherThanLooseningToMinute) {
+  /*
+   * Through phases 0 to 3 this level answered GCHRON_ERR_UNSUPPORTED, because
+   * leap.h did not exist yet and a silent fallback to GCHRON_LEAP_MINUTE
+   * would have let a caller's strict check pass for the wrong reason. Phase 4
+   * gave it a table; the refusal it makes now is the same refusal for the
+   * same reason - a caller who selects this level and supplies no table gets
+   * an error, never the loose reading.
+   */
   GCHRON_ParseOptions opts;
   GCHRON_OffsetDateTime out;
   gchron_parse_options_default(&opts);
   opts.leap = GCHRON_LEAP_TABLE;
+  EXPECT_EQ(nullptr, opts.leap_table) << "the default must supply no table";
 
   const char * text = "1998-12-31T23:59:60Z";
-  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
+  EXPECT_EQ(GCHRON_ERR_INVALID,
       gchron_parse_rfc3339_date_time(text, std::strlen(text), &opts, &out,
           nullptr, nullptr));
+
+  // With a table it is the strict reading, and test_leap.cpp is where the
+  // cases that separate it from GCHRON_LEAP_MINUTE live.
+  opts.leap_table = gchron_leap_table_builtin();
+  EXPECT_EQ(GCHRON_OK,
+      gchron_parse_rfc3339_date_time(text, std::strlen(text), &opts, &out,
+          nullptr, nullptr));
+}
+
+
+TEST(Policies, TheDefaultsFillEveryFieldEvenOnADirtyStruct) {
+  /*
+   * The failure this guards against is not hypothetical: phase 4 added
+   * `leap_table` to GCHRON_ParseOptions, and a gchron_parse_options_default()
+   * that assigned its fields one at a time left the new one holding whatever
+   * was on the caller's stack - a garbage pointer returned as a default.
+   *
+   * Filled with a non-zero byte first, so that a field the initialiser
+   * forgets shows up as that byte rather than as a zero that happened to be
+   * there. Compared field by field rather than with memcmp, because the
+   * padding between them is not required to be zeroed and comparing it would
+   * make this test fail for a reason that is nobody's defect.
+   */
+  GCHRON_ParseOptions opts;
+  std::memset(&opts, 0xAB, sizeof(opts));
+  gchron_parse_options_default(&opts);
+
+  EXPECT_EQ(nullptr, opts.limits);
+  EXPECT_EQ(GCHRON_FRACTION_REJECT, opts.fraction);
+  EXPECT_EQ(GCHRON_LEAP_REJECT, opts.leap);
+  EXPECT_EQ(nullptr, opts.leap_table);
+  EXPECT_EQ(GCHRON_ZONECONFLICT_REJECT, opts.zone_conflict);
+  EXPECT_FALSE(opts.allow_space_separator);
+  EXPECT_FALSE(opts.allow_trailing);
+
+  GCHRON_WriteOptions write;
+  std::memset(&write, 0xAB, sizeof(write));
+  gchron_write_options_default(&write);
+
+  EXPECT_EQ(GCHRON_FRACTION_DIGITS_AUTO, write.fraction_digits);
+  EXPECT_FALSE(write.lowercase);
+  EXPECT_FALSE(write.space_separator);
+  EXPECT_FALSE(write.zero_offset_as_numeric);
+
+  GCHRON_ParseInfo info;
+  std::memset(&info, 0xAB, sizeof(info));
+  gchron_parse_info_clear(&info);
+
+  EXPECT_EQ(0u, info.consumed);
+  EXPECT_FALSE(info.leap_second);
+  EXPECT_FALSE(info.fraction_truncated);
+  EXPECT_EQ(0, info.fraction_digits);
+  EXPECT_FALSE(info.offset_unknown);
+  EXPECT_FALSE(info.had_zone_annotation);
+  EXPECT_FALSE(info.offset_disagreed_with_zone);
+  EXPECT_STREQ("", info.calendar);
 }
 
 TEST(Policies, JsonSchemaPresetIsTruncateAndMinute) {

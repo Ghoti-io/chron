@@ -33,10 +33,15 @@ void gchron_write_options_default(GCHRON_WriteOptions * out) {
   if (out == NULL) {
     return;
   }
-  out->fraction_digits = GCHRON_FRACTION_DIGITS_AUTO;
-  out->lowercase = false;
-  out->space_separator = false;
-  out->zero_offset_as_numeric = false;
+  /*
+   * Zeroed rather than assigned field by field, so that a field added later
+   * is the default rather than whatever was on the caller's stack. See
+   * gchron_parse_options_default(), where assigning them one at a time went
+   * wrong exactly that way. GCHRON_FRACTION_DIGITS_AUTO is 0, which is what
+   * makes the zeroed struct the documented default and not merely an empty
+   * one.
+   */
+  memset(out, 0, sizeof(*out));
 }
 
 /** Resolve the options a writer was called with. */

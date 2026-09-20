@@ -424,18 +424,36 @@ GCHRON_Result gchron_zonedb_directory(const char * path,
 
 GCHRON_Result gchron_zonedb_embedded(const GCHRON_Allocator * allocator,
     const GCHRON_Limits * limits, GCHRON_ZoneDb ** out) {
-  (void)allocator;
-  (void)limits;
+  GCHRON_ZoneDb * db = NULL;
+  GCHRON_Result result;
+
   if (out == NULL) {
     return GCHRON_ERR_INVALID;
   }
-  /*
-   * Phase 4 generates the table from an IANA source tree. Returning
-   * GCHRON_ERR_UNSUPPORTED rather than an empty database, because an empty
-   * one answers every lookup with GCHRON_ERR_UNSUPPORTED anyway and hides
-   * the reason.
-   */
-  return GCHRON_ERR_UNSUPPORTED;
+  if (gchron_tzdata_embedded_count() == 0) {
+    /*
+     * The generator refuses to write an empty table, so this should be
+     * unreachable. It is checked anyway, because an empty embedded database
+     * would answer every lookup with GCHRON_ERR_UNSUPPORTED and be
+     * indistinguishable from a working one asked for a zone it lacks - and
+     * the whole point of this call is that a caller with no zoneinfo
+     * directory can rely on it.
+     */
+    return GCHRON_ERR_UNSUPPORTED;
+  }
+
+  result = db_create(allocator, limits, GCHRON_ZONE_SOURCE_EMBEDDED, NULL,
+      &db);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  db->version = dup_string(db->allocator, gchron_tzdata_embedded_version());
+  if (db->version == NULL) {
+    gchron_zonedb_destroy(db);
+    return GCHRON_ERR_OOM;
+  }
+  *out = db;
+  return GCHRON_OK;
 }
 
 GCHRON_Result gchron_zonedb_default(const GCHRON_Allocator * allocator,
@@ -446,17 +464,65 @@ GCHRON_Result gchron_zonedb_default(const GCHRON_Allocator * allocator,
     return GCHRON_ERR_INVALID;
   }
   /*
-   * design.md section 6.2: the operating system's copy is preferred, because
-   * it is the one somebody is updating, and the embedded table is the
-   * fallback where there is none. The version comparison that picks the newer
-   * of the two arrives with the embedded table in phase 4; until then there
-   * is only ever one candidate and there is nothing to compare.
+   * design.md section 6.2: choose by currency. tzdata releases are named
+   * `YYYYx` - a year and a lowercase letter - which orders lexically for as
+   * long as the year has four digits, so `strcmp` is the comparison and not
+   * an approximation of one.
    */
-  result = gchron_zonedb_system(allocator, limits, out);
-  if (result == GCHRON_OK) {
+  GCHRON_ZoneDb * system_db = NULL;
+  const char * system_version;
+
+  result = gchron_zonedb_system(allocator, limits, &system_db);
+  if (result != GCHRON_OK) {
+    /* No system database at all - which on Windows is every machine. */
+    return gchron_zonedb_embedded(allocator, limits, out);
+  }
+
+  system_version = gchron_zonedb_version(system_db);
+  if (system_version == NULL) {
+    /*
+     * The system database is there but will not say which release it is.
+     * Preferred anyway, on the reasoning that the operating system's copy is
+     * the one somebody is updating - and a database that cannot name its
+     * version is far more likely to be a distribution that strips the version
+     * file than one that is out of date.
+     */
+    *out = system_db;
     return GCHRON_OK;
   }
-  return gchron_zonedb_embedded(allocator, limits, out);
+
+  {
+    GCHRON_ZoneDb * embedded_db = NULL;
+    const char * embedded_version;
+
+    if (gchron_zonedb_embedded(allocator, limits, &embedded_db) != GCHRON_OK) {
+      /* Nothing to compare against; the system database stands. */
+      *out = system_db;
+      return GCHRON_OK;
+    }
+    embedded_version = gchron_zonedb_version(embedded_db);
+    if (embedded_version == NULL
+        || strcmp(embedded_version, system_version) <= 0) {
+      /*
+       * Ties go to the system database, for the same reason: equal currency
+       * and one of them is the copy being maintained.
+       */
+      gchron_zonedb_destroy(embedded_db);
+      *out = system_db;
+      return GCHRON_OK;
+    }
+
+    /*
+     * The embedded table is newer. This happens when a long-lived machine has
+     * not had its tzdata updated since this library was built.
+     * gchron_zonedb_source() and gchron_zonedb_version() both say which was
+     * chosen, and gchron_zonedb_dump() prints it: a fallback that cannot be
+     * seen is the defect CONVENTIONS.md section 1 names.
+     */
+    gchron_zonedb_destroy(system_db);
+    *out = embedded_db;
+    return GCHRON_OK;
+  }
 }
 
 GCHRON_Result gchron_zonedb_memory(const void * blob, size_t len,
@@ -508,6 +574,20 @@ static GCHRON_Result load_zone(GCHRON_ZoneDb * db, const char * id,
   void * data = NULL;
   size_t len = 0;
   GCHRON_Result result;
+
+  if (db->source == GCHRON_ZONE_SOURCE_EMBEDDED) {
+    /*
+     * The bytes are already here, in a static blob. They are handed to the
+     * parser as they are - the parser copies what it keeps - so an embedded
+     * lookup reads no file and allocates nothing for the image itself.
+     */
+    const GCHRON_EmbeddedZone * entry = gchron_tzdata_embedded_find(id);
+    if (entry == NULL) {
+      return GCHRON_ERR_UNSUPPORTED;
+    }
+    return gchron_tzif_parse(gchron_tzdata_embedded_bytes(entry),
+        entry->length, &db->limits, db->allocator, out);
+  }
 
   if (db->directory == NULL) {
     return GCHRON_ERR_UNSUPPORTED;
@@ -570,13 +650,29 @@ GCHRON_Result gchron_zonedb_zone(GCHRON_ZoneDb * db, const char * id,
   /*
    * A backward-compatibility link such as `US/Eastern` is a real file in the
    * directory - a copy or a hard link, depending on how the distribution
-   * built it - so it loads like any other zone. What it does not carry is the
-   * name it is a link *to*, and TZif has nowhere to put one. Until a
-   * canonical-name table arrives with the embedded database in phase 4, a
-   * zone's canonical identifier is the one it was asked for, and
-   * gchron_zone_canonical_id() says that rather than inventing an answer.
+   * built it - so it loads like any other zone, and what it does not carry is
+   * the name it is a link *to*: TZif has nowhere to put one.
+   *
+   * The embedded table does have that name, because the generator can see
+   * which entries were symbolic links. So an embedded database answers
+   * gchron_zone_canonical_id() with the real name and a directory-backed one
+   * still answers with the name it was asked for - which is the truth
+   * available to each, rather than an invention by either.
    */
   zone->canonical_id = zone->id;
+  if (db->source == GCHRON_ZONE_SOURCE_EMBEDDED) {
+    const GCHRON_EmbeddedZone * entry = gchron_tzdata_embedded_find(id);
+    if (entry != NULL && entry->canonical != NULL) {
+      char * canonical = dup_string(db->allocator, entry->canonical);
+      if (canonical == NULL) {
+        gchron_zone_free(zone);
+        db_unlock(db);
+        return GCHRON_ERR_OOM;
+      }
+      /* gchron_zone_free() frees this when it differs from `id`. */
+      zone->canonical_id = canonical;
+    }
+  }
 
   result = cache_add(db, id, zone);
   if (result != GCHRON_OK) {
@@ -789,6 +885,33 @@ GCHRON_Result gchron_zonedb_ids_of(GCHRON_ZoneDb * db,
 
   db_lock(db);
   if (!db->ids_built) {
+    if (db->source == GCHRON_ZONE_SOURCE_EMBEDDED) {
+      /*
+       * Already sorted, and already the whole list: the generator writes the
+       * table in order so that a lookup can binary-search it, and listing is
+       * the same order for free.
+       */
+      size_t i;
+      size_t count = gchron_tzdata_embedded_count();
+      for (i = 0; i < count && result == GCHRON_OK; ++i) {
+        const GCHRON_EmbeddedZone * entry = gchron_tzdata_embedded_at(i);
+        result = collect_one(db, entry->id);
+      }
+      if (result == GCHRON_OK) {
+        db->ids_built = true;
+      }
+      db_unlock(db);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      if (out_ids != NULL) {
+        *out_ids = (const char * const *)db->ids;
+      }
+      if (out_count != NULL) {
+        *out_count = db->id_count;
+      }
+      return GCHRON_OK;
+    }
     if (db->directory == NULL) {
       db_unlock(db);
       return GCHRON_ERR_UNSUPPORTED;

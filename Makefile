@@ -245,7 +245,45 @@ endif
 INCLUDE += $(CUTIL_CFLAGS)
 
 # Automatically collect all .c source files under the src directory.
-SOURCES := $(shell find src -type f -name '*.c')
+#
+# The embedded time-zone table is generated, not committed: it is 1.9MB of
+# TZif images written out as C, and regenerating it takes under a second on
+# any machine that has a zoneinfo directory. `find` runs when this file is
+# read, which is before the generator has run, so it is named explicitly here
+# rather than discovered.
+#
+EMBEDDED_TZDATA := src/zone/tzdata_embedded.c
+
+#
+# The Windows zone mapping is generated from CLDR data the build never
+# fetches, so it may simply not be here. Exactly one of the two is compiled:
+# the generated table when it exists, and otherwise the file that reports
+# having no table at all. Not an empty table - see
+# src/zone/windows_zones_absent.c for why the distinction matters.
+#
+WINDOWS_ZONES := src/zone/windows_zones.c
+WINDOWS_ZONES_ABSENT := src/zone/windows_zones_absent.c
+ifneq ($(wildcard $(WINDOWS_ZONES)),)
+	WINDOWS_ZONES_SRC := $(WINDOWS_ZONES)
+else
+	WINDOWS_ZONES_SRC := $(WINDOWS_ZONES_ABSENT)
+endif
+
+SOURCES := $(sort $(filter-out $(WINDOWS_ZONES) $(WINDOWS_ZONES_ABSENT),\
+	$(shell find src -type f -name '*.c')) \
+	$(EMBEDDED_TZDATA) $(WINDOWS_ZONES_SRC))
+
+#
+# TZDATA_DIR is where the generator reads from. A machine with no zoneinfo
+# directory - which on Windows is every machine - passes one:
+#     make TZDATA_DIR=/path/to/unpacked/tzdata
+# The generator fails rather than writing an empty table (CONVENTIONS.md
+# section 6): an embedded database with no zones answers every lookup with
+# GCHRON_ERR_UNSUPPORTED and is indistinguishable from a working one that was
+# asked for a zone it does not have.
+#
+TZDATA_DIR ?=
+
 
 # Convert each source file path to an object file path.
 LIBOBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
@@ -314,6 +352,35 @@ CHRON_ROOT := $(CURDIR)
 TEST_DATA := $(CURDIR)/tests/data
 
 all: $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET) ## Build shared + static libraries
+
+$(EMBEDDED_TZDATA): tools/tzdata/embed.py
+	@printf "\n### Generating the embedded time-zone table ###\n"
+	python3 tools/tzdata/embed.py $(TZDATA_DIR) -o $@
+
+embed-tzdata: ## Regenerate the embedded time-zone table
+embed-tzdata:
+	@rm -f $(EMBEDDED_TZDATA)
+	@$(MAKE) --no-print-directory $(EMBEDDED_TZDATA)
+
+#
+# The leap-second table is generated too, but committed, and refreshed only
+# when someone runs this. It is three kilobytes, it changes about once a
+# decade, and it carries an expiry date past which every conversion through it
+# reports GCHRON_ERR_EXPIRED - so regenerating it as a side effect of building
+# would move that date to whatever the build machine happened to have, which
+# is exactly the sort of change that should be looked at rather than absorbed.
+#
+embed-leap: ## Refresh the built-in leap-second table from leap-seconds.list
+embed-leap:
+	python3 tools/leap/embed.py
+
+#
+# The Windows zone mapping needs CLDR data the build never fetches. Run
+# tools/tzdata/fetch-cldr.sh once, then this.
+#
+embed-windows-zones: ## Regenerate the Windows zone mapping from fetched CLDR data
+embed-windows-zones:
+	python3 tools/tzdata/windows_zones.py
 
 ####################################################################
 # Dependency Inclusion
@@ -632,7 +699,7 @@ TIER1_FILES := include/ghoti.io/chron/instant.h include/ghoti.io/chron/offset.h 
 	include/ghoti.io/chron/parse.h include/ghoti.io/chron/clock.h \
 	include/ghoti.io/chron/leap.h include/ghoti.io/chron/interop.h \
 	src/instant/*.c src/instant/*.h src/parse/*.c src/parse/*.h \
-	src/clock/*.c src/leap/*.c src/interop/*.c
+	src/clock/*.c src/leap/*.c src/leap/*.h src/interop/*.c
 TIER1_FORBIDDEN := chron/(zone|zoned|format)\.h
 TIER1_EXEMPT := src/parse/rfc9557.c
 
@@ -736,7 +803,10 @@ check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
 JSON_SCHEMA_SUITE := third_party/json-schema-test-suite/$(shell cat tools/corpus/JSON_SCHEMA_COMMIT 2>/dev/null)
 
 vectors: ## Regenerate every committed conformance vector file
-vectors: vectors-jsonschema vectors-zones vectors-calendar
+vectors: vectors-jsonschema vectors-zones vectors-calendar vectors-leap
+
+vectors-leap: ## Rebuild the leap-second vectors (needs the tzdb leapseconds file)
+	python3 tools/oracle/leapseconds.py
 
 vectors-zones: ## Rebuild the zone transition vectors (needs zdump)
 	python3 tools/oracle/zdump.py --out tests/data/vectors/zones/transitions.vec
@@ -1027,10 +1097,11 @@ $(eval $(call fuzz-rule,fuzz_tzif,tzif))
 $(eval $(call fuzz-rule,fuzz_posix_tz,posix_tz))
 $(eval $(call fuzz-rule,fuzz_duration,duration))
 $(eval $(call fuzz-rule,fuzz_format,format))
+$(eval $(call fuzz-rule,fuzz_leap,leap))
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: fuzz-run-parse fuzz-run-arith fuzz-run-tzif fuzz-run-posix_tz \
-	fuzz-run-duration fuzz-run-format
+	fuzz-run-duration fuzz-run-format fuzz-run-leap
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 	-@rm -rf $(FUZZ_DIR)

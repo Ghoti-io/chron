@@ -252,4 +252,115 @@ bool gchron_zone_id_is_safe(const char * id);
 }
 #endif
 
+
+/*--------------------------------------------------------------------------*
+ * The embedded database (src/zone/tzdata_embedded.c, generated)
+ *--------------------------------------------------------------------------*/
+
+/** One name in the embedded table. */
+typedef struct GCHRON_EmbeddedZone {
+  const char * id;        /**< The zone name. */
+  /**
+   * The name this one is a link to, or NULL when it is canonical.
+   *
+   * TZif has nowhere to record it, which is why a database loaded from a
+   * directory cannot tell `US/Eastern` from a zone of its own - see
+   * gchron_zone_canonical_id().
+   */
+  const char * canonical;
+  size_t offset;          /**< Where its TZif image starts in the blob. */
+  size_t length;          /**< Bytes of that image. */
+} GCHRON_EmbeddedZone;
+
+/**
+ * The tzdata release the embedded table was generated from, e.g. "2026c".
+ *
+ * @return The version. Static, never NULL.
+ */
+const char * gchron_tzdata_embedded_version(void);
+
+/**
+ * How many names the embedded table holds.
+ *
+ * @return The count, links included.
+ */
+size_t gchron_tzdata_embedded_count(void);
+
+/**
+ * One name by position, for listing.
+ *
+ * @param index 0 .. gchron_tzdata_embedded_count() - 1, in sorted order.
+ * @return The entry, or NULL when @p index is past the end.
+ */
+const GCHRON_EmbeddedZone * gchron_tzdata_embedded_at(size_t index);
+
+/**
+ * One name by identifier.
+ *
+ * @param id The zone name.
+ * @return The entry, or NULL when the table does not hold it.
+ */
+const GCHRON_EmbeddedZone * gchron_tzdata_embedded_find(const char * id);
+
+/**
+ * The TZif image an entry names.
+ *
+ * @param zone An entry from this table.
+ * @return A pointer into the static blob, valid for the life of the program.
+ *   Borrowed: never freed, and never written to.
+ */
+const void * gchron_tzdata_embedded_bytes(const GCHRON_EmbeddedZone * zone);
+
+
+/*--------------------------------------------------------------------------*
+ * The Windows zone mapping (src/zone/windows_zones.c, generated)
+ *--------------------------------------------------------------------------*/
+
+/**
+ * One Windows time-zone name and the IANA identifier it means.
+ *
+ * Built by tools/tzdata/windows_zones.py from CLDR's windowsZones.xml, which
+ * tools/tzdata/fetch-cldr.sh downloads. **The generated file may not exist**:
+ * nothing in the build reaches the network, so a machine that has never run
+ * the fetch has no table, and the Windows branch of gchron_zonedb_local()
+ * reports GCHRON_ERR_UNSUPPORTED. Absent rather than empty - a mapping with
+ * no rows would answer every lookup "unknown" and be indistinguishable from
+ * one asked about a zone Windows added after it was generated.
+ */
+typedef struct GCHRON_WindowsZone {
+  const char * windows_name; /**< e.g. "Pacific Standard Time". */
+  const char * iana_id;      /**< e.g. "America/Los_Angeles". */
+} GCHRON_WindowsZone;
+
+/**
+ * The CLDR release the mapping was generated from.
+ *
+ * @return The version, or NULL when no table was generated.
+ */
+const char * gchron_windows_zones_version(void);
+
+/**
+ * How many Windows names the mapping holds.
+ *
+ * @return The count, or 0 when no table was generated.
+ */
+size_t gchron_windows_zones_count(void);
+
+/**
+ * One row by position.
+ *
+ * @param index 0 .. gchron_windows_zones_count() - 1, sorted by Windows name.
+ * @return The row, or NULL when @p index is past the end.
+ */
+const GCHRON_WindowsZone * gchron_windows_zones_at(size_t index);
+
+/**
+ * The IANA identifier a Windows zone name means.
+ *
+ * @param windows_name What GetDynamicTimeZoneInformation() reported.
+ * @return The identifier, or NULL when the table does not hold that name or
+ *   was never generated.
+ */
+const char * gchron_windows_zones_lookup(const char * windows_name);
+
 #endif // GHOTI_IO_GCHRON_SRC_ZONE_ZONE_INTERNAL_H

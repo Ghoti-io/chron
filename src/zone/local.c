@@ -33,6 +33,11 @@
 #include <ghoti.io/cutil/safemath.h>
 
 #include "../core/core_internal.h"
+#if defined(_WIN32)
+/* TODO(windows): unexercised, like the branch that uses them. */
+#include <windows.h>
+#endif
+
 #include "zone_internal.h"
 
 #if !defined(_WIN32)
@@ -193,13 +198,49 @@ GCHRON_Result gchron_zonedb_local(GCHRON_ZoneDb * db,
 
 #if defined(_WIN32)
   /*
-   * TODO(windows): GetDynamicTimeZoneInformation() gives a Windows zone name,
-   * which the CLDR windowsZones.xml table maps to an IANA identifier. Both
-   * the call and the table are phase 4; see WINDOWS-TODO.md, where "done"
-   * means gchron_zonedb_local() on a machine set to Pacific Standard Time
-   * returns America/Los_Angeles.
+   * TODO(windows): written, never run. There is no machine here to run it on,
+   * and CONVENTIONS.md section 11 is explicit that a platform branch is
+   * written, marked, listed, and not claimed to work. See WINDOWS-TODO.md,
+   * where "done" means gchron_zonedb_local() on a machine set to Pacific
+   * Standard Time returns America/Los_Angeles.
+   *
+   * Windows reports a zone by a name of its own - "Pacific Standard Time" -
+   * and CLDR publishes what those mean in IANA terms. Two things can be
+   * missing here and they are different problems: the mapping table may never
+   * have been generated (the build does not fetch CLDR), or it may be present
+   * and not know a name Windows has added since. Only the first is worth a
+   * distinct report, because only the first has a fix the caller can carry
+   * out.
    */
-  return GCHRON_ERR_UNSUPPORTED;
+  {
+    DYNAMIC_TIME_ZONE_INFORMATION info;
+    char name[128];
+    const char * id;
+
+    if (gchron_windows_zones_count() == 0) {
+      /* No table was ever generated; tools/tzdata/fetch-cldr.sh is the fix. */
+      return GCHRON_ERR_UNSUPPORTED;
+    }
+    if (GetDynamicTimeZoneInformation(&info) == TIME_ZONE_ID_INVALID) {
+      return GCHRON_ERR_IO;
+    }
+    /*
+     * TimeZoneKeyName is the stable registry key, not the localised display
+     * name: on a French Windows the display name is French and the key name
+     * is still "Romance Standard Time", and CLDR maps the key names.
+     */
+    if (WideCharToMultiByte(CP_UTF8, 0, info.TimeZoneKeyName, -1, name,
+            (int)sizeof(name), NULL, NULL) == 0) {
+      return GCHRON_ERR_IO;
+    }
+    id = gchron_windows_zones_lookup(name);
+    if (id == NULL) {
+      /* A name this table does not carry: a newer Windows than the CLDR
+       * release it was generated from. */
+      return GCHRON_ERR_UNSUPPORTED;
+    }
+    return gchron_zonedb_zone(db, id, out);
+  }
 #else
   /* 2a. /etc/localtime as a symlink: the tail of its target is the name. */
   {

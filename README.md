@@ -227,7 +227,7 @@ make vectors                 # regenerate the committed vectors from their oracl
 
 ## Status
 
-Phases 0 through 3 of `documentation/design.md` §16. All four tiers are
+All five phases of `documentation/design.md` §16. All four tiers are
 built: civil arithmetic; the Gregorian, Julian, hybrid and tabular calendars;
 instants, offsets and durations with their full arithmetic; the RFC 3339,
 TOML, RFC 9557 and ISO 8601 duration grammars; time zones - TZif, the POSIX
@@ -238,7 +238,17 @@ the thirteen interop encodings and the clock.
 Formatting is checked against ICU's `SimpleDateFormat` (3,639 comparisons,
 with three stated zone-name divergences) and against glibc's `strftime`.
 
-The leap-second table, the embedded time-zone database and the Windows zone
-mapping are phase 4, and are absent rather than stubbed.
+Leap seconds and TAI are in `leap.h`, which nothing else includes - an
+application that does not convert to TAI links none of it. The embedded
+time-zone database is generated at build time from the machine's zoneinfo
+tree, and `gchron_zonedb_default()` picks whichever of it and the system
+database is the newer tzdata release.
+
+The Windows zone mapping needs CLDR data the build does not fetch: run
+`tools/tzdata/fetch-cldr.sh` and then `tools/tzdata/windows_zones.py` once.
+Without it the library reports having no mapping, which is deliberately a
+different answer from having one that does not know a name. Nothing here has
+been run on Windows; the parent `WINDOWS-TODO.md` §6b and §6c say what would
+make it so.
 
 Version 0.0.0. MIT licensed.

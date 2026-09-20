@@ -119,6 +119,7 @@ typedef enum {
   /* Policies (design.md section 3.7: the default refuses). */
   GCHRON_DIAG_LEAP_SECOND_REJECTED,    ///< `:60` under GCHRON_LEAP_REJECT.
   GCHRON_DIAG_LEAP_SECOND_WRONG_MINUTE,///< `:60` outside 23:59 UTC.
+  GCHRON_DIAG_LEAP_SECOND_NOT_IN_TABLE,///< `:60` on a day that gained none.
   GCHRON_DIAG_FRACTION_TOO_LONG,       ///< >9 digits under _FRACTION_REJECT.
   GCHRON_DIAG_FRACTION_EMPTY,          ///< A `.` with no digit after it.
 
@@ -142,6 +143,13 @@ typedef enum {
   GCHRON_DIAG_PATTERN_LETTER_UNKNOWN,  ///< A letter this library has no field for.
   GCHRON_DIAG_PATTERN_LETTER_RUN,      ///< More of one letter than any field uses.
   GCHRON_DIAG_WEEK_YEAR_WITHOUT_WEEK,  ///< `YYYY` with no week letter beside it.
+
+  /* Leap seconds (leap.h). */
+  GCHRON_DIAG_LEAP_TABLE_MALFORMED,    ///< A `leap-seconds.list` line did not parse.
+  GCHRON_DIAG_LEAP_TABLE_ORDER,        ///< Its entries are not in time order.
+  GCHRON_DIAG_LEAP_TABLE_STEP,         ///< An offset that moves by more than a second.
+  GCHRON_DIAG_LEAP_TABLE_EMPTY,        ///< It carried no entries at all.
+  GCHRON_DIAG_LEAP_TABLE_NO_EXPIRY,    ///< It carried no `#@` expiry line.
 
   /* Resources. */
   GCHRON_DIAG_INPUT_TOO_LONG,          ///< Past GCHRON_Limits::max_parse_length.
@@ -202,6 +210,7 @@ typedef struct GCHRON_Limits {
   size_t max_zones;        ///< Zones one database will load and cache.
   size_t max_format_length;///< Bytes of pattern the compiler will read.
   size_t max_format_items; ///< Items one compiled pattern may hold.
+  size_t max_leap_entries; ///< Rows one `leap-seconds.list` may carry.
 } GCHRON_Limits;
 
 /**
@@ -309,6 +318,15 @@ GCHRON_API int gchron_unit_is_exact(GCHRON_Unit unit);
 
 /** The default for GCHRON_Limits::max_format_items. */
 #define GCHRON_DEFAULT_MAX_FORMAT_ITEMS ((size_t)1024)
+
+/**
+ * Default GCHRON_Limits::max_leap_entries.
+ *
+ * Twenty-eight leap seconds have been issued since 1972 and the practice is
+ * being retired by 2035, so this is roughly a factor of thirty of headroom
+ * over anything the file will ever hold.
+ */
+#define GCHRON_DEFAULT_MAX_LEAP_ENTRIES ((size_t)1024)
 
 /**
  * The default for GCHRON_Limits::max_zones.

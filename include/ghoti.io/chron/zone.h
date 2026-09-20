@@ -521,6 +521,56 @@ GCHRON_API GCHRON_Result gchron_zone_offsets_for_civil(
  */
 GCHRON_API void gchron_zone_dump(const GCHRON_Zone * zone, FILE * stream);
 
+
+/**
+ * @brief The IANA identifier a Windows time-zone name means.
+ *
+ * Windows names its zones its own way - `"Pacific Standard Time"` where the
+ * tzdb says `America/Los_Angeles` - and `GetDynamicTimeZoneInformation()`
+ * reports the Windows name. CLDR publishes the mapping; this is that table.
+ *
+ * Public because a caller reading a Windows registry value, a `.ics` file
+ * written by Outlook, or a Windows-shaped configuration needs the same
+ * translation gchron_zonedb_local() needs, and on any platform.
+ *
+ * Pass the **registry key name** (`TimeZoneKeyName`), not the display name:
+ * the display name is localised, and on a French machine reads "Heure du
+ * Pacifique".
+ *
+ * **The table may not be present.** It is generated from CLDR data that the
+ * build does not fetch - see `tools/tzdata/fetch-cldr.sh`. When it is absent
+ * this reports GCHRON_ERR_UNSUPPORTED, which is deliberately a different
+ * answer from the GCHRON_ERR_RANGE given for a name a present table does not
+ * carry: the first has a fix the caller can carry out and the second does
+ * not.
+ *
+ * @param windows_name The Windows zone key name.
+ * @param out Receives a borrowed, static identifier; never freed. Untouched
+ *   on failure.
+ * @return GCHRON_OK; GCHRON_ERR_UNSUPPORTED when no mapping table was built
+ *   into this library; GCHRON_ERR_RANGE when the table does not carry that
+ *   name; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_zone_id_from_windows(const char * windows_name,
+    const char ** out);
+
+/**
+ * @brief The CLDR release the Windows mapping came from.
+ *
+ * @return The version, e.g. `"48"`, or NULL when no mapping was built in.
+ */
+GCHRON_API const char * gchron_zone_windows_mapping_version(void);
+
+/**
+ * @brief How many Windows names the mapping carries.
+ *
+ * Zero means no table was built in, which gchron_zone_id_from_windows()
+ * reports as GCHRON_ERR_UNSUPPORTED.
+ *
+ * @return The count.
+ */
+GCHRON_API size_t gchron_zone_windows_mapping_count(void);
+
 #ifdef __cplusplus
 }
 #endif

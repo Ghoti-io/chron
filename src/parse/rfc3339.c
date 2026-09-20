@@ -15,6 +15,7 @@
 #include <ghoti.io/chron/core.h>
 #include <ghoti.io/chron/macros.h>
 #include <ghoti.io/chron/offset.h>
+#include <ghoti.io/chron/leap.h>
 #include <ghoti.io/chron/parse.h>
 
 #include "../core/core_internal.h"
@@ -298,15 +299,32 @@ GCHRON_Result gchron_scan_full_time(GCHRON_Scanner * sc,
         break;
       }
 
-      case GCHRON_LEAP_TABLE:
+      case GCHRON_LEAP_TABLE: {
         /*
-         * The table is leap.h's, which is phase 4. Refusing outright rather
-         * than quietly behaving as GCHRON_LEAP_MINUTE: a caller who asked for
-         * the strict reading and silently got the loose one has a check that
-         * passes for the wrong reason.
+         * `TABLE` is `MINUTE` plus one more question, and only the first half
+         * can be asked here: a `full-time` production has no date, and
+         * whether *this day* gained a second is a question about a date. The
+         * second half runs in gchron_scan_check_leap_table(), which the
+         * date-bearing parsers call once they have one.
          */
-        return gchron_fail(sc->err, GCHRON_ERR_UNSUPPORTED,
-            GCHRON_DIAG_LEAP_SECOND_REJECTED, second_start, 2);
+        int64_t local_sec = (int64_t)hour * 3600 + (int64_t)minute * 60;
+        int64_t utc_sec = gchron_floor_mod(local_sec - out->offset_sec,
+            GCHRON_SECONDS_PER_DAY);
+        if (!out->has_offset || utc_sec != 23 * 3600 + 59 * 60) {
+          return gchron_fail(sc->err, GCHRON_ERR_FORMAT,
+              GCHRON_DIAG_LEAP_SECOND_WRONG_MINUTE, second_start, 2);
+        }
+        if (sc->opts->leap_table == NULL) {
+          /*
+           * No quiet fallback to GCHRON_LEAP_MINUTE. A caller who asked for
+           * the strict reading and silently got the loose one has a check
+           * that passes for the wrong reason.
+           */
+          return gchron_fail(sc->err, GCHRON_ERR_INVALID,
+              GCHRON_DIAG_LEAP_SECOND_REJECTED, second_start, 2);
+        }
+        break;
+      }
 
       case GCHRON_LEAP_CLAMP:
       default:
@@ -336,6 +354,58 @@ static void fill_info(GCHRON_ParseInfo * info, const GCHRON_TimeParts * parts) {
   info->fraction_truncated = parts->truncated;
   info->fraction_digits = parts->digits;
   info->offset_unknown = parts->offset_unknown;
+}
+
+GCHRON_Result gchron_scan_check_leap_table(const GCHRON_ParseOptions * opts,
+    const GCHRON_Date * date, const GCHRON_TimeParts * parts,
+    GCHRON_Error * err) {
+  GCHRON_Date utc_date;
+  int64_t epoch_day = 0;
+  int64_t local_sec;
+  bool is_leap = false;
+  GCHRON_Result result;
+
+  if (opts->leap != GCHRON_LEAP_TABLE || !parts->leap_second) {
+    return GCHRON_OK;
+  }
+  if (opts->leap_table == NULL) {
+    return gchron_fail(err, GCHRON_ERR_INVALID,
+        GCHRON_DIAG_LEAP_SECOND_REJECTED, 0, 0);
+  }
+
+  /*
+   * The date in UTC, which is not always the date in the text: the suite's
+   * own `1998-12-31T15:59:60.123-08:00` is a leap second belonging to the
+   * next UTC day, and asking the table about 1998-12-31 local would be
+   * asking about the wrong day.
+   */
+  if (gchron_date_to_epoch_day(date, &epoch_day) != GCHRON_OK) {
+    return gchron_fail(err, GCHRON_ERR_RANGE, GCHRON_DIAG_YEAR_OUT_OF_RANGE,
+        0, 0);
+  }
+  local_sec = (int64_t)parts->time.hour * 3600
+      + (int64_t)parts->time.minute * 60;
+  epoch_day += gchron_floor_div(local_sec - parts->offset_sec,
+      GCHRON_SECONDS_PER_DAY);
+  if (gchron_date_from_epoch_day(epoch_day, &utc_date) != GCHRON_OK) {
+    return gchron_fail(err, GCHRON_ERR_RANGE, GCHRON_DIAG_YEAR_OUT_OF_RANGE,
+        0, 0);
+  }
+
+  result = gchron_leap_is_leap_day(opts->leap_table, &utc_date, &is_leap);
+  if (result != GCHRON_OK) {
+    /*
+     * Before the table begins, or past its expiry. Both reach the caller
+     * unchanged, because "I cannot know" is a different answer from "that is
+     * not a leap second" and a caller may reasonably treat them differently.
+     */
+    return gchron_fail(err, result, GCHRON_DIAG_LEAP_SECOND_REJECTED, 0, 0);
+  }
+  if (!is_leap) {
+    return gchron_fail(err, GCHRON_ERR_FORMAT,
+        GCHRON_DIAG_LEAP_SECOND_NOT_IN_TABLE, 0, 0);
+  }
+  return GCHRON_OK;
 }
 
 GCHRON_Result gchron_parse_rfc3339_date_time(const char * text, size_t len,
@@ -373,6 +443,10 @@ GCHRON_Result gchron_parse_rfc3339_date_time(const char * text, size_t len,
     return result;
   }
   result = gchron_scan_full_time(&sc, GCHRON_OFFSET_REQUIRED, &parts);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  result = gchron_scan_check_leap_table(sc.opts, &date, &parts, err);
   if (result != GCHRON_OK) {
     return result;
   }
@@ -455,6 +529,17 @@ GCHRON_Result gchron_parse_rfc3339_full_time(const char * text, size_t len,
   result = gchron_scan_full_time(&sc, GCHRON_OFFSET_REQUIRED, &parts);
   if (result != GCHRON_OK) {
     return result;
+  }
+  if (parts.leap_second && sc.opts->leap == GCHRON_LEAP_TABLE) {
+    /*
+     * GCHRON_LEAP_TABLE asks whether *this day* gained a second, and a
+     * `full-time` has no day. Refused rather than quietly settled at
+     * GCHRON_LEAP_MINUTE's strictness: a caller who asked for the strict
+     * reading and got the loose one has a check that passes for the wrong
+     * reason, and that is the whole reason the two are separate levels.
+     */
+    return gchron_fail(err, GCHRON_ERR_UNSUPPORTED,
+        GCHRON_DIAG_LEAP_SECOND_NOT_IN_TABLE, 0, 0);
   }
   result = gchron_scan_finish(&sc, info);
   if (result != GCHRON_OK) {

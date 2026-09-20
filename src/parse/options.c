@@ -22,12 +22,19 @@ void gchron_parse_options_default(GCHRON_ParseOptions * out) {
   if (out == NULL) {
     return;
   }
-  out->limits = NULL;
-  out->fraction = GCHRON_FRACTION_REJECT;
-  out->leap = GCHRON_LEAP_REJECT;
-  out->zone_conflict = GCHRON_ZONECONFLICT_REJECT;
-  out->allow_space_separator = false;
-  out->allow_trailing = false;
+  /*
+   * Zeroed first, and then nothing further is needed - because "zero is
+   * strict" (design.md section 3.7) is a property of every field here: each
+   * policy enum's zero value is its REJECT, and every flag's is off.
+   *
+   * The first spelling assigned the fields one at a time, which meant a field
+   * added in a later phase was left holding whatever was on the caller's
+   * stack. Phase 4 added `leap_table` and this function started handing back
+   * a garbage pointer under the name of a default. Assigning the fields is
+   * the kind of correct that stops being correct when someone adds a field;
+   * memset is the kind that does not.
+   */
+  memset(out, 0, sizeof(*out));
 }
 
 void gchron_parse_options_toml(GCHRON_ParseOptions * out) {
@@ -61,14 +68,8 @@ void gchron_parse_info_clear(GCHRON_ParseInfo * info) {
   if (info == NULL) {
     return;
   }
-  info->consumed = 0;
-  info->leap_second = false;
-  info->fraction_truncated = false;
-  info->fraction_digits = 0;
-  info->offset_unknown = false;
-  info->had_zone_annotation = false;
-  info->offset_disagreed_with_zone = false;
-  info->calendar[0] = '\0';
+  /* Zeroed wholesale, for the reason gchron_parse_options_default() gives. */
+  memset(info, 0, sizeof(*info));
 }
 
 const GCHRON_ParseOptions * gchron_parse_options_effective(

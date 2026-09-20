@@ -129,6 +129,10 @@ GCHRON_Result gchron_parse_toml(const char * text, size_t len,
   if (result != GCHRON_OK) {
     return result;
   }
+  result = gchron_scan_check_leap_table(sc.opts, &date, &parts, err);
+  if (result != GCHRON_OK) {
+    return result;
+  }
   result = gchron_scan_finish(&sc, info);
   if (result != GCHRON_OK) {
     return result;

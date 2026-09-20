@@ -177,6 +177,15 @@ typedef enum {
  * gchron_parse_options_default() anyway - it is what will still be right when
  * a later field's safe value is not zero.
  */
+/**
+ * Forward declaration of leap.h's table.
+ *
+ * A declaration rather than an `#include`: leap.h is optional (design.md
+ * section 5.1), and a caller who only parses text should not be made to carry
+ * it. Passing a table here is the only thing that links it in.
+ */
+typedef struct GCHRON_LeapTable GCHRON_LeapTable;
+
 typedef struct GCHRON_ParseOptions {
   /** Caps on the input. NULL means gchron_limits_default(). */
   const GCHRON_Limits * limits;
@@ -186,6 +195,17 @@ typedef struct GCHRON_ParseOptions {
 
   /** What to do with a `:60` second. */
   GCHRON_Leap leap;
+
+  /**
+   * The table GCHRON_LEAP_TABLE consults. From leap.h - usually
+   * gchron_leap_table_builtin().
+   *
+   * Required by that level and ignored by every other. NULL under
+   * GCHRON_LEAP_TABLE is GCHRON_ERR_INVALID rather than a quiet fallback to
+   * GCHRON_LEAP_MINUTE: a caller who asked for the strict reading and
+   * silently got the loose one has a check that passes for the wrong reason.
+   */
+  const GCHRON_LeapTable * leap_table;
 
   /**
    * Accept a space where the grammar wants `T`.

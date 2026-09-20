@@ -16,6 +16,9 @@
  */
 
 #ifndef GHOTI_IO_GCHRON_NAMESPACE_H
+#define GCHRON_LeapEntry GHOTIIO_CHRON(GCHRON_LeapEntry)
+#define GCHRON_LeapTable GHOTIIO_CHRON(GCHRON_LeapTable)
+#define GCHRON_TaiInstant GHOTIIO_CHRON(GCHRON_TaiInstant)
 #define GHOTI_IO_GCHRON_NAMESPACE_H
 
 #include <ghoti.io/chron/libver.h>
@@ -197,6 +200,18 @@
 #define gchron_interval_overlaps GHOTIIO_CHRON(gchron_interval_overlaps)
 #define gchron_iso_weeks_in_year GHOTIIO_CHRON(gchron_iso_weeks_in_year)
 #define gchron_jdn_to_epoch_day GHOTIIO_CHRON(gchron_jdn_to_epoch_day)
+#define gchron_leap_elapsed GHOTIIO_CHRON(gchron_leap_elapsed)
+#define gchron_leap_is_leap_day GHOTIIO_CHRON(gchron_leap_is_leap_day)
+#define gchron_leap_offset_at GHOTIIO_CHRON(gchron_leap_offset_at)
+#define gchron_leap_table_builtin GHOTIIO_CHRON(gchron_leap_table_builtin)
+#define gchron_leap_table_count GHOTIIO_CHRON(gchron_leap_table_count)
+#define gchron_leap_table_destroy GHOTIIO_CHRON(gchron_leap_table_destroy)
+#define gchron_leap_table_dump GHOTIIO_CHRON(gchron_leap_table_dump)
+#define gchron_leap_table_entry GHOTIIO_CHRON(gchron_leap_table_entry)
+#define gchron_leap_table_expiry GHOTIIO_CHRON(gchron_leap_table_expiry)
+#define gchron_leap_table_file GHOTIIO_CHRON(gchron_leap_table_file)
+#define gchron_leap_table_parse GHOTIIO_CHRON(gchron_leap_table_parse)
+#define gchron_leap_table_updated GHOTIIO_CHRON(gchron_leap_table_updated)
 #define gchron_limits_default GHOTIIO_CHRON(gchron_limits_default)
 #define gchron_month_day_compare GHOTIIO_CHRON(gchron_month_day_compare)
 #define gchron_month_day_create GHOTIIO_CHRON(gchron_month_day_create)
@@ -227,6 +242,8 @@
 #define gchron_parse_toml GHOTIIO_CHRON(gchron_parse_toml)
 #define gchron_rd_to_epoch_day GHOTIIO_CHRON(gchron_rd_to_epoch_day)
 #define gchron_result_string GHOTIIO_CHRON(gchron_result_string)
+#define gchron_tai_from_instant GHOTIIO_CHRON(gchron_tai_from_instant)
+#define gchron_tai_to_instant GHOTIIO_CHRON(gchron_tai_to_instant)
 #define gchron_tick_now GHOTIIO_CHRON(gchron_tick_now)
 #define gchron_tick_since GHOTIIO_CHRON(gchron_tick_since)
 #define gchron_time_compare GHOTIIO_CHRON(gchron_time_compare)
@@ -256,11 +273,14 @@
 #define gchron_zone_canonical_id GHOTIIO_CHRON(gchron_zone_canonical_id)
 #define gchron_zone_dump GHOTIIO_CHRON(gchron_zone_dump)
 #define gchron_zone_id GHOTIIO_CHRON(gchron_zone_id)
+#define gchron_zone_id_from_windows GHOTIIO_CHRON(gchron_zone_id_from_windows)
 #define gchron_zone_is_fixed GHOTIIO_CHRON(gchron_zone_is_fixed)
 #define gchron_zone_next_transition GHOTIIO_CHRON(gchron_zone_next_transition)
 #define gchron_zone_offset_at GHOTIIO_CHRON(gchron_zone_offset_at)
 #define gchron_zone_offsets_for_civil GHOTIIO_CHRON(gchron_zone_offsets_for_civil)
 #define gchron_zone_prev_transition GHOTIIO_CHRON(gchron_zone_prev_transition)
+#define gchron_zone_windows_mapping_count GHOTIIO_CHRON(gchron_zone_windows_mapping_count)
+#define gchron_zone_windows_mapping_version GHOTIIO_CHRON(gchron_zone_windows_mapping_version)
 #define gchron_zoned_add GHOTIIO_CHRON(gchron_zoned_add)
 #define gchron_zoned_compare GHOTIIO_CHRON(gchron_zoned_compare)
 #define gchron_zoned_dump GHOTIIO_CHRON(gchron_zoned_dump)

@@ -1,6 +1,6 @@
 # The design of ghoti.io-chron
 
-**Status:** phases 0 through 3 have shipped; §16's phase 4 is still design. This
+**Status:** all five phases have shipped. This
 page says what exists and why, so that the code can be judged against it
 rather than the other way round. A change of mind lands here first, in the
 same commit as the code that needs it (`CONVENTIONS.md` §9), and §16 marks
@@ -1156,11 +1156,92 @@ for one engineer who knows the suite.
 | 1 **(done)** | `zone.h`: TZif, the POSIX TZ footer, `ZoneDb`, `Resolve`, transitions, the local zone (Linux/macOS); `zoned.h`; the `zdump`, `zoneinfo` and `tzset` differentials; RFC 9557 | L | **M2: `ctang` can render a date in a zone** - reached |
 | 2 **(done)** | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** - reached |
 | 3 **(done)** | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** - reached |
-| 4 | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** |
+| 4 **(done)** | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** - reached for metrology; Windows needs a Windows machine, and `WINDOWS-TODO.md` 6b and 6c say what done is |
 
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz` and
 `check-symbols` clean from an empty build directory, serially and under
 `-j`, per `CONVENTIONS.md` §12 item 10.
+
+**What phase 4 built, and what it found.** `leap.h` - the leap-second table,
+`GCHRON_TaiInstant`, and the conversions between UTC and TAI - together with
+the embedded time-zone database, `gchron_zonedb_default()`'s choice between it
+and the system one, and the Windows zone mapping.
+
+`GCHRON_LEAP_TABLE` had been declared since phase 0 and had answered
+`GCHRON_ERR_UNSUPPORTED` ever since, because a level that quietly behaved as
+`GCHRON_LEAP_MINUTE` would give a caller a strict check that passed for the
+wrong reason. It now consults a table, and refuses `1999-06-30T23:59:60Z` -
+when no leap second occurred - while accepting `1998-12-31T23:59:60Z`, which
+is the whole difference between the two levels. Three things about it are
+worth stating:
+
+- **The table is a parameter, not an ambient fact.** `GCHRON_ParseOptions`
+  carries it, and `parse.h` forward-declares the type rather than including
+  `leap.h`, so a caller who only parses text does not link the module.
+  Selecting the level without supplying a table is `GCHRON_ERR_INVALID` - the
+  same refusal as before, for the same reason.
+- **The question is about the UTC day, not the local one.** The suite's own
+  `1998-12-31T15:59:60.123-08:00` is a leap second belonging to the next UTC
+  day, so the date the table is asked about is the one after the offset is
+  applied.
+- **A `full-time` cannot be checked at all.** It has no date, and the table's
+  question is about a date, so a `:60` under this level is
+  `GCHRON_ERR_UNSUPPORTED` rather than silently settled at `MINUTE`'s
+  strictness.
+
+The table is checked against the tzdb's *other* leap-second file. The built-in
+one is generated from `leap-seconds.list`, so checking it against that would
+prove only that the generator can read back what it wrote; `leapseconds` is
+the same facts restated in zic's syntax by zic's maintainers, and agreeing
+with it is evidence. The complement is checked too - every day from 1972 to
+the table's expiry that is *not* in the list must not be a leap day - because
+a `gchron_leap_is_leap_day()` that simply answered "yes" would pass a list of
+positives.
+
+**The defect phase 4 found was in phase 0's code.**
+`gchron_parse_options_default()` assigned its fields one at a time, so the
+`leap_table` field this phase added was left holding whatever was on the
+caller's stack: a garbage pointer, returned under the name of a default. The
+same shape was in `gchron_write_options_default()` and
+`gchron_parse_info_clear()`. All three now zero the struct wholesale, which
+works precisely because section 3.7's "zero is strict" is true of every field
+- each policy enum's zero is its `REJECT`. Assigning the fields is the kind of
+correct that stops being correct when somebody adds a field. The regression
+test fills each struct with `0xAB` first, so a forgotten field shows up as
+that byte rather than as a zero that happened to be there.
+
+**What the embedded database is for.** There is no `/usr/share/zoneinfo` on
+Windows, so `gchron_zonedb_system()` fails there by design and
+`gchron_zonedb_default()` falls through - which makes the embedded path the
+one every Windows caller uses and the one Linux exercises least. It is 485
+zone names over 436 distinct TZif images, generated by `tools/tzdata/embed.py`
+and **not committed**: it is 2.3MB of C, it regenerates in under a second, and
+a copy in the repository would be one distribution's snapshot in every diff.
+
+It can do one thing a directory-backed database cannot. TZif has nowhere to
+record that `America/Atka` is a link to `America/Adak`, so a database that
+walks a directory has no way to know - but the generator can see that the file
+is a symbolic link, so an embedded database answers
+`gchron_zone_canonical_id()` truthfully. Each says what it actually knows
+rather than inventing the rest.
+
+`gchron_zonedb_default()` now chooses by currency. tzdata releases are `YYYYx`
+and order lexically, so the comparison is `strcmp` and not an approximation of
+one; ties and unknown versions both go to the system database, on the
+reasoning that the operating system's copy is the one somebody is updating.
+
+**What phase 4 could not finish, and why.** The Windows zone mapping needs
+CLDR's `windowsZones.xml`, and nothing in this build reaches the network. The
+generator, the fetch script and the public `gchron_zone_id_from_windows()`
+are here; the table is not, and until someone runs
+`tools/tzdata/fetch-cldr.sh` the library reports **having no table** rather
+than an empty one. That distinction is the point: "there is no table" has a
+fix the caller can carry out, and "this table does not carry that name" -
+which is what a complete mapping says about a zone Windows added last year -
+does not. The Windows branch of `gchron_zonedb_local()` is written, marked
+`TODO(windows):`, and listed in `WINDOWS-TODO.md` as 6b, with "done" being
+that a machine set to Pacific Standard Time returns `America/Los_Angeles`.
+Per `CONVENTIONS.md` section 11 it is not claimed to work.
 
 **What phase 3 built, and what found its defects.** `format.h`: the LDML
 (TR35) pattern compiler, `strftime` lowered onto the same item list, the

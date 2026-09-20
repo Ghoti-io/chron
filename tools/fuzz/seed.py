@@ -183,13 +183,62 @@ def seed_format():
     return out
 
 
+
+def seed_leap():
+    out = reset("leap")
+    # The real file's shape, then the ways it can be wrong. A seed corpus of
+    # only valid input never tests rejection - the gate would report zero on a
+    # question it never asked.
+    real = (b"#$\t3992312697\n"
+            b"#@\t4023129600\n"
+            b"2272060800\t10\t# 1 Jan 1972\n"
+            b"2287785600\t11\t# 1 Jul 1972\n"
+            b"3692217600\t37\t# 1 Jan 2017\n")
+    cases = [
+        real,
+        b"",                                    # nothing at all
+        b"# only prose\n",                      # no entries
+        b"#@\t4023129600\n",                   # an expiry and nothing else
+        b"2272060800\t10\n",                   # entries and no expiry
+        b"#@\t4023129600\n2287785600\t11\n2272060800\t10\n",  # out of order
+        b"#@\t4023129600\n2272060800\t10\n2272060800\t11\n",  # duplicate instant
+        b"#@\t4023129600\n2272060800\n",      # a row with no offset
+        b"#@\t4023129600\n2272060800\tx\n",  # a non-numeric offset
+        b"#@\t4023129600\n2272060800\t10\tjunk\n",  # trailing junk
+        b"#@\tx\n2272060800\t10\n",          # a non-numeric expiry
+        b"#@\t" + b"9" * 40 + b"\n2272060800\t10\n",  # an expiry that overflows
+        b"#@\t4023129600\n" + b"9" * 40 + b"\t10\n",  # an instant that overflows
+        b"#@\t4023129600\n2272060800\t" + b"9" * 20 + b"\n",  # an offset that overflows
+        # A negative leap second: never issued, expressible, and the reader
+        # must not assume it cannot happen (design.md 5.1 item 5).
+        b"#@\t4023129600\n2272060800\t10\n2287785600\t11\n2303683200\t10\n",
+        real.replace(b"\n", b"\r\n"),          # CRLF, as an HTTP fetch gives
+        real + b"#h\ta9bad145 84c31c70\n",     # the hash line
+        real + b"#unknown directive\n",        # a directive from the future
+        # The three fuzz_leap found, kept as named seeds rather than as the
+        # opaque hashes libFuzzer names its artifacts.
+        # A digit mutated into a letter, which read_u64 used to stop at -
+        # leaving an expiry a hundred times too small and no complaint.
+        b"#@\t40231296p0\n2272060800\t10\n",
+        # An offset that jumps further than the gap between two rows, which
+        # makes the TAI timeline run backwards across the boundary.
+        b"#@\t4023129600\n2272060800\t10\n2287785600\t800010\n",
+        # A negative leap one second after the row before it: the second it
+        # removes used to convert to the same TAI value as its successor.
+        b"#@\t40601\n22\t11\n23\t10\n",
+    ]
+    for case in cases:
+        write(out, case)
+    return out
+
 def main():
     parse = seed_parse()
     arith = seed_arith()
     tzif, posix = seed_zones()
     duration = seed_duration()
     fmt = seed_format()
-    for path in (parse, arith, tzif, posix, duration, fmt):
+    leap = seed_leap()
+    for path in (parse, arith, tzif, posix, duration, fmt, leap):
         count = len([p for p in path.iterdir() if p.is_file()
                      and p.name != ".gitignore"])
         print("%-34s %5d seeds" % (path.relative_to(ROOT), count))

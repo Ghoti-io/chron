@@ -53,6 +53,8 @@ static const char * const DIAG_STRINGS[GCHRON_DIAG_COUNT] = {
   [GCHRON_DIAG_NANOSECOND_OUT_OF_RANGE] = "nanosecond out of range",
   [GCHRON_DIAG_LEAP_SECOND_REJECTED] = "a leap second, and the policy refuses",
   [GCHRON_DIAG_LEAP_SECOND_WRONG_MINUTE] = "a leap second outside 23:59 UTC",
+  [GCHRON_DIAG_LEAP_SECOND_NOT_IN_TABLE] =
+      "a leap second on a day the table says gained none",
   [GCHRON_DIAG_FRACTION_TOO_LONG] = "more than nine fractional digits",
   [GCHRON_DIAG_FRACTION_EMPTY] = "a decimal point with no digits after it",
   [GCHRON_DIAG_DURATION_EMPTY] = "a duration with no components",
@@ -76,6 +78,15 @@ static const char * const DIAG_STRINGS[GCHRON_DIAG_COUNT] = {
       "more of one pattern letter than any field uses",
   [GCHRON_DIAG_WEEK_YEAR_WITHOUT_WEEK] =
       "a week-based year with no week letter beside it",
+  [GCHRON_DIAG_LEAP_TABLE_MALFORMED] =
+      "a leap-seconds.list line that does not parse",
+  [GCHRON_DIAG_LEAP_TABLE_ORDER] =
+      "leap-seconds.list entries out of time order",
+  [GCHRON_DIAG_LEAP_TABLE_STEP] =
+      "a leap-second offset that moves by more than one second",
+  [GCHRON_DIAG_LEAP_TABLE_EMPTY] = "a leap-seconds.list with no entries",
+  [GCHRON_DIAG_LEAP_TABLE_NO_EXPIRY] =
+      "a leap-seconds.list with no expiry line",
   [GCHRON_DIAG_INPUT_TOO_LONG] = "input longer than the limit",
   [GCHRON_DIAG_BUFFER_TOO_SMALL] = "the output buffer is too small",
 };
@@ -142,6 +153,7 @@ void gchron_limits_default(GCHRON_Limits * limits) {
   limits->max_zones = GCHRON_DEFAULT_MAX_ZONES;
   limits->max_format_length = GCHRON_DEFAULT_MAX_FORMAT_LENGTH;
   limits->max_format_items = GCHRON_DEFAULT_MAX_FORMAT_ITEMS;
+  limits->max_leap_entries = GCHRON_DEFAULT_MAX_LEAP_ENTRIES;
 }
 
 GCHRON_Result gchron_fail(GCHRON_Error * error, GCHRON_Result code,
