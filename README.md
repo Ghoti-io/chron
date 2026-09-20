@@ -102,9 +102,8 @@ if a tier includes a higher tier's header.
 | 2 | `zone.h`, `zoned.h` | named zones, DST transitions, the gap and overlap policy, the local zone, RFC 9557 | TZif files |
 | 3 | `format.h` | LDML patterns, `strftime`, month and day names | a names provider |
 
-Tier 3 is not built yet; `documentation/design.md` §16 says which phase each
-remaining piece arrives in, and what is deliberately absent rather than
-stubbed.
+All four tiers are built. `documentation/design.md` §16 says what phase 4 adds
+and what is deliberately absent rather than stubbed.
 
 ### Calendars are open
 
@@ -228,14 +227,18 @@ make vectors                 # regenerate the committed vectors from their oracl
 
 ## Status
 
-Phases 0, 1 and 2 of `documentation/design.md` §16. Tiers 0, 1 and 2 are
+Phases 0 through 3 of `documentation/design.md` §16. All four tiers are
 built: civil arithmetic; the Gregorian, Julian, hybrid and tabular calendars;
 instants, offsets and durations with their full arithmetic; the RFC 3339,
-TOML, RFC 9557 and ISO 8601 duration grammars; and time zones - TZif, the
-POSIX `TZ` footer, the gap and overlap policy and the local zone.
+TOML, RFC 9557 and ISO 8601 duration grammars; time zones - TZif, the POSIX
+`TZ` footer, the gap and overlap policy and the local zone; and formatting -
+LDML patterns, `strftime`, the named formats, HTTP-date and RFC 5322, with
+the thirteen interop encodings and the clock.
 
-The LDML formatter, the interop conversions, the clock, the leap-second table
-and the embedded time-zone database are the later phases, and are absent
-rather than stubbed.
+Formatting is checked against ICU's `SimpleDateFormat` (3,639 comparisons,
+with three stated zone-name divergences) and against glibc's `strftime`.
+
+The leap-second table, the embedded time-zone database and the Windows zone
+mapping are phase 4, and are absent rather than stubbed.
 
 Version 0.0.0. MIT licensed.

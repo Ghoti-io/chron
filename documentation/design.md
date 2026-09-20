@@ -1,6 +1,6 @@
 # The design of ghoti.io-chron
 
-**Status:** phases 0, 1 and 2 have shipped; §16's later phases are still design. This
+**Status:** phases 0 through 3 have shipped; §16's phase 4 is still design. This
 page says what exists and why, so that the code can be judged against it
 rather than the other way round. A change of mind lands here first, in the
 same commit as the code that needs it (`CONVENTIONS.md` §9), and §16 marks
@@ -982,6 +982,13 @@ Every row of `regex`'s `testing.md` §9 table applies, and one is added: the
 is edited by hand. A conformance runner that cannot be made to fail is not
 measuring anything.
 
+This applies to the build gates as much as to the vector runners, and phase 3
+found two that had never been checked: a `test-valgrind` whose bare `for` loop
+reported only its last suite's status, and an ASan build with no header
+dependency tracking, which had been silently testing stale objects. Both were
+green the entire time. A gate is not tested until it has been *observed to
+fail* - not reasoned about, run - and each one here has been.
+
 ---
 
 ## 13. Code layout
@@ -1148,12 +1155,78 @@ for one engineer who knows the suite.
 | 0 **(done)** | Scaffold from `model` (`CONVENTIONS.md` §12); `core.h`; `civil.h` with Gregorian; `instant.h`; `offset.h`; `duration.h`'s type and its Appendix A text; RFC 3339 and TOML grammars, both directions; the exhaustive civil tests; the JSON Schema format vectors | M | **M1: `text` can replace its timestamp side-car and pass the JSON Schema `format` vectors** - reached; all 207 vectors pass |
 | 1 **(done)** | `zone.h`: TZif, the POSIX TZ footer, `ZoneDb`, `Resolve`, transitions, the local zone (Linux/macOS); `zoned.h`; the `zdump`, `zoneinfo` and `tzset` differentials; RFC 9557 | L | **M2: `ctang` can render a date in a zone** - reached |
 | 2 **(done)** | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** - reached |
-| 3 | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** |
+| 3 **(done)** | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** - reached |
 | 4 | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** |
 
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz` and
 `check-symbols` clean from an empty build directory, serially and under
 `-j`, per `CONVENTIONS.md` §12 item 10.
+
+**What phase 3 built, and what found its defects.** `format.h`: the LDML
+(TR35) pattern compiler, `strftime` lowered onto the same item list, the
+eleven named formats, and the names provider that keeps CLDR data out of the
+library. With it, `interop.h`'s thirteen foreign encodings and `clock.h`.
+
+The differential against ICU's `SimpleDateFormat` - 89 patterns across 7
+zones and 6 instants, 3,639 comparisons - found four disagreements, all of
+them chron's:
+
+1. **Offset seconds were dropped.** `Z`, `ZZ`, `ZZZ`, `O` and `OOOO` wrote
+   hours and minutes only. The tzdb records pre-standard local mean time to
+   the second, so `Europe/Amsterdam` before 1937 is `+00:19:32`, and every
+   one of those instants printed a different time than it named.
+2. **`ZZZZZ` did not write `Z` at a zero offset.** It follows `X`'s rule,
+   not `Z`'s - which is the one difference that makes it a separate spelling.
+3. **The week letters used ISO rules unconditionally.** `w` and `W` are
+   locale-dependent: the first day of the week and the minimal days in the
+   first week both come from the locale, and only a locale that says Monday
+   and four agrees with ISO. The rule is now transcribed from ICU's
+   `Calendar::weekNumber` and driven from the provider, so a provider that
+   says Sunday-and-one gets Sunday-and-one.
+4. **`EEEEEE` had nowhere to read from.** The short weekday is a sixth width,
+   distinct from the narrow one; `GCHRON_NAME_SHORT` was added for it.
+
+Three divergences remain and are stated rather than fixed: `z`, `zz` and
+`zzz` print the tzdb abbreviation (`EDT`) where CLDR root, having no zone
+names at all, falls back to `GMT-4`. A provider with CLDR data would print
+what CLDR says. The gate knows about these three and fails on a fourth.
+
+The fifth defect came from `fuzz_format`, which asserts that the bound
+`gchron_format_max_length` declares really bounds the output:
+
+5. **The declared bound omitted the sign on a padded year.** `u` and `Y`
+   write a negative year's sign *outside* the zero padding, so a count past
+   nine digits - `uuuuuuuuuuu` on year -1 - needed one byte more than the
+   library had promised. A caller who allocated exactly what it was told got
+   `GCHRON_ERR_LIMIT` from a buffer sized to its own contract. `y` was never
+   affected: the year of the era is always positive. The regression test
+   sweeps every letter at every count the compiler accepts, against the
+   values whose fields are widest, and asserts a buffer of exactly the
+   declared size is always enough - 2,880 combinations.
+
+**What phase 3 found in its own gates.** Two of them could not do their job,
+and neither failure was visible from a passing run:
+
+- **The ASan build had no header dependency tracking.** Its rules were
+  written without `-MMD -MP`, and because it builds into its own directory
+  nothing in the ordinary build's graph reached it. `GCHRON_Limits` grew a
+  field in this phase, and ASan reported a stack-buffer-overflow in
+  `gchron_limits_default` writing past a `GCHRON_Limits` local - a genuine
+  overflow of a phase-1 struct by a phase-3 function, in objects that should
+  have been rebuilt. The gate that exists to find memory errors was the only
+  build capable of manufacturing them. The fuzz build had the same hole.
+- **`test-valgrind` could not fail.** It was a bare `for` loop, which reports
+  the exit status of its *last* iteration, so the target passed whenever the
+  alphabetically-last suite passed regardless of the others. `--error-exitcode=1`
+  had been set the whole time and had nothing to report to. It now collects
+  the failures and names them, and was verified to fail on a failing first
+  suite followed by a passing one - the exact shape that used to slip through.
+
+**What phase 3 deliberately did not build.** No CLDR data ships with the
+library: `gchron_names_english()` is the root locale and nothing else, and
+§8.5's provider is the whole of the localisation story until a consumer needs
+more. Leap seconds stay absent - `GCHRON_LEAP_TABLE` still answers
+`GCHRON_ERR_UNSUPPORTED` rather than quietly behaving as `GCHRON_LEAP_MINUTE`.
 
 **What phase 2 built, and the two defects its own properties found.** The
 Julian, hybrid and tabular calendars; duration arithmetic in full - `add`,

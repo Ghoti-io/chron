@@ -69,6 +69,13 @@ static const char * const DIAG_STRINGS[GCHRON_DIAG_COUNT] = {
       "a critical annotation this library does not understand",
   [GCHRON_DIAG_OFFSET_ZONE_CONFLICT] =
       "the offset and the zone annotation disagree",
+  [GCHRON_DIAG_UNTERMINATED_QUOTE] = "an unterminated quote in the pattern",
+  [GCHRON_DIAG_PATTERN_LETTER_UNKNOWN] =
+      "a pattern letter this library has no field for",
+  [GCHRON_DIAG_PATTERN_LETTER_RUN] =
+      "more of one pattern letter than any field uses",
+  [GCHRON_DIAG_WEEK_YEAR_WITHOUT_WEEK] =
+      "a week-based year with no week letter beside it",
   [GCHRON_DIAG_INPUT_TOO_LONG] = "input longer than the limit",
   [GCHRON_DIAG_BUFFER_TOO_SMALL] = "the output buffer is too small",
 };
@@ -133,6 +140,8 @@ void gchron_limits_default(GCHRON_Limits * limits) {
   limits->max_transitions = GCHRON_DEFAULT_MAX_TRANSITIONS;
   limits->max_zone_types = GCHRON_DEFAULT_MAX_ZONE_TYPES;
   limits->max_zones = GCHRON_DEFAULT_MAX_ZONES;
+  limits->max_format_length = GCHRON_DEFAULT_MAX_FORMAT_LENGTH;
+  limits->max_format_items = GCHRON_DEFAULT_MAX_FORMAT_ITEMS;
 }
 
 GCHRON_Result gchron_fail(GCHRON_Error * error, GCHRON_Result code,

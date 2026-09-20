@@ -1,9 +1,8 @@
 # The text formats `chron` reads and writes
 
-**Status:** describes what phases 0 and 1 shipped. The grammars
-`documentation/design.md` §8.1 lists but this page does not - ISO 8601's
-profile, YAML 1.1, HTTP-date, RFC 5322, the Unix integer forms - are later
-phases and are absent rather than stubbed.
+**Status:** describes what phases 0 through 3 shipped. The grammars
+`documentation/design.md` §8.1 lists but this page does not - YAML 1.1's
+timestamp and the Unix integer forms - are absent rather than stubbed.
 
 `CONVENTIONS.md` §9 asks a library implementing an external standard to name
 the version it implements and its deviations. This page is that, one section
@@ -38,7 +37,7 @@ still set - so a zero-length buffer is how a caller asks for the length alone.
 
 - **The year is exactly four digits, with no sign.** `date-fullyear = 4DIGIT`.
   `+2020-01-01`, `12020-01-01` and `998-01-01` are ISO 8601 questions, and the
-  expanded year belongs to the ISO 8601 profile in phase 2.
+  expanded year belongs to the ISO 8601 profile, below.
 - **The seconds are required.** `1985-04-12T23:20Z` is not a `date-time`.
 - **The offset is required**, and is `Z` or `+HH:MM`. `08:30:06+0130` and
   `08:30:06+01` are both refused: `time-numoffset` has the colon and has the
@@ -180,7 +179,7 @@ TOML defines its Offset Date-Time as "an RFC 3339 formatted date-time", whose
 grammar permits `:60`, but says nothing about leap seconds itself. The preset
 therefore leaves `GCHRON_Leap` at `GCHRON_LEAP_REJECT`, and a caller who has
 decided the question passes the level they want. The setting is due to be
-revisited against `toml-test` in phase 2; until then the strict default stands,
+revisited against `toml-test`; until then the strict default stands,
 which is the rule in design §3.7 rather than a guess dressed as a default.
 
 ---
@@ -253,6 +252,113 @@ The one deviation worth stating: **a daylight-saving name with no rule -
 `EST5EDT` - is refused.** POSIX leaves the transition dates
 implementation-defined there, and glibc falls back to a United States rule.
 That is a guess about geography, and this library has no business making it.
+
+---
+
+## ISO 8601 durations
+
+`gchron_parse_iso8601_duration()` reads the full grammar, which RFC 3339
+Appendix A's is a strict subset of. The two differ in ways worth stating,
+because a caller that assumes they are the same grammar will accept text one
+of its peers rejects:
+
+- **A sign is permitted**, both on the whole duration and inside a component:
+  `-P1D` and `P-1D` (the latter is ISO 8601-2). Appendix A allows neither.
+- **Components may be skipped and mixed freely**: `P1Y2D` and `PT1H2S` are
+  fine, and `P1W2D` puts weeks alongside the rest, which ISO 8601-1:2019
+  §5.5.2 permits and Appendix A does not.
+- **A component may exceed its usual range.** `PT36H` is legal and is *not*
+  normalised on the way in; `gchron_duration_balance()` is what converts it,
+  and only when asked. A parser that silently balanced would destroy the
+  distinction between `PT36H` and `P1DT12H`, which across a DST transition
+  are different lengths of time.
+- **A fraction is accepted on seconds only.** `PT0.5S` is fine; `P1.5Y`,
+  `PT1.5H` and the rest are `GCHRON_ERR_UNSUPPORTED` with
+  `GCHRON_DIAG_DURATION_FRACTION`. On a calendar unit that is mistake M9 -
+  half a year has no length until something says which year. On an hour or a
+  minute it would be exact, but representing it means pushing the remainder
+  into a lower field, and that is a balance this parser does not perform for
+  the reason just given. The refusal is `UNSUPPORTED`, not `FORMAT`: the text
+  is valid ISO 8601 and this library declines to represent it, which is a
+  different thing from the text being wrong.
+
+The writer emits the shortest correct spelling: no component that is zero
+unless the whole duration is (`PT0S`), and no trailing zeros in a fraction -
+`PT0.5S`, not `PT0.500S`.
+
+---
+
+## HTTP-date (RFC 9110 §5.6.7)
+
+Three formats, because HTTP has accumulated three. A recipient must read all
+of them; a sender must write only the first:
+
+| Form | Example |
+| --- | --- |
+| IMF-fixdate | `Sun, 20 Sep 2026 17:30:00 GMT` |
+| RFC 850 (obsolete) | `Sunday, 20-Sep-26 17:30:00 GMT` |
+| `asctime()` (obsolete) | `Sun Sep 20 17:30:00 2026` |
+
+`gchron_write_http_date()` always writes IMF-fixdate and always GMT, and
+converts a value with any offset first.
+
+**RFC 850's two-digit year needs to know what year it is now.** The RFC's rule
+- a timestamp more than fifty years in the future means the most recent past
+year with those two digits - is not a fixed mapping, so this parser takes a
+`GCHRON_Clock`. Nothing in this library reads the system clock on its own
+(design.md mistake M18); a rule that depended on an untestable ambient value
+would be a rule nobody could check until the year it started mattering. A
+`GCHRON_FixedClock` makes the boundary an ordinary test.
+
+**The day-of-week is parsed and ignored.** `Mon, 20 Sep 2026` is accepted even
+though that date is a Sunday: the date fields decide, and the name is
+redundant. RFC 9110 does not ask a recipient to check it, and a sender that
+got it wrong has still said unambiguously which day it meant. A caller that
+wants to be stricter than HTTP can call `gchron_date_day_of_week()` on the
+result - though it would have to re-read the name out of the input itself,
+because `GCHRON_ParseInfo` does not carry it.
+
+---
+
+## RFC 5322 (2008)
+
+The `Date:` header of an email: section 3.3's grammar plus section 4.3's
+obsolete forms - two-digit years, folding whitespace, parenthesised comments
+(which nest), and the alphabetic zones.
+
+- **`-0000` means the offset is unknown**, exactly as RFC 3339's `-00:00`
+  does, and sets `offset_unknown` (mistake M14). The time is UTC; what is
+  missing is the sender's relationship to it.
+- **The obsolete zone names follow section 4.3's own table.** `UT` and `GMT`
+  are +0000, `EST` -0500, `EDT` -0400, and so on. **Every other single letter
+  is +0000 with the offset marked unknown** - which is what the RFC instructs,
+  because the military zones were so widely implemented backwards that the
+  letter carries no information.
+- The two-digit year takes a clock, for the same reason HTTP-date's does.
+
+---
+
+## LDML (Unicode TR35) and `strftime` patterns
+
+Two pattern languages, one compiled representation. `gchron_format_compile()`
+turns either into a list of items, so `strftime`'s `%Y` and LDML's `uuuu` are
+the same item and are emitted by the same code.
+
+LDML is checked against ICU's `SimpleDateFormat` - 89 patterns across 7 zones
+and 6 instants - and agrees on all 3,639 comparisons with three stated
+exceptions: `z`, `zz` and `zzz` print the tzdb abbreviation (`EDT`) where
+CLDR's root locale, having no zone names, writes `GMT-4`. A names provider
+carrying CLDR data would print what CLDR says; §8.5 is where that plugs in.
+`strftime` is checked against glibc's under the C locale.
+
+Two things about patterns are worth stating because they surprise callers:
+
+- **A pattern is text and a length, like everything else here.** It may
+  contain a NUL, which becomes a literal NUL in the output - so the length
+  the writer reports is the authority, and `strlen` on the result is not.
+- **`gchron_format_max_length()` is a promise.** A buffer of exactly the
+  size it declares is always enough for any value, and the test sweeps every
+  letter at every count to say so.
 
 ---
 

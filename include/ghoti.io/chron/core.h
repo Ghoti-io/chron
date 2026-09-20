@@ -137,6 +137,12 @@ typedef enum {
   GCHRON_DIAG_ANNOTATION_CRITICAL,     ///< A `!` annotation not understood.
   GCHRON_DIAG_OFFSET_ZONE_CONFLICT,    ///< The offset and the zone disagree.
 
+  /* Format patterns. */
+  GCHRON_DIAG_UNTERMINATED_QUOTE,      ///< A `'` with no closing `'`.
+  GCHRON_DIAG_PATTERN_LETTER_UNKNOWN,  ///< A letter this library has no field for.
+  GCHRON_DIAG_PATTERN_LETTER_RUN,      ///< More of one letter than any field uses.
+  GCHRON_DIAG_WEEK_YEAR_WITHOUT_WEEK,  ///< `YYYY` with no week letter beside it.
+
   /* Resources. */
   GCHRON_DIAG_INPUT_TOO_LONG,          ///< Past GCHRON_Limits::max_parse_length.
   GCHRON_DIAG_BUFFER_TOO_SMALL,        ///< An output buffer could not hold it.
@@ -194,6 +200,8 @@ typedef struct GCHRON_Limits {
   size_t max_transitions;  ///< Transition records in one zone.
   size_t max_zone_types;   ///< Local-time types in one zone.
   size_t max_zones;        ///< Zones one database will load and cache.
+  size_t max_format_length;///< Bytes of pattern the compiler will read.
+  size_t max_format_items; ///< Items one compiled pattern may hold.
 } GCHRON_Limits;
 
 /**
@@ -290,6 +298,17 @@ GCHRON_API int gchron_unit_is_exact(GCHRON_Unit unit);
 
 /** The default for GCHRON_Limits::max_zone_types. */
 #define GCHRON_DEFAULT_MAX_ZONE_TYPES ((size_t)256)
+
+/**
+ * The default for GCHRON_Limits::max_format_length.
+ *
+ * In `ctang` a pattern comes from a template and a template may come from a
+ * user, which is why the compiler is bounded at all.
+ */
+#define GCHRON_DEFAULT_MAX_FORMAT_LENGTH ((size_t)4096)
+
+/** The default for GCHRON_Limits::max_format_items. */
+#define GCHRON_DEFAULT_MAX_FORMAT_ITEMS ((size_t)1024)
 
 /**
  * The default for GCHRON_Limits::max_zones.

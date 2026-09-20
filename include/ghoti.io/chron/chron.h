@@ -18,9 +18,12 @@
 #include <ghoti.io/chron/civil.h>
 #include <ghoti.io/chron/core.h>
 #include <ghoti.io/chron/duration.h>
+#include <ghoti.io/chron/format.h>
 #include <ghoti.io/chron/instant.h>
 #include <ghoti.io/chron/macros.h>
 #include <ghoti.io/chron/offset.h>
+#include <ghoti.io/chron/clock.h>
+#include <ghoti.io/chron/interop.h>
 #include <ghoti.io/chron/parse.h>
 #include <ghoti.io/chron/zone.h>
 #include <ghoti.io/chron/zoned.h>

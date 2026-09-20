@@ -179,6 +179,14 @@ CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfa
 # link can do even for hidden symbols.
 LIB_CFLAGS := $(CFLAGS) -fvisibility=hidden -DGCHRON_BUILD $(EXTRA_CFLAGS)
 LDFLAGS := -L /usr/lib -lstdc++ -lm $(EXTRA_LDFLAGS)
+
+# Repeated *after* the static archive on every link that uses one. Archive
+# order matters where shared-object order does not: -lm in LDFLAGS sits before
+# the archive, so an object pulled out of the archive afterwards - interop.c's
+# floor() - has nothing left to resolve against. The shared library does not
+# have the problem, because its own link records libm as a dependency, which
+# is why this only ever shows up in a test, an example or an oracle driver.
+STATIC_LINK_LIBS := -lm
 ifdef PREFIX
 # So that a library, a test or an example finds its Ghoti.io dependencies in the
 # prefix at run time without LD_LIBRARY_PATH.
@@ -315,6 +323,7 @@ TEST_DEPFILES := $(foreach pair,$(TEST_PAIRS),$(OBJ_DIR)/tests/$(basename $(notd
 DEPFILES := $(LIBOBJECTS:.o=.d) $(TEST_HELPER_OBJ:.o=.d) $(TEST_DEPFILES)
 -include $(DEPFILES)
 
+
 ####################################################################
 # Object Files
 ####################################################################
@@ -433,7 +442,7 @@ $(APP_DIR)/$2$(EXE_EXTENSION): $$(TEST_OBJ_$1) $(TEST_HELPER_OBJ) \
 		$(APP_DIR)/$(STATIC_TARGET) | $(APP_DIR)/$(TARGET)
 	@printf "\n### Linking Test: $2 ###\n"
 	@mkdir -p $$(@D)
-	$(CXX) $(CXXFLAGS) -o $$@ $$(TEST_OBJ_$1) $(TEST_HELPER_OBJ) $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS)
+	$(CXX) $(CXXFLAGS) -o $$@ $$(TEST_OBJ_$1) $(TEST_HELPER_OBJ) $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS) $(STATIC_LINK_LIBS)
 endef
 
 $(foreach pair,$(TEST_PAIRS),\
@@ -448,7 +457,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 		| $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Example: $* ###\n"
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS) $(STATIC_LINK_LIBS)
 
 ####################################################################
 # Commands
@@ -457,7 +466,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar
-.PHONY: tools check-oracle-zoneinfo
+.PHONY: tools check-oracle-zoneinfo check-oracle-ldml
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -673,10 +682,35 @@ $(APP_DIR)/tools/%$(EXE_EXTENSION): tools/oracle/%.c $(APP_DIR)/$(STATIC_TARGET)
 		| $(APP_DIR)/$(TARGET)
 	@printf "\n### Building oracle driver: $* ###\n"
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS) $(STATIC_LINK_LIBS)
 
 tools: ## Build the oracle drivers the differentials run against
-tools: $(ORACLE_TOOLS)
+tools: $(ORACLE_TOOLS) $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
+
+# ICU, for the LDML differential. Found through pkg-config and **never linked
+# by the library** - design.md section 1: what ICU sells beyond a copy of the
+# tzdb is CLDR, which is tier 3's problem and not a reason to link three
+# hundred locales into everything. Here it is the oracle and nothing else.
+ICU_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags icu-i18n icu-uc 2>/dev/null)
+ICU_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs icu-i18n icu-uc 2>/dev/null)
+
+$(APP_DIR)/tools/icu_format$(EXE_EXTENSION): tools/oracle/icu_format.cpp
+	@if [ -z "$(strip $(ICU_LIBS))" ]; then \
+		printf "\033[0;31micu_format: ICU was not found by pkg-config.\033[0m\n" >&2; \
+		printf "The LDML differential has no oracle without it, and design.md\n" >&2; \
+		printf "section 8.3 makes ICU the *definition* of what a pattern means.\n" >&2; \
+		exit 1; \
+	fi
+	@printf "\n### Building oracle driver: icu_format ###\n"
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(ICU_CFLAGS) -o $@ $< $(ICU_LIBS)
+
+check-oracle-ldml: ## Check the LDML formatter against ICU (needs libicu-dev)
+check-oracle-ldml: $(APP_DIR)/tools/gchron_format$(EXE_EXTENSION) \
+		$(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/oracle/ldml_diff.py \
+		--chron $(APP_DIR)/tools/gchron_format$(EXE_EXTENSION) \
+		--icu $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
 
 check-oracle-zoneinfo: ## Check every zone against Python's zoneinfo (needs python3)
 check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
@@ -771,16 +805,33 @@ test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 test-valgrind: ## Run all tests under valgrind (Linux only)
 test-valgrind: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 ifeq ($(OS_NAME), Linux)
-	@for test_exe in $(TEST_EXECUTABLES); do \
+	@#
+	@# `failed` is what makes this a gate. A bare for-loop reports the exit
+	@# status of its *last* iteration, so the first spelling of this target
+	@# passed whenever the alphabetically-last suite passed, no matter what
+	@# the others did - a gate that cannot fail, which is the one thing
+	@# section 12.3 says a gate must be able to do. `--error-exitcode=1` was
+	@# set the whole time and had nothing to report to.
+	@#
+	@failed=""; \
+	for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf "\033[0;30;43m\n"; \
 		printf "############################\n"; \
 		printf "### Running %s tests under Valgrind ###\n" "$$test_name"; \
 		printf "############################"; \
 		printf "\033[0m\n\n"; \
-		GCHRON_CIVIL_SWEEP_YEARS="$(VALGRIND_SWEEP_YEARS)" \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" valgrind $(VALGRIND_FLAGS) $$test_exe --gtest_brief=1; \
-	done
+		if ! GCHRON_CIVIL_SWEEP_YEARS="$(VALGRIND_SWEEP_YEARS)" \
+			LD_LIBRARY_PATH="$(TEST_LD_PATH)" valgrind $(VALGRIND_FLAGS) \
+			$$test_exe --gtest_brief=1; then \
+			failed="$$failed $$test_name"; \
+		fi; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		printf "\033[0;31m\nValgrind failed:$$failed\033[0m\n"; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32m\nValgrind clean across $(words $(TEST_EXECUTABLES)) suites.\033[0m\n"
 else
 	@printf "\033[0;31m\nValgrind is only available on Linux\n\033[0m\n"
 	@exit 1
@@ -850,7 +901,7 @@ endif
 $(ASAN_OBJ_DIR)/%.o: src/%.c
 	@printf "\n### Compiling (ASan+UBSan): $< ###\n"
 	@mkdir -p $(@D)
-	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -o $@
+	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
 	@printf "\n### Linking ASan+UBSan Chron Library ###\n"
@@ -860,17 +911,17 @@ $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
 $(ASAN_OBJ_DIR)/tests/%.o: tests/%.cpp
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -o $@
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(ASAN_OBJ_DIR)/tests/%.o: tests/unit/%.cpp
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -o $@
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(ASAN_OBJ_DIR)/tests/%.o: tests/conformance/%.cpp
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -o $@
+	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 define asan-test-executable-rule
 ASAN_TEST_OBJ_$1 := $(ASAN_OBJ_DIR)/tests/$(basename $(notdir $1)).o
@@ -878,7 +929,7 @@ ASAN_TEST_OBJ_$1 := $(ASAN_OBJ_DIR)/tests/$(basename $(notdir $1)).o
 $(ASAN_APP_DIR)/$2$(EXE_EXTENSION): $$(ASAN_TEST_OBJ_$1) $(ASAN_APP_DIR)/$(ASAN_TARGET)
 	@printf "\n### Linking ASan Test: $2 ###\n"
 	@mkdir -p $$(@D)
-	$(CXX) $(ASAN_CXXFLAGS) -o $$@ $$(ASAN_TEST_OBJ_$1) $(ASAN_LDFLAGS) $(ASAN_CHRONLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS)
+	$(CXX) $(ASAN_CXXFLAGS) -o $$@ $$(ASAN_TEST_OBJ_$1) $(ASAN_LDFLAGS) $(ASAN_CHRONLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS) $(STATIC_LINK_LIBS)
 endef
 
 $(foreach pair,$(TEST_PAIRS),\
@@ -924,12 +975,28 @@ FUZZ_APP_DIR := $(FUZZ_DIR)/apps
 FUZZ_OBJECTS := $(patsubst src/%.c,$(FUZZ_OBJ_DIR)/%.o,$(SOURCES))
 FUZZ_CORPUS := tests/fuzz/corpus
 
+#
+# The sanitiser and fuzzer builds need this every bit as much as the ordinary
+# one does. They were written without it, and because they build into their
+# own directories, nothing in the ordinary build's dependency graph ever
+# reached them: a header change rebuilt the release objects and left the ASan
+# objects untouched. `GCHRON_Limits` grew a field in phase 3, and ASan then
+# reported a stack-buffer-overflow in `gchron_limits_default` - a real
+# overflow, of a phase-1 struct written by a phase-3 function, in a build that
+# should have been rebuilt entirely. The gate that exists to find memory
+# errors was the one build that could manufacture them.
+#
+ASAN_DEPFILES := $(ASAN_LIBOBJECTS:.o=.d) \
+    $(foreach pair,$(TEST_PAIRS),$(ASAN_OBJ_DIR)/tests/$(basename $(notdir $(word 1,$(subst |, ,$(pair))))).d)
+-include $(ASAN_DEPFILES)
+-include $(FUZZ_OBJECTS:.o=.d)
+
 # A smoke-test length by default; for a real campaign: make fuzz FUZZ_TIME=3600
 FUZZ_TIME ?= 60
 
 $(FUZZ_OBJ_DIR)/%.o: src/%.c
 	@mkdir -p $(@D)
-	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -o $@
+	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 # $1 = harness basename (fuzz_obj), $2 = target suffix (obj)
 define fuzz-rule
@@ -944,7 +1011,7 @@ $$(FUZZ_APP_DIR)/$1: tests/fuzz/$1.cpp $$(FUZZ_OBJECTS)
 	@mkdir -p $$(@D) $$(FUZZ_CORPUS)/$2
 	@printf "\n### Building fuzz harness: $1 ###\n"
 	$$(FUZZ_CXX) $$(FUZZ_BIN_FLAGS) -std=c++20 -w $$(INCLUDE) \
-		-o $$@ $$< $$(FUZZ_OBJECTS) $(CUTIL_LIBS)
+		-o $$@ $$< $$(FUZZ_OBJECTS) $(CUTIL_LIBS) $(STATIC_LINK_LIBS)
 
 fuzz-run-$2: ## Run the $2 fuzzer for $$(FUZZ_TIME) seconds
 fuzz-run-$2: $$(FUZZ_APP_DIR)/$1
@@ -959,10 +1026,11 @@ $(eval $(call fuzz-rule,fuzz_arith,arith))
 $(eval $(call fuzz-rule,fuzz_tzif,tzif))
 $(eval $(call fuzz-rule,fuzz_posix_tz,posix_tz))
 $(eval $(call fuzz-rule,fuzz_duration,duration))
+$(eval $(call fuzz-rule,fuzz_format,format))
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: fuzz-run-parse fuzz-run-arith fuzz-run-tzif fuzz-run-posix_tz \
-	fuzz-run-duration
+	fuzz-run-duration fuzz-run-format
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 	-@rm -rf $(FUZZ_DIR)

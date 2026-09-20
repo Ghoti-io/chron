@@ -158,12 +158,38 @@ def seed_duration():
     return out
 
 
+def seed_format():
+    out = reset("format")
+    # One options byte, then the pattern.
+    patterns = [
+        b"uuuu-MM-dd'T'HH:mm:ssXXX", b"yyyy", b"YYYY-'W'ww-e", b"EEEE",
+        b"MMMM", b"GGGG", b"SSSSSSSSS", b"XXXXX", b"xxxxx", b"ZZZZZ",
+        b"OOOO", b"VV", b"zzz", b"'unterminated", b"''", b"b",
+        b"%Y-%m-%dT%H:%M:%S%z", b"%c", b"%U", b"%", b"%E", b"%Oy",
+        b"HHHHHHHHHHHHHHHHHHHH",
+        # Two the fuzzer found, kept as named seeds rather than as the opaque
+        # hashes libFuzzer names its artifacts. The first is a pattern with an
+        # embedded NUL, whose output therefore contains one: the harness had
+        # been measuring with strlen, which stops early, and the library was
+        # right. The second is a signed year padded past nine digits, where
+        # the declared buffer bound omitted the sign and was one byte short.
+        b"PX\x00OOOOXXX",
+        b"uuuuuuuuuuuuuuu",
+        b"YYYYYYYYYYYY",
+    ]
+    for options in (0x00, 0x04, 0x07):
+        for pattern in patterns:
+            write(out, bytes([options]) + pattern)
+    return out
+
+
 def main():
     parse = seed_parse()
     arith = seed_arith()
     tzif, posix = seed_zones()
     duration = seed_duration()
-    for path in (parse, arith, tzif, posix, duration):
+    fmt = seed_format()
+    for path in (parse, arith, tzif, posix, duration, fmt):
         count = len([p for p in path.iterdir() if p.is_file()
                      and p.name != ".gitignore"])
         print("%-34s %5d seeds" % (path.relative_to(ROOT), count))
