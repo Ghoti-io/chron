@@ -1,9 +1,10 @@
 # The design of ghoti.io-chron
 
-**Status:** design. Nothing below is written. This page says what will exist
-and why, so that the code can be judged against it rather than the other way
-round. A change of mind lands here first, in the same commit as the code that
-needs it (`CONVENTIONS.md` §9).
+**Status:** phase 0 has shipped; §16's later phases are still design. This
+page says what exists and why, so that the code can be judged against it
+rather than the other way round. A change of mind lands here first, in the
+same commit as the code that needs it (`CONVENTIONS.md` §9), and §16 marks
+what is built.
 
 `chron` is the suite's time library: instants, civil dates and times, time
 zones, calendars, durations, and the parsing and formatting of all of them. It
@@ -322,8 +323,42 @@ rather than hidden by symmetrising.
 ISO 8601 durations (`P1Y2M3DT4H5M6.5S`, `P3W`, `PT0S`), both directions, with
 the fraction permitted on the smallest present unit only, as the standard
 says. `-P1D` and `P-1D` are both accepted on input (the second is ISO
-8601-2), and only `-P1D` is produced. RFC 3339 Appendix A's duration
-grammar is the same one. JSON Schema's `format: duration` names it, and the
+8601-2), and only `-P1D` is produced.
+
+**RFC 3339 Appendix A's duration grammar is a different, stricter grammar,
+and has its own function.** An earlier draft of this page said the two were
+the same; the JSON-Schema-Test-Suite's vectors say otherwise, and they are
+right. Appendix A permits no sign and no fraction, and its productions
+*nest*:
+
+```
+dur-second = 1*DIGIT "S"
+dur-minute = 1*DIGIT "M" [dur-second]
+dur-hour   = 1*DIGIT "H" [dur-minute]
+dur-time   = "T" (dur-hour / dur-minute / dur-second)
+dur-day    = 1*DIGIT "D"
+dur-week   = 1*DIGIT "W"
+dur-month  = 1*DIGIT "M" [dur-day]
+dur-year   = 1*DIGIT "Y" [dur-month]
+dur-date   = (dur-day / dur-month / dur-year) [dur-time]
+duration   = "P" (dur-date / dur-time / dur-week)
+```
+
+so `P1Y2M` and `P1M2D` are durations and `P1Y2D` is not, and `PT1M2S` is and
+`PT1H2S` is not. A parser written as "read numbers and unit letters until they
+run out" accepts all four, which is how a JSON Schema `format` check comes to
+pass text no other implementation accepts. `gchron_parse_rfc3339_duration` is
+Appendix A; `gchron_parse_iso8601_duration` will be the permissive one.
+
+The two grammars also disagree about what a number too large to hold means.
+Appendix A's `P999999999999999999999999D` *is* a duration - the suite says
+it is valid - and no `int64_t` holds it, so the parser returns
+`GCHRON_ERR_RANGE`, and a caller performing a `format` check treats that as a
+pass while a caller wanting the value does not. That is exactly the split §7.2
+gives the code, and it is why `format` and value conversion can honestly
+disagree about one string.
+
+JSON Schema's `format: duration` names Appendix A, and the
 JSON-Schema-Test-Suite's optional duration vectors are the first oracle (§12).
 
 ---
@@ -647,8 +682,19 @@ made the dispute unresolvable.
 
 Every function that computes returns `GCHRON_Result`. Overflow anywhere in
 the computation - and adding a `GCHRON_Duration` of `INT64_MAX` seconds is a
-legal call - is `GCHRON_ERR_RANGE`, detected with `cutil`'s `safemath.h`
-before it happens, never observed after. There is no signed overflow in this
+legal call - is `GCHRON_ERR_RANGE`, detected before it happens, never observed
+after.
+
+`cutil`'s `safemath.h` is the suite's home for this and is what a `size_t`
+computation here uses. It covers `size_t`, `uint32_t` and `uint64_t` only,
+and every quantity in this library is a **signed** 64-bit count - where
+overflow is undefined behaviour rather than a wrap a portable check could
+observe after the fact. `src/core/core_internal.h` therefore carries
+`gchron_add_i64`, `_sub_i64`, `_mul_i64` and `_neg_i64`, the same shape and
+the same contract as `cutil`'s, plus the floor division and floor modulo that
+every day and month calculation goes through. They are `static inline` and
+exported by nothing; adding the signed forms to `cutil` instead would be a
+reasonable convergence and has not been made. There is no signed overflow in this
 library, and `make test-asan`'s UBSan half is the gate that proves it,
 driven by `tests/fuzz/fuzz_arith.cpp`, which performs random sequences of
 operations on random values (M24).
@@ -701,7 +747,7 @@ browsers.
 
 | Grammar | Specification | Produces | Notes |
 | --- | --- | --- | --- |
-| RFC 3339 | RFC 3339 §5.6, with §5.7 restrictions | `OffsetDateTime`, `Date`, `Time` | the strict default; `T`/`t`, `Z`/`z`, and the space the §5.6 note permits are options, each off by default; `-00:00` sets `offset_unknown` |
+| RFC 3339 | RFC 3339 §5.6, with §5.7 restrictions | `OffsetDateTime`, `Date`, `Time` | the strict default. **`t` and `z` need no option**: RFC 5234 §2.3 makes ABNF string literals case-insensitive, so `1963-06-19t08:30:06z` is as conformant as the uppercase spelling, and the JSON Schema `format` vectors require it to be accepted. An earlier draft of this page had them as options; that was a misreading of the ABNF. The **space** the §5.6 *note* permits is a genuine extension and is an option, off by default. `-00:00` sets `offset_unknown` |
 | RFC 9557 (IXDTF) | RFC 9557 | `ZonedDateTime` (with a zone database) or `OffsetDateTime` | RFC 3339 plus `[Europe/Paris]` and `[u-ca=julian]` suffixes; a `!` critical flag on an unknown suffix is `ERR_UNSUPPORTED`; offset-versus-zone disagreement is a `GCHRON_ZoneConflict` policy, zero = `REJECT` (M13) |
 | ISO 8601 profile | ISO 8601-1:2019 | civil types, offset, week and ordinal dates, durations, intervals | extended and basic forms, expanded years, `24:00:00` as end-of-day (an option, zero = reject), comma as fraction separator |
 | YAML 1.1 timestamp | YAML 1.1 type repository | `OffsetDateTime` | the grammar `text` implements today in `yaml_resolve.c`: space separators, `t`, a one-digit offset hour, spaces before the offset |
@@ -950,7 +996,8 @@ include/ghoti.io/chron/
   duration.h    GCHRON_Duration, balance, until, ISO 8601 duration text                   [tier 0/1]
   instant.h     GCHRON_Instant, Interval, exact arithmetic, rounding                       [tier 1]
   offset.h      GCHRON_OffsetDateTime                                                     [tier 1]
-  parse.h       every grammar in §8.1, GCHRON_ParseInfo, the policies                      [tier 1 (+2 for RFC 9557 zones)]
+  parse.h       every grammar in §8.1 in *both* directions, GCHRON_ParseInfo,
+                GCHRON_WriteOptions, the policies                                          [tier 1 (+2 for RFC 9557 zones)]
   format.h      GCHRON_Format, the compiler, named formats, GCHRON_Names                   [tier 3]
   zone.h        GCHRON_ZoneDb, GCHRON_Zone, transitions, GCHRON_Resolve                    [tier 2]
   zoned.h       GCHRON_ZonedDateTime                                                       [tier 2]
@@ -962,7 +1009,8 @@ include/ghoti.io/chron/
 src/core/       result strings, limits, diagnostics, checked arithmetic helpers
 src/civil/      civil.c gregory.c julian.c hybrid.c tabular.c week.c
 src/instant/    instant.c duration.c offset.c interval.c round.c
-src/parse/      rfc3339.c iso8601.c rfc9557.c yaml11.c toml.c httpdate.c rfc5322.c unix.c
+src/parse/      options.c rfc3339.c duration_text.c toml.c write_rfc3339.c
+                iso8601.c rfc9557.c yaml11.c httpdate.c rfc5322.c unix.c
 src/format/     compile.c ldml.c strftime.c emit.c names_english.c
 src/zone/       tzif.c posixtz.c zonedb.c zone.c zoned.c local.c  local_win.c (TODO(windows))
 src/zone/embedded/  generated by tools/tzdata/embed.py; never edited
@@ -981,9 +1029,22 @@ tests/data/vectors/ zones/ parse/ format/ calendar/
 tests/fuzz/     §12.2
 ```
 
+The writers for the tier-1 grammars live in `parse.h` beside the parsers they
+invert, so that `parse(write(x))` is one header's promise and so that a
+consumer whose only use of this library is `text`'s can produce an RFC 3339
+timestamp without linking the tier-3 pattern compiler. `format.h`'s named
+formats (§8.4) are a second route to the same text for a caller who is
+already compiling patterns.
+
 `make check-layering` greps for an include of a higher tier's header from a
 lower tier's source and fails naming the file, as `regex` does for its
-engine/syntax boundary.
+engine/syntax boundary. It is written as a make macro applied once per tier
+rather than as a loop over a packed string: the forbidden pattern is a regular
+alternation and so contains `|` itself, which a loop splitting on `|` cuts in
+half - leaving a check that passes on everything, a violation included. It was
+in exactly that state when first written, and §12.3's rule caught it: the gate
+is verified by adding an include of `instant.h` to `src/civil/week.c` and
+watching the build fail.
 
 ### 13.1 Allocation
 
@@ -1008,6 +1069,13 @@ the caller on a failing call, and the `CountingAllocator` pattern from
 
 Zero means no limit; `gchron_limits_default()` fills them; every parser and
 loader takes one; `ERR_LIMIT` names the field in the message.
+
+`GCHRON_Limits` carries only the fields something enforces **today** -
+`max_parse_length` after phase 0 - and each of the rest arrives in the phase
+that enforces it. A limit nothing reads is a promise nothing keeps, and this
+suite has the scar: `regex` declared table flags it never consulted, and the
+mechanism they implied was designed twice before anyone noticed the field was
+dead.
 
 ### 13.3 Threads
 
@@ -1076,7 +1144,7 @@ for one engineer who knows the suite.
 
 | Phase | Work | Size | Unlocks |
 | --- | --- | --- | --- |
-| 0 | Scaffold from `model` (`CONVENTIONS.md` §12); `core.h`; `civil.h` with Gregorian; `instant.h`; `offset.h`; RFC 3339 and TOML grammars; RFC 3339 formatter; the exhaustive civil tests; the JSON Schema format vectors | M | **M1: `text` can replace its timestamp side-car and pass the JSON Schema `format` vectors** |
+| 0 **(done)** | Scaffold from `model` (`CONVENTIONS.md` §12); `core.h`; `civil.h` with Gregorian; `instant.h`; `offset.h`; `duration.h`'s type and its Appendix A text; RFC 3339 and TOML grammars, both directions; the exhaustive civil tests; the JSON Schema format vectors | M | **M1: `text` can replace its timestamp side-car and pass the JSON Schema `format` vectors** - reached; all 207 vectors pass |
 | 1 | `zone.h`: TZif, the POSIX TZ footer, `ZoneDb`, `Resolve`, transitions, the local zone (Linux/macOS); `zoned.h`; the `zdump`, `zoneinfo` and `tzset` differentials; RFC 9557 | L | **M2: `ctang` can render a date in a zone** |
 | 2 | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** |
 | 3 | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** |
@@ -1085,6 +1153,18 @@ for one engineer who knows the suite.
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz` and
 `check-symbols` clean from an empty build directory, serially and under
 `-j`, per `CONVENTIONS.md` §12 item 10.
+
+**What phase 0 built, and what it deliberately did not.** `duration.h` carries
+the type, its sign invariant, `GCHRON_Overflow`, and the RFC 3339 Appendix A
+grammar in both directions - because M1's wording is "pass the JSON Schema
+`format` vectors" and one of the four vector files is `duration.json`. The
+arithmetic the plan assigns to phase 2 - `balance`, `until` with a largest
+unit, applying a calendar unit, rounding - is absent rather than stubbed, and
+so is the permissive ISO 8601 duration grammar. `GCHRON_LEAP_TABLE` is
+declared and returns `GCHRON_ERR_UNSUPPORTED` until phase 4 builds the table,
+rather than quietly behaving as `GCHRON_LEAP_MINUTE`: a caller who asked for
+the strict reading and silently got the loose one has a check that passes for
+the wrong reason.
 
 ---
 

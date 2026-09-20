@@ -1,0 +1,8 @@
+# Crash and timeout reproducers libFuzzer drops in the working directory.
+# The seed corpus itself is tracked: it is what makes a fresh clone's `make
+# fuzz` start from the vectors rather than from nothing.
+crash-*
+leak-*
+timeout-*
+oom-*
+slow-unit-*

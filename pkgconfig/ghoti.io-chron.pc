@@ -1,0 +1,7 @@
+Name: Ghoti.io Chron(BRANCH)
+Description: Instants, civil dates and times, calendars, durations, time zones, and their text formats
+Version: (VERSION)
+URL: https://github.com/Ghoti-io/chron
+Libs: -L(PC_LIB_DIR) -l(SUITE)-(PROJECT)(BRANCH)
+CFlags: -I(PC_INCLUDE_DIR)
+Requires: (REQUIRES)

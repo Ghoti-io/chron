@@ -1,0 +1,161 @@
+/**
+ * @file
+ *
+ * Maps every public name of this library into its version namespace.
+ *
+ * One file rather than a block beside each declaration: a type rename has to
+ * be in effect before any struct tag that uses the name, and an internal
+ * header may define such a tag without including the public header that
+ * declares the typedef.
+ *
+ * `make check-symbols` fails if an exported symbol is missing from this list.
+ *
+ * See CONVENTIONS.md section 4.
+ *
+ * Copyright 2026 by Corey Pennycuff
+ */
+
+#ifndef GHOTI_IO_GCHRON_NAMESPACE_H
+#define GHOTI_IO_GCHRON_NAMESPACE_H
+
+#include <ghoti.io/chron/libver.h>
+
+/// @cond HIDDEN_SYMBOLS
+
+// Public types. Renamed as well as the functions, so that two versions whose
+// structs differ in layout cannot be confused for one another - which is the
+// whole point of the scheme, and which renaming only the functions leaves
+// undone. GCU_* names are deliberately absent: they are cutil's, and cutil
+// has already renamed them.
+#define GCHRON_Allocator GHOTIIO_CHRON(GCHRON_Allocator)
+#define GCHRON_Date GHOTIIO_CHRON(GCHRON_Date)
+#define GCHRON_DateTime GHOTIIO_CHRON(GCHRON_DateTime)
+#define GCHRON_Diag GHOTIIO_CHRON(GCHRON_Diag)
+#define GCHRON_Duration GHOTIIO_CHRON(GCHRON_Duration)
+#define GCHRON_Error GHOTIIO_CHRON(GCHRON_Error)
+#define GCHRON_Fraction GHOTIIO_CHRON(GCHRON_Fraction)
+#define GCHRON_Instant GHOTIIO_CHRON(GCHRON_Instant)
+#define GCHRON_Interval GHOTIIO_CHRON(GCHRON_Interval)
+#define GCHRON_IsoWeekDate GHOTIIO_CHRON(GCHRON_IsoWeekDate)
+#define GCHRON_Leap GHOTIIO_CHRON(GCHRON_Leap)
+#define GCHRON_Limits GHOTIIO_CHRON(GCHRON_Limits)
+#define GCHRON_MonthDay GHOTIIO_CHRON(GCHRON_MonthDay)
+#define GCHRON_OffsetDateTime GHOTIIO_CHRON(GCHRON_OffsetDateTime)
+#define GCHRON_OffsetTime GHOTIIO_CHRON(GCHRON_OffsetTime)
+#define GCHRON_Overflow GHOTIIO_CHRON(GCHRON_Overflow)
+#define GCHRON_ParseInfo GHOTIIO_CHRON(GCHRON_ParseInfo)
+#define GCHRON_ParseOptions GHOTIIO_CHRON(GCHRON_ParseOptions)
+#define GCHRON_Result GHOTIIO_CHRON(GCHRON_Result)
+#define GCHRON_Time GHOTIIO_CHRON(GCHRON_Time)
+#define GCHRON_TomlKind GHOTIIO_CHRON(GCHRON_TomlKind)
+#define GCHRON_TomlValue GHOTIIO_CHRON(GCHRON_TomlValue)
+#define GCHRON_Unit GHOTIIO_CHRON(GCHRON_Unit)
+#define GCHRON_WriteOptions GHOTIIO_CHRON(GCHRON_WriteOptions)
+#define GCHRON_YearMonth GHOTIIO_CHRON(GCHRON_YearMonth)
+
+// Public functions.
+#define gchron_allocator_default GHOTIIO_CHRON(gchron_allocator_default)
+#define gchron_date_add_days GHOTIIO_CHRON(gchron_date_add_days)
+#define gchron_date_compare GHOTIIO_CHRON(gchron_date_compare)
+#define gchron_date_create GHOTIIO_CHRON(gchron_date_create)
+#define gchron_date_day_of_week GHOTIIO_CHRON(gchron_date_day_of_week)
+#define gchron_date_day_of_year GHOTIIO_CHRON(gchron_date_day_of_year)
+#define gchron_date_days_in_month GHOTIIO_CHRON(gchron_date_days_in_month)
+#define gchron_date_days_in_year GHOTIIO_CHRON(gchron_date_days_in_year)
+#define gchron_date_from_epoch_day GHOTIIO_CHRON(gchron_date_from_epoch_day)
+#define gchron_date_from_iso_week GHOTIIO_CHRON(gchron_date_from_iso_week)
+#define gchron_date_from_ordinal GHOTIIO_CHRON(gchron_date_from_ordinal)
+#define gchron_date_is_valid GHOTIIO_CHRON(gchron_date_is_valid)
+#define gchron_date_nth_weekday GHOTIIO_CHRON(gchron_date_nth_weekday)
+#define gchron_date_to_epoch_day GHOTIIO_CHRON(gchron_date_to_epoch_day)
+#define gchron_date_to_iso_week GHOTIIO_CHRON(gchron_date_to_iso_week)
+#define gchron_datetime_compare GHOTIIO_CHRON(gchron_datetime_compare)
+#define gchron_datetime_dump GHOTIIO_CHRON(gchron_datetime_dump)
+#define gchron_datetime_is_valid GHOTIIO_CHRON(gchron_datetime_is_valid)
+#define gchron_diag_string GHOTIIO_CHRON(gchron_diag_string)
+#define gchron_duration_dump GHOTIIO_CHRON(gchron_duration_dump)
+#define gchron_duration_from_exact_seconds GHOTIIO_CHRON(gchron_duration_from_exact_seconds)
+#define gchron_duration_has_calendar_units GHOTIIO_CHRON(gchron_duration_has_calendar_units)
+#define gchron_duration_has_exact_units GHOTIIO_CHRON(gchron_duration_has_exact_units)
+#define gchron_duration_identical GHOTIIO_CHRON(gchron_duration_identical)
+#define gchron_duration_is_valid GHOTIIO_CHRON(gchron_duration_is_valid)
+#define gchron_duration_negate GHOTIIO_CHRON(gchron_duration_negate)
+#define gchron_duration_sign GHOTIIO_CHRON(gchron_duration_sign)
+#define gchron_duration_to_exact_seconds GHOTIIO_CHRON(gchron_duration_to_exact_seconds)
+#define gchron_epoch_day_to_jdn GHOTIIO_CHRON(gchron_epoch_day_to_jdn)
+#define gchron_epoch_day_to_rd GHOTIIO_CHRON(gchron_epoch_day_to_rd)
+#define gchron_error_clear GHOTIIO_CHRON(gchron_error_clear)
+#define gchron_instant_add GHOTIIO_CHRON(gchron_instant_add)
+#define gchron_instant_as_double GHOTIIO_CHRON(gchron_instant_as_double)
+#define gchron_instant_compare GHOTIIO_CHRON(gchron_instant_compare)
+#define gchron_instant_create GHOTIIO_CHRON(gchron_instant_create)
+#define gchron_instant_dump GHOTIIO_CHRON(gchron_instant_dump)
+#define gchron_instant_from_unix_micros GHOTIIO_CHRON(gchron_instant_from_unix_micros)
+#define gchron_instant_from_unix_millis GHOTIIO_CHRON(gchron_instant_from_unix_millis)
+#define gchron_instant_from_unix_nanos GHOTIIO_CHRON(gchron_instant_from_unix_nanos)
+#define gchron_instant_from_unix_seconds GHOTIIO_CHRON(gchron_instant_from_unix_seconds)
+#define gchron_instant_from_utc GHOTIIO_CHRON(gchron_instant_from_utc)
+#define gchron_instant_is_valid GHOTIIO_CHRON(gchron_instant_is_valid)
+#define gchron_instant_normalize GHOTIIO_CHRON(gchron_instant_normalize)
+#define gchron_instant_subtract GHOTIIO_CHRON(gchron_instant_subtract)
+#define gchron_instant_to_epoch_day GHOTIIO_CHRON(gchron_instant_to_epoch_day)
+#define gchron_instant_to_unix_micros GHOTIIO_CHRON(gchron_instant_to_unix_micros)
+#define gchron_instant_to_unix_millis GHOTIIO_CHRON(gchron_instant_to_unix_millis)
+#define gchron_instant_to_unix_nanos GHOTIIO_CHRON(gchron_instant_to_unix_nanos)
+#define gchron_instant_to_unix_seconds GHOTIIO_CHRON(gchron_instant_to_unix_seconds)
+#define gchron_instant_to_utc GHOTIIO_CHRON(gchron_instant_to_utc)
+#define gchron_instant_until GHOTIIO_CHRON(gchron_instant_until)
+#define gchron_interval_contains GHOTIIO_CHRON(gchron_interval_contains)
+#define gchron_interval_create GHOTIIO_CHRON(gchron_interval_create)
+#define gchron_interval_duration GHOTIIO_CHRON(gchron_interval_duration)
+#define gchron_interval_overlaps GHOTIIO_CHRON(gchron_interval_overlaps)
+#define gchron_iso_weeks_in_year GHOTIIO_CHRON(gchron_iso_weeks_in_year)
+#define gchron_jdn_to_epoch_day GHOTIIO_CHRON(gchron_jdn_to_epoch_day)
+#define gchron_limits_default GHOTIIO_CHRON(gchron_limits_default)
+#define gchron_month_day_compare GHOTIIO_CHRON(gchron_month_day_compare)
+#define gchron_month_day_create GHOTIIO_CHRON(gchron_month_day_create)
+#define gchron_month_day_in_year GHOTIIO_CHRON(gchron_month_day_in_year)
+#define gchron_offset_compare GHOTIIO_CHRON(gchron_offset_compare)
+#define gchron_offset_create GHOTIIO_CHRON(gchron_offset_create)
+#define gchron_offset_dump GHOTIIO_CHRON(gchron_offset_dump)
+#define gchron_offset_from_instant GHOTIIO_CHRON(gchron_offset_from_instant)
+#define gchron_offset_identical GHOTIIO_CHRON(gchron_offset_identical)
+#define gchron_offset_is_valid GHOTIIO_CHRON(gchron_offset_is_valid)
+#define gchron_offset_time_identical GHOTIIO_CHRON(gchron_offset_time_identical)
+#define gchron_offset_time_is_valid GHOTIIO_CHRON(gchron_offset_time_is_valid)
+#define gchron_offset_to_instant GHOTIIO_CHRON(gchron_offset_to_instant)
+#define gchron_offset_with_offset GHOTIIO_CHRON(gchron_offset_with_offset)
+#define gchron_parse_info_clear GHOTIIO_CHRON(gchron_parse_info_clear)
+#define gchron_parse_options_default GHOTIIO_CHRON(gchron_parse_options_default)
+#define gchron_parse_options_json_schema GHOTIIO_CHRON(gchron_parse_options_json_schema)
+#define gchron_parse_options_toml GHOTIIO_CHRON(gchron_parse_options_toml)
+#define gchron_parse_rfc3339_date_time GHOTIIO_CHRON(gchron_parse_rfc3339_date_time)
+#define gchron_parse_rfc3339_duration GHOTIIO_CHRON(gchron_parse_rfc3339_duration)
+#define gchron_parse_rfc3339_full_date GHOTIIO_CHRON(gchron_parse_rfc3339_full_date)
+#define gchron_parse_rfc3339_full_time GHOTIIO_CHRON(gchron_parse_rfc3339_full_time)
+#define gchron_parse_toml GHOTIIO_CHRON(gchron_parse_toml)
+#define gchron_rd_to_epoch_day GHOTIIO_CHRON(gchron_rd_to_epoch_day)
+#define gchron_result_string GHOTIIO_CHRON(gchron_result_string)
+#define gchron_time_compare GHOTIIO_CHRON(gchron_time_compare)
+#define gchron_time_create GHOTIIO_CHRON(gchron_time_create)
+#define gchron_time_from_nanos_of_day GHOTIIO_CHRON(gchron_time_from_nanos_of_day)
+#define gchron_time_is_valid GHOTIIO_CHRON(gchron_time_is_valid)
+#define gchron_time_to_nanos_of_day GHOTIIO_CHRON(gchron_time_to_nanos_of_day)
+#define gchron_unit_is_exact GHOTIIO_CHRON(gchron_unit_is_exact)
+#define gchron_unit_string GHOTIIO_CHRON(gchron_unit_string)
+#define gchron_version_major GHOTIIO_CHRON(gchron_version_major)
+#define gchron_version_minor GHOTIIO_CHRON(gchron_version_minor)
+#define gchron_version_patch GHOTIIO_CHRON(gchron_version_patch)
+#define gchron_version_string GHOTIIO_CHRON(gchron_version_string)
+#define gchron_write_options_default GHOTIIO_CHRON(gchron_write_options_default)
+#define gchron_write_rfc3339_date_time GHOTIIO_CHRON(gchron_write_rfc3339_date_time)
+#define gchron_write_rfc3339_duration GHOTIIO_CHRON(gchron_write_rfc3339_duration)
+#define gchron_write_rfc3339_full_date GHOTIIO_CHRON(gchron_write_rfc3339_full_date)
+#define gchron_write_rfc3339_full_time GHOTIIO_CHRON(gchron_write_rfc3339_full_time)
+#define gchron_write_toml GHOTIIO_CHRON(gchron_write_toml)
+#define gchron_year_is_leap GHOTIIO_CHRON(gchron_year_is_leap)
+#define gchron_year_month_compare GHOTIIO_CHRON(gchron_year_month_compare)
+#define gchron_year_month_create GHOTIIO_CHRON(gchron_year_month_create)
+/// @endcond
+
+#endif // GHOTI_IO_GCHRON_NAMESPACE_H
