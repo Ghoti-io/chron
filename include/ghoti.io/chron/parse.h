@@ -41,6 +41,14 @@
 extern "C" {
 #endif
 
+/**
+ * The longest calendar identifier GCHRON_ParseInfo will carry.
+ *
+ * Unicode's longest registered one is `ethiopic-amete-alem`, at nineteen
+ * characters.
+ */
+#define GCHRON_CALENDAR_ID_MAX 31
+
 /*--------------------------------------------------------------------------*
  * Policies
  *--------------------------------------------------------------------------*/
@@ -115,6 +123,48 @@ typedef enum {
   GCHRON_LEAP_TABLE
 } GCHRON_Leap;
 
+/**
+ * @brief What to do when an RFC 9557 timestamp's offset and its zone
+ * disagree.
+ *
+ * `2026-03-08T01:30-05:00[America/New_York]` is consistent;
+ * `2026-03-08T01:30-08:00[America/New_York]` is not, and something has to
+ * give. RFC 9557 section 4.1 leaves the choice to the application, which is
+ * exactly what a policy is for (design.md, mistake M13).
+ *
+ * The function that takes this lives in zoned.h, because resolving a zone
+ * name needs a zone database and this header does not - but the policy is
+ * here, beside the other three, so that design.md section 3.7's rule can be
+ * checked in one place.
+ */
+typedef enum {
+  /**
+   * A disagreement is GCHRON_ERR_FORMAT.
+   *
+   * Zero, per design.md section 3.7. A timestamp whose two halves contradict
+   * each other is evidence of a bug somewhere upstream, and picking one half
+   * silently is how that bug reaches the next system along.
+   */
+  GCHRON_ZONECONFLICT_REJECT = 0,
+
+  /**
+   * Believe the offset, and keep the instant it names.
+   *
+   * What a caller wants when the timestamp came from a machine whose clock
+   * was right and whose zone table was stale.
+   */
+  GCHRON_ZONECONFLICT_PREFER_OFFSET,
+
+  /**
+   * Believe the zone: re-resolve the civil reading through it and let the
+   * offset go.
+   *
+   * What a caller wants when the timestamp came from a calendar entry that
+   * was written before a government changed the rules.
+   */
+  GCHRON_ZONECONFLICT_PREFER_ZONE
+} GCHRON_ZoneConflict;
+
 /*--------------------------------------------------------------------------*
  * Options
  *--------------------------------------------------------------------------*/
@@ -150,6 +200,9 @@ typedef struct GCHRON_ParseOptions {
    * must accept it.
    */
   bool allow_space_separator;
+
+  /** What to do when an RFC 9557 offset and zone annotation disagree. */
+  GCHRON_ZoneConflict zone_conflict;
 
   /**
    * Stop at the first byte that is not part of the grammar and report how far
@@ -227,6 +280,37 @@ typedef struct GCHRON_ParseInfo {
 
   /** The offset was written `-00:00`: RFC 3339 section 4.3's *unknown*. */
   bool offset_unknown;
+
+  /** An RFC 9557 `[Zone]` annotation was present. */
+  bool had_zone_annotation;
+
+  /**
+   * An RFC 9557 offset and zone annotation disagreed, and a policy other
+   * than GCHRON_ZONECONFLICT_REJECT resolved it.
+   *
+   * The evidence that the text contradicted itself, kept for the same reason
+   * GCHRON_ParseInfo::leap_second is: the value cannot hold it, and somebody
+   * downstream may want to know.
+   */
+  bool offset_disagreed_with_zone;
+
+  /**
+   * The `[u-ca=...]` calendar annotation, NUL-terminated, or empty when the
+   * text carried none.
+   *
+   * **Copied, not borrowed.** An earlier version of this field was a pointer
+   * into the caller's own input, which is the arrangement that costs nothing
+   * and dangles the first time somebody parses out of a temporary - the first
+   * test written against it did exactly that. Every other field of every
+   * value type in this library is a value for the same reason (design.md
+   * section 3.1), and thirty-two bytes on a caller's stack is a smaller price
+   * than a lifetime rule nobody can see.
+   *
+   * The longest calendar identifier Unicode registers is
+   * `ethiopic-amete-alem`, at nineteen characters; a `u-ca` value too long to
+   * fit here names no calendar that exists and is GCHRON_ERR_UNSUPPORTED.
+   */
+  char calendar[GCHRON_CALENDAR_ID_MAX + 1];
 } GCHRON_ParseInfo;
 
 /**

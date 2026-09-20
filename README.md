@@ -44,6 +44,31 @@ int main(void) {
 }
 ```
 
+And in a zone, where the conversion is a function that can fail:
+
+```c
+GCHRON_ZoneDb * db;
+const GCHRON_Zone * zone;
+GCHRON_ZonedDateTime zoned;
+
+gchron_zonedb_default(NULL, NULL, &db);
+gchron_zonedb_zone(db, "America/New_York", &zone);
+
+/* 02:30 on the morning the clocks go forward never happened. The zero
+   value of GCHRON_Resolve refuses rather than guessing; EARLIER, LATER
+   and COMPATIBLE are the three ways to ask for an answer anyway. */
+GCHRON_DateTime civil = { { 2026, 3, 8 }, { 2, 30, 0, 0 } };
+if (gchron_zoned_from_civil(civil, zone, GCHRON_RESOLVE_REJECT, &zoned)
+    == GCHRON_ERR_GAP) {
+  GCHRON_CivilOffsets options;
+  gchron_zone_offsets_for_civil(zone, civil, &options);
+  printf("that reading did not occur; the gap is %d seconds\n",
+      options.gap_seconds);
+}
+
+gchron_zonedb_destroy(db);
+```
+
 ## Building
 
 The only link dependency is [`cutil`](../cutil), found through pkg-config.
@@ -74,11 +99,12 @@ if a tier includes a higher tier's header.
 | 0 | `core.h`, `civil.h` | result codes, limits, diagnostics; dates, times, epoch days, ISO weeks, ordinal dates, the nth weekday of a month | nothing |
 | 0/1 | `duration.h` | `GCHRON_Duration` and its sign invariant; `GCHRON_Overflow` | nothing |
 | 1 | `instant.h`, `offset.h`, `parse.h` | instants, intervals, exact arithmetic, the Unix encodings; civil time with an offset; the RFC 3339 and TOML grammars in both directions | nothing |
-| 2 | `zone.h`, `zoned.h` | named zones, DST transitions, the local zone | TZif files |
+| 2 | `zone.h`, `zoned.h` | named zones, DST transitions, the gap and overlap policy, the local zone, RFC 9557 | TZif files |
 | 3 | `format.h` | LDML patterns, `strftime`, month and day names | a names provider |
 
-Tiers 2 and 3 are not built yet; `documentation/design.md` §16 says which
-phase each arrives in, and what is deliberately absent rather than stubbed.
+Tier 3 is not built yet; `documentation/design.md` §16 says which phase each
+remaining piece arrives in, and what is deliberately absent rather than
+stubbed.
 
 ### The types
 
@@ -136,6 +162,9 @@ where a person's intuition about a calendar is the thing under test.
 | *which* calendar that is | Python's `datetime.date`, for every year 1-9999: the epoch day of 1 January, its weekday, the length of the year, and all twelve month lengths. The sweep alone would pass with August thirty days long |
 | ISO week dates, ordinal days, Rata Die | Python's `date.isocalendar()` and `toordinal()`, every 997th day from 0001-01-01 - a stride coprime with 7, with the Gregorian cycle and with every month length |
 | RFC 3339 `date-time`, `date`, `time`, `duration` | the JSON-Schema-Test-Suite's optional `format` vectors. **All 207 string cases pass** |
+| every transition of twenty zones | `zdump`, the reference implementation of the tzdb itself: 8,540 rows, each checking the offset, the daylight-saving flag, the abbreviation **and** the civil reading derived from the instant |
+| the POSIX `TZ` footer grammar | glibc's own `tzset`, over 548,960 probes covering **every distinct footer rule in this machine's database** - harvested from the TZif files rather than typed, which is how the corpus came to contain a negative daylight-saving offset, a thirty-minute shift and a rule that wraps a year |
+| every zone, not just twenty | Python's `zoneinfo`, reading the same files through different code: 105,948 probes over all 486 zones, by `make check-oracle-zoneinfo` |
 
 Vectors are committed, so `make test` never needs an oracle;
 `tools/corpus/fetch.sh` and `make vectors` regenerate them, and a CI that runs
@@ -147,13 +176,22 @@ The gates are themselves checked. `make check-layering` was verified by adding
 an include of `instant.h` to a tier-0 source and watching the build fail - it
 did not, the first time, and `design.md` §13 records why.
 
+**The fuzzers assert invariants, not just absence of crashes**, which is why
+they found three defects the three oracles could not: a seventy-four byte TZif
+file claiming 987,654,144 transitions, and two `TZ` rules whose changeovers
+coincide or cross a year boundary, where the transition search and the offset
+lookup disagreed with each other. `design.md` §16 has the detail. All three
+needed input no real database contains.
+
 ```bash
-make test            # 125 tests, the JSON Schema conformance runner included
-make test-valgrind   # the same, clean
-make test-asan       # ASan + UBSan; the UBSan half is what proves no signed overflow
-make fuzz            # five text grammars and the arithmetic, seeded from the vectors
-make check-symbols   # every exported symbol carries the version namespace
-make check-layering  # no tier includes a higher tier's header
+make test                    # 172 tests, the conformance runners included
+make test-valgrind           # the same, clean
+make test-asan               # ASan + UBSan; the UBSan half proves no signed overflow
+make fuzz                    # text, arithmetic, TZif and the TZ grammar
+make check-symbols           # every exported symbol carries the version namespace
+make check-layering          # no tier includes a higher tier's header
+make check-oracle-zoneinfo   # every zone against Python's zoneinfo
+make vectors                 # regenerate the committed vectors from their oracles
 ```
 
 ## Documentation
@@ -164,10 +202,13 @@ make check-layering  # no tier includes a higher tier's header
 
 ## Status
 
-Phase 0 of `documentation/design.md` §16. Tiers 0 and 1 are built: civil
-arithmetic, instants, offsets, durations as a type and as RFC 3339 text, and
-the RFC 3339 and TOML grammars in both directions. Time zones, the other
-calendars, duration arithmetic, the LDML formatter and the interop conversions
-are the later phases, and are absent rather than stubbed.
+Phases 0 and 1 of `documentation/design.md` §16. Tiers 0, 1 and 2 are built:
+civil arithmetic, instants, offsets, durations as a type and as RFC 3339 text,
+the RFC 3339 and TOML grammars in both directions, and time zones - TZif, the
+POSIX `TZ` footer, the gap and overlap policy, the local zone and RFC 9557.
+
+The other calendars, duration arithmetic, the LDML formatter, the interop
+conversions, the leap-second table and the embedded time-zone database are the
+later phases, and are absent rather than stubbed.
 
 Version 0.0.0. MIT licensed.

@@ -456,13 +456,14 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
-.PHONY: vectors vectors-jsonschema
+.PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar
+.PHONY: tools check-oracle-zoneinfo
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
 .PHONY: all-debug install-debug test-debug test-valgrind-debug test-watch-debug uninstall-debug watch-debug
 # Fuzz commands
-.PHONY: fuzz fuzz-clean
+.PHONY: fuzz fuzz-clean fuzz-seed
 
 watch: ## Watch the file directory for changes and compile the target
 	@while true; do \
@@ -658,6 +659,37 @@ check-layering: ## Fail if a lower tier includes a higher tier's header
 	@printf "\033[0;32mNo tier includes a higher tier's header.\033[0m\n"
 
 ####################################################################
+# Oracle drivers
+####################################################################
+#
+# This library, wrapped so that an oracle written in another language can ask
+# it the same questions it asks itself. Built on demand, installed by nothing,
+# and not part of the library.
+
+ORACLE_SOURCES := $(wildcard tools/oracle/gchron_*.c)
+ORACLE_TOOLS := $(patsubst tools/oracle/%.c,$(APP_DIR)/tools/%$(EXE_EXTENSION),$(ORACLE_SOURCES))
+
+$(APP_DIR)/tools/%$(EXE_EXTENSION): tools/oracle/%.c $(APP_DIR)/$(STATIC_TARGET) \
+		| $(APP_DIR)/$(TARGET)
+	@printf "\n### Building oracle driver: $* ###\n"
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS)
+
+tools: ## Build the oracle drivers the differentials run against
+tools: $(ORACLE_TOOLS)
+
+check-oracle-zoneinfo: ## Check every zone against Python's zoneinfo (needs python3)
+check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		printf "\033[0;31mcheck-oracle-zoneinfo: python3 is not installed.\033[0m\n" >&2; \
+		printf "The oracle is the authority here; without it this check is not\n" >&2; \
+		printf "weaker, it is absent, and saying so beats a green run.\n" >&2; \
+		exit 1; \
+	fi
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/oracle/zoneinfo_diff.py \
+		--driver $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
+
+####################################################################
 # Conformance vectors
 ####################################################################
 #
@@ -670,7 +702,13 @@ check-layering: ## Fail if a lower tier includes a higher tier's header
 JSON_SCHEMA_SUITE := third_party/json-schema-test-suite/$(shell cat tools/corpus/JSON_SCHEMA_COMMIT 2>/dev/null)
 
 vectors: ## Regenerate every committed conformance vector file
-vectors: vectors-jsonschema
+vectors: vectors-jsonschema vectors-zones vectors-calendar
+
+vectors-zones: ## Rebuild the zone transition vectors (needs zdump)
+	python3 tools/oracle/zdump.py --out tests/data/vectors/zones/transitions.vec
+
+vectors-calendar: ## Rebuild the Gregorian calendar vectors (needs python3)
+	python3 tools/oracle/ordinal.py --out tests/data/vectors/calendar
 
 vectors-jsonschema: ## Rebuild the JSON Schema format vectors (needs the fetched suite)
 	@if [ ! -d "$(JSON_SCHEMA_SUITE)" ]; then \
@@ -918,12 +956,22 @@ endef
 
 $(eval $(call fuzz-rule,fuzz_parse,parse))
 $(eval $(call fuzz-rule,fuzz_arith,arith))
+$(eval $(call fuzz-rule,fuzz_tzif,tzif))
+$(eval $(call fuzz-rule,fuzz_posix_tz,posix_tz))
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
-fuzz: fuzz-run-parse fuzz-run-arith
+fuzz: fuzz-run-parse fuzz-run-arith fuzz-run-tzif fuzz-run-posix_tz
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 	-@rm -rf $(FUZZ_DIR)
+
+fuzz-seed: ## Reset the seed corpora to what tools/fuzz/seed.py produces
+# What is committed is the seed corpus only. A ninety-second campaign adds
+# several thousand units, which is a great many git objects for input the next
+# run would find again anyway - and this suite already has cutil's six
+# megabytes of tracked Doxygen output as the cautionary tale. Run this after a
+# campaign to put the corpus back.
+	python3 tools/fuzz/seed.py
 
 ####################################################################
 # Install / uninstall

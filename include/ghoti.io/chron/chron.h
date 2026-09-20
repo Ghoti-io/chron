@@ -21,6 +21,8 @@
 #include <ghoti.io/chron/macros.h>
 #include <ghoti.io/chron/offset.h>
 #include <ghoti.io/chron/parse.h>
+#include <ghoti.io/chron/zone.h>
+#include <ghoti.io/chron/zoned.h>
 
 #ifdef __cplusplus
 extern "C" {

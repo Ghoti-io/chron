@@ -130,6 +130,13 @@ typedef enum {
   GCHRON_DIAG_DURATION_SIGN,           ///< A sign; appendix A permits none.
   GCHRON_DIAG_DURATION_FRACTION,       ///< A fraction; appendix A permits none.
 
+  /* RFC 9557 annotations. */
+  GCHRON_DIAG_ANNOTATION_KEY,          ///< Not a `suffix-key`.
+  GCHRON_DIAG_ANNOTATION_VALUE,        ///< Not a zone name or suffix value.
+  GCHRON_DIAG_ANNOTATION_REPEATED,     ///< A second `[Zone]` annotation.
+  GCHRON_DIAG_ANNOTATION_CRITICAL,     ///< A `!` annotation not understood.
+  GCHRON_DIAG_OFFSET_ZONE_CONFLICT,    ///< The offset and the zone disagree.
+
   /* Resources. */
   GCHRON_DIAG_INPUT_TOO_LONG,          ///< Past GCHRON_Limits::max_parse_length.
   GCHRON_DIAG_BUFFER_TOO_SMALL,        ///< An output buffer could not hold it.
@@ -183,6 +190,10 @@ GCHRON_API void gchron_error_clear(GCHRON_Error * error);
  */
 typedef struct GCHRON_Limits {
   size_t max_parse_length; ///< Longest text any parser will look at, in bytes.
+  size_t max_tzif_bytes;   ///< Largest TZif image the zone loader will read.
+  size_t max_transitions;  ///< Transition records in one zone.
+  size_t max_zone_types;   ///< Local-time types in one zone.
+  size_t max_zones;        ///< Zones one database will load and cache.
 } GCHRON_Limits;
 
 /**
@@ -260,6 +271,33 @@ GCHRON_API int gchron_unit_is_exact(GCHRON_Unit unit);
 
 /** The default for GCHRON_Limits::max_parse_length. */
 #define GCHRON_DEFAULT_MAX_PARSE_LENGTH ((size_t)4096)
+
+/**
+ * The default for GCHRON_Limits::max_tzif_bytes.
+ *
+ * The largest zone in tzdata 2026c is under 30 KiB; a megabyte is far above
+ * anything real and far below anything that matters to a process.
+ */
+#define GCHRON_DEFAULT_MAX_TZIF_BYTES ((size_t)(1024 * 1024))
+
+/**
+ * The default for GCHRON_Limits::max_transitions.
+ *
+ * A "fat" zone file pre-expands its table to 2037 and the largest runs to a
+ * few thousand entries.
+ */
+#define GCHRON_DEFAULT_MAX_TRANSITIONS ((size_t)65536)
+
+/** The default for GCHRON_Limits::max_zone_types. */
+#define GCHRON_DEFAULT_MAX_ZONE_TYPES ((size_t)256)
+
+/**
+ * The default for GCHRON_Limits::max_zones.
+ *
+ * The whole database is about 600 zones plus their backward links, so this
+ * caps a caching database that is being walked rather than one being used.
+ */
+#define GCHRON_DEFAULT_MAX_ZONES ((size_t)4096)
 
 #ifdef __cplusplus
 }

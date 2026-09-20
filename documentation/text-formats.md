@@ -1,9 +1,9 @@
 # The text formats `chron` reads and writes
 
-**Status:** describes what phase 0 shipped. The grammars `documentation/design.md`
-§8.1 lists but this page does not - ISO 8601's profile, RFC 9557, YAML 1.1,
-HTTP-date, RFC 5322, the Unix integer forms - are later phases and are absent
-rather than stubbed.
+**Status:** describes what phases 0 and 1 shipped. The grammars
+`documentation/design.md` §8.1 lists but this page does not - ISO 8601's
+profile, YAML 1.1, HTTP-date, RFC 5322, the Unix integer forms - are later
+phases and are absent rather than stubbed.
 
 `CONVENTIONS.md` §9 asks a library implementing an external standard to name
 the version it implements and its deviations. This page is that, one section
@@ -182,6 +182,77 @@ therefore leaves `GCHRON_Leap` at `GCHRON_LEAP_REJECT`, and a caller who has
 decided the question passes the level they want. The setting is due to be
 revisited against `toml-test` in phase 2; until then the strict default stands,
 which is the rule in design §3.7 rather than a guess dressed as a default.
+
+---
+
+## RFC 9557 (2024)
+
+Implemented in full: `gchron_parse_rfc9557` and `gchron_write_rfc9557`, in
+`zoned.h` rather than `parse.h` because resolving a zone name needs a zone
+database and `parse.h` is tier 1.
+
+RFC 9557 is RFC 3339 plus annotations in square brackets:
+
+```
+2026-09-20T17:30:00+02:00[Europe/Paris]
+2026-09-20T17:30:00+02:00[Europe/Paris][u-ca=iso8601]
+2026-09-20T15:30:00Z[!Etc/UTC]
+```
+
+**This is the grammar that fixes mistake M13.** An RFC 3339 timestamp carries
+an offset and not a zone, so `2026-03-08T01:30-05:00` cannot say it meant New
+York - and next summer that same place is on `-04:00`, which the stored string
+gives no way to work out. The annotation carries the name, and this is the
+only text format in the library that round-trips a `GCHRON_ZonedDateTime`
+whole.
+
+### The three things the RFC asks of a reader
+
+- **A `!` makes an annotation critical.** The writer is saying that ignoring
+  it would change what the timestamp means, so a reader that does not
+  understand it must refuse. `[!u-unknown=x]` is `GCHRON_ERR_UNSUPPORTED`;
+  `[u-unknown=x]` is ignored.
+- **The offset and the zone may disagree**, and which half to believe is the
+  application's decision. `GCHRON_ParseOptions::zone_conflict` is the policy
+  and its zero value refuses; `GCHRON_ZONECONFLICT_PREFER_OFFSET` keeps the
+  instant the offset named, and `GCHRON_ZONECONFLICT_PREFER_ZONE` re-resolves
+  the civil reading through the zone. Either way,
+  `GCHRON_ParseInfo::offset_disagreed_with_zone` records that the text
+  contradicted itself.
+- **The annotation may be an offset rather than a name** - `[-05:00]`, `[Z]` -
+  and then the zone is a fixed-offset one.
+
+`[u-ca=...]` is copied into `GCHRON_ParseInfo::calendar`; acting on it is
+phase 2's, and carrying it rather than dropping it is phase 1's.
+
+### What the writer does with a zone that has no name
+
+An anonymous zone - one built from a `TZ` rule, or read from an
+`/etc/localtime` that is a plain file rather than a symlink - has no name to
+annotate, and neither does a fixed-offset zone whose name would say nothing
+its offset does not. Both write plain RFC 3339. Inventing a name would be the
+alternative, and it would be a lie the next reader could not detect.
+
+---
+
+## The POSIX `TZ` rule string
+
+Not a timestamp format, but a grammar this library reads: it is the footer of
+every version-2 TZif file, the `TZ` environment variable, and - on a system
+built with `zic -b slim`, which has been the default since 2020b - the thing
+that answers every question about next year. `gchron_zonedb_posix()` builds a
+zone from one.
+
+Implemented per POSIX.1-2024, **including the extended -167..167 hour range**
+for transition times, which means a changeover may be named in one week and
+land in another. Both abbreviation spellings are accepted: three or more
+letters, and anything alphanumeric inside angle brackets (`<+05>`), which is
+how a zone whose abbreviation begins with a sign writes it.
+
+The one deviation worth stating: **a daylight-saving name with no rule -
+`EST5EDT` - is refused.** POSIX leaves the transition dates
+implementation-defined there, and glibc falls back to a United States rule.
+That is a guess about geography, and this library has no business making it.
 
 ---
 

@@ -62,6 +62,13 @@ static const char * const DIAG_STRINGS[GCHRON_DIAG_COUNT] = {
   [GCHRON_DIAG_DURATION_SIGN] = "a sign, which this grammar has no place for",
   [GCHRON_DIAG_DURATION_FRACTION] =
       "a fraction, which this grammar has no place for",
+  [GCHRON_DIAG_ANNOTATION_KEY] = "not an annotation key",
+  [GCHRON_DIAG_ANNOTATION_VALUE] = "not an annotation value",
+  [GCHRON_DIAG_ANNOTATION_REPEATED] = "a second zone annotation",
+  [GCHRON_DIAG_ANNOTATION_CRITICAL] =
+      "a critical annotation this library does not understand",
+  [GCHRON_DIAG_OFFSET_ZONE_CONFLICT] =
+      "the offset and the zone annotation disagree",
   [GCHRON_DIAG_INPUT_TOO_LONG] = "input longer than the limit",
   [GCHRON_DIAG_BUFFER_TOO_SMALL] = "the output buffer is too small",
 };
@@ -122,6 +129,10 @@ void gchron_limits_default(GCHRON_Limits * limits) {
     return;
   }
   limits->max_parse_length = GCHRON_DEFAULT_MAX_PARSE_LENGTH;
+  limits->max_tzif_bytes = GCHRON_DEFAULT_MAX_TZIF_BYTES;
+  limits->max_transitions = GCHRON_DEFAULT_MAX_TRANSITIONS;
+  limits->max_zone_types = GCHRON_DEFAULT_MAX_ZONE_TYPES;
+  limits->max_zones = GCHRON_DEFAULT_MAX_ZONES;
 }
 
 GCHRON_Result gchron_fail(GCHRON_Error * error, GCHRON_Result code,

@@ -13,6 +13,7 @@
 #include <ghoti.io/chron/core.h>
 #include <ghoti.io/chron/macros.h>
 #include <ghoti.io/chron/parse.h>
+#include <string.h>
 
 #include "../core/core_internal.h"
 #include "parse_internal.h"
@@ -24,6 +25,7 @@ void gchron_parse_options_default(GCHRON_ParseOptions * out) {
   out->limits = NULL;
   out->fraction = GCHRON_FRACTION_REJECT;
   out->leap = GCHRON_LEAP_REJECT;
+  out->zone_conflict = GCHRON_ZONECONFLICT_REJECT;
   out->allow_space_separator = false;
   out->allow_trailing = false;
 }
@@ -64,6 +66,9 @@ void gchron_parse_info_clear(GCHRON_ParseInfo * info) {
   info->fraction_truncated = false;
   info->fraction_digits = 0;
   info->offset_unknown = false;
+  info->had_zone_annotation = false;
+  info->offset_disagreed_with_zone = false;
+  info->calendar[0] = '\0';
 }
 
 const GCHRON_ParseOptions * gchron_parse_options_effective(

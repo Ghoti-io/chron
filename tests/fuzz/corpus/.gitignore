@@ -6,3 +6,7 @@ leak-*
 timeout-*
 oom-*
 slow-unit-*
+
+# libFuzzer's own discoveries during a campaign are not tracked; the seed
+# corpus is, and `make fuzz-seed` puts the directories back to it. See
+# tools/fuzz/seed.py for why.

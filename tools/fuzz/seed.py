@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Rebuild the seed corpora the fuzzers start from.
+
+A coverage-guided fuzzer that starts from nothing spends its first minutes
+rediscovering that a timestamp has hyphens in it.  Seeding it with real input
+skips that, and design.md section 12.2 says the corpora are seeded from the
+vectors.
+
+What is committed is **the seed corpus only** - what this script produces,
+deterministically, from the committed vectors and from the machine's own
+time-zone database.  The units libFuzzer discovers during a campaign are not
+committed: a ninety-second run adds several thousand files, which is a great
+many git objects for input that the next run would find again anyway, and
+`cutil`'s six megabytes of tracked Doxygen output is the cautionary tale this
+suite already has.
+
+Running it is idempotent; it clears each directory first, so a corpus that has
+grown during a campaign comes back to the seed set.
+
+    tools/fuzz/seed.py
+
+Copyright 2026 by Corey Pennycuff
+"""
+
+import hashlib
+import os
+import pathlib
+import struct
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+CORPUS = ROOT / "tests" / "fuzz" / "corpus"
+
+# The harness's first byte selects the grammar; the second drives the policies
+# and the limits, so that a seed reaches both sides of the leap-second and
+# fraction branches rather than only the default.
+PARSE_SELECTORS = {"date_time": 0, "date": 1, "time": 2, "duration": 3}
+PARSE_OPTIONS = (0x00, 0x05, 0x1B)
+TOML_SELECTOR = 4
+
+
+def unescape(text):
+    """Reverse tools/oracle/jsonschema_format.py's escaping."""
+    out = bytearray()
+    i = 0
+    while i < len(text):
+        if text[i] == "\\" and i + 1 < len(text):
+            if text[i + 1] == "\\":
+                out.append(0x5C)
+                i += 2
+                continue
+            if text[i + 1] == "x":
+                out.append(int(text[i + 2:i + 4], 16))
+                i += 4
+                continue
+        out.append(ord(text[i]))
+        i += 1
+    return bytes(out)
+
+
+def reset(name):
+    path = CORPUS / name
+    path.mkdir(parents=True, exist_ok=True)
+    for entry in path.iterdir():
+        if entry.is_file() and entry.name != ".gitignore":
+            entry.unlink()
+    return path
+
+
+def write(path, blob):
+    (path / hashlib.sha1(blob).hexdigest()).write_bytes(blob)
+
+
+def seed_parse():
+    out = reset("parse")
+    vectors = ROOT / "tests" / "data" / "vectors" / "parse"
+    for path in sorted(vectors.glob("jsonschema_*.vec")):
+        selector = PARSE_SELECTORS[path.stem.replace("jsonschema_", "")]
+        for line in path.read_text().splitlines():
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split("\t")
+            if len(fields) < 2:
+                continue
+            text = unescape(fields[1])
+            for sel, options in [(selector, o) for o in PARSE_OPTIONS] \
+                    + [(TOML_SELECTOR, 0x08)]:
+                write(out, bytes([sel, options]) + text)
+    return out
+
+
+def seed_arith():
+    out = reset("arith")
+    # The values every checked-arithmetic helper has an edge at.
+    edges = [0, 1, -1, 86400, -86400, 2 ** 62, -(2 ** 62), 2 ** 63 - 1,
+             -(2 ** 63), 365241780471, -365243219162, 1000000000, 999999999]
+    for op in range(12):
+        for value in edges:
+            negated = value if value == -(2 ** 63) else -value
+            write(out, bytes([op]) + struct.pack("<q", value) * 2
+                  + struct.pack("<q", negated))
+    return out
+
+
+def seed_zones():
+    tzif = reset("tzif")
+    posix = reset("posix_tz")
+    root = pathlib.Path(os.environ.get("TZDIR", "/usr/share/zoneinfo"))
+    seen = set()
+    if root.is_dir():
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            data = path.read_bytes()
+            if not data.startswith(b"TZif"):
+                continue
+            for options in (0x00, 0x07):
+                write(tzif, bytes([options]) + data)
+            if data.endswith(b"\n"):
+                cut = data.rfind(b"\n", 0, len(data) - 1)
+                if cut >= 0:
+                    rule = data[cut + 1:-1]
+                    if rule and rule not in seen:
+                        seen.add(rule)
+                        write(posix, rule)
+
+    # Edges no real zone needs, and the two rules the fuzzer found defects
+    # with - kept so that a fresh campaign starts from them rather than
+    # rediscovering them.
+    for rule in (b"UTC0", b"<+05>-5", b"EST5EDT,J1,J365", b"EST5EDT,0,365",
+                 b"EST5EDT,M3.2.0/-167,M11.1.0/167",
+                 b"<-04>4<-03>,M9.1.6/24,M4.1.6/24",
+                 b"BST5CDT,M1.1.0/0,M1.1.0/1",
+                 b"BSTST5CDT1,M1.1.0/0,M1.1.1"):
+        if rule not in seen:
+            seen.add(rule)
+            write(posix, rule)
+
+    # The TZif file the fuzzer found: seventy-four bytes claiming nearly a
+    # billion transitions.
+    found = ROOT / "tests" / "data" / "tzif" / "oversized_counts.tzif"
+    if found.is_file():
+        write(tzif, bytes([0x00]) + found.read_bytes())
+    return tzif, posix
+
+
+def main():
+    parse = seed_parse()
+    arith = seed_arith()
+    tzif, posix = seed_zones()
+    for path in (parse, arith, tzif, posix):
+        count = len([p for p in path.iterdir() if p.is_file()
+                     and p.name != ".gitignore"])
+        print("%-34s %5d seeds" % (path.relative_to(ROOT), count))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

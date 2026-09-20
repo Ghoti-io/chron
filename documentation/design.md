@@ -1,6 +1,6 @@
 # The design of ghoti.io-chron
 
-**Status:** phase 0 has shipped; §16's later phases are still design. This
+**Status:** phases 0 and 1 have shipped; §16's later phases are still design. This
 page says what exists and why, so that the code can be judged against it
 rather than the other way round. A change of mind lands here first, in the
 same commit as the code that needs it (`CONVENTIONS.md` §9), and §16 marks
@@ -934,8 +934,8 @@ below is produced by software this library did not write.
 | --- | --- | --- | --- |
 | civil ↔ epoch day, Gregorian | exhaustive round trip over ±100,000 years (7.3e7 days, seconds of runtime); property check over the full nine-digit range; Python `date.toordinal()` for years 1–9999 | `tests/unit/test_civil.cpp`; `tools/oracle/ordinal.py` | yes |
 | the 33 sample dates in every calendar | Reingold & Dershowitz, *Calendrical Calculations*, the sample-data appendix; the `convertdate` package; `ncal -J` for Julian | `tools/oracle/rd_table.py` | neither installed: `pip install convertdate`, `apt install ncal` |
-| every zone's every transition | **`zdump -v`** over all zones in the system database: the UTC instant and the civil time, offset, abbreviation and DST flag on both sides of every transition, from the reference implementation of the tzdb itself. Several hundred thousand assertions, regenerated when tzdata updates | `tools/oracle/zdump.sh` → `tests/data/vectors/zones/*.zdt` | `zdump` 2.41, tzdata 2026c |
-| the same, independently | Python 3.13 `zoneinfo` reading the same TZif files through different code | `tools/oracle/zoneinfo.py` | yes |
+| every zone's every transition | **`zdump -v`** over all zones in the system database: the UTC instant and the civil time, offset, abbreviation and DST flag on both sides of every transition, from the reference implementation of the tzdb itself. Several hundred thousand assertions, regenerated when tzdata updates | `tools/oracle/zdump.py` → `tests/data/vectors/zones/transitions.vec` | `zdump` 2.41, tzdata 2026c |
+| the same, independently | Python 3.13 `zoneinfo` reading the same TZif files through different code | `tools/oracle/zoneinfo_diff.py` | yes |
 | POSIX TZ string evaluation | glibc's own `tzset` + `localtime_r` with `TZ` set to each footer string in the database, across a lattice of instants | `tools/oracle/tzset_probe.c` | yes |
 | civil → instant in a gap or overlap | Python `zoneinfo` with `fold=0` / `fold=1`, and `zdump`'s transition rows | as above | yes |
 | RFC 3339, `date`, `time`, `duration` text | JSON-Schema-Test-Suite `tests/draft2020-12/optional/format/{date-time,date,time,duration}.json` | `tools/oracle/jsonschema_format.py` | fetched by `tools/corpus/fetch.sh` |
@@ -1020,7 +1020,7 @@ src/interop/    interop.c
 src/chron.c     version
 
 tools/tzdata/   embed.py (IANA source tree → C table + windowsZones mapping); fetch.sh
-tools/oracle/   zdump.sh zoneinfo.py tzset_probe.c icu_format.cpp strftime_probe.c
+tools/oracle/   zdump.py zoneinfo_diff.py gchron_zone.c icu_format.cpp strftime_probe.c
                 jsonschema_format.py test262.js fromiso.py ordinal.py rd_table.py
 tools/corpus/   fetch.sh for JSON-Schema-Test-Suite, test262, the R&D tables
 tests/unit/     one file per header; test_policies.cpp (§3.7); test_roundtrip.cpp
@@ -1071,8 +1071,9 @@ Zero means no limit; `gchron_limits_default()` fills them; every parser and
 loader takes one; `ERR_LIMIT` names the field in the message.
 
 `GCHRON_Limits` carries only the fields something enforces **today** -
-`max_parse_length` after phase 0 - and each of the rest arrives in the phase
-that enforces it. A limit nothing reads is a promise nothing keeps, and this
+`max_parse_length` after phase 0, and `max_tzif_bytes`, `max_transitions`,
+`max_zone_types` and `max_zones` after phase 1 - and each of the rest arrives
+in the phase that enforces it. A limit nothing reads is a promise nothing keeps, and this
 suite has the scar: `regex` declared table flags it never consulted, and the
 mechanism they implied was designed twice before anyone noticed the field was
 dead.
@@ -1145,7 +1146,7 @@ for one engineer who knows the suite.
 | Phase | Work | Size | Unlocks |
 | --- | --- | --- | --- |
 | 0 **(done)** | Scaffold from `model` (`CONVENTIONS.md` §12); `core.h`; `civil.h` with Gregorian; `instant.h`; `offset.h`; `duration.h`'s type and its Appendix A text; RFC 3339 and TOML grammars, both directions; the exhaustive civil tests; the JSON Schema format vectors | M | **M1: `text` can replace its timestamp side-car and pass the JSON Schema `format` vectors** - reached; all 207 vectors pass |
-| 1 | `zone.h`: TZif, the POSIX TZ footer, `ZoneDb`, `Resolve`, transitions, the local zone (Linux/macOS); `zoned.h`; the `zdump`, `zoneinfo` and `tzset` differentials; RFC 9557 | L | **M2: `ctang` can render a date in a zone** |
+| 1 **(done)** | `zone.h`: TZif, the POSIX TZ footer, `ZoneDb`, `Resolve`, transitions, the local zone (Linux/macOS); `zoned.h`; the `zdump`, `zoneinfo` and `tzset` differentials; RFC 9557 | L | **M2: `ctang` can render a date in a zone** - reached |
 | 2 | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** |
 | 3 | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** |
 | 4 | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** |
@@ -1153,6 +1154,60 @@ for one engineer who knows the suite.
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz` and
 `check-symbols` clean from an empty build directory, serially and under
 `-j`, per `CONVENTIONS.md` §12 item 10.
+
+**What phase 1 built, and what it found.** The TZif reader, the POSIX TZ
+footer, the database and its cache, `Resolve`, the local zone, `zoned.h` and
+RFC 9557. Three oracles agree with it: `zdump` over 8,540 transition rows of
+twenty zones; glibc's `tzset` over 548,960 probes covering **every distinct
+footer rule in the system database**, harvested rather than typed; and
+Python's `zoneinfo` over 105,948 probes covering **every zone**, run by `make
+check-oracle-zoneinfo`.
+
+The fuzzers found three defects the oracles could not, because all three need
+input no real database contains:
+
+1. A seventy-four byte file whose header claimed 987,654,144 transitions. The
+   reader sized an allocation from the count before checking the file was big
+   enough to hold them, and asked for eight gigabytes. A limits field would
+   not have caught it - zero means *no limit*, which is a legitimate setting.
+   The counts are now bounded by the file's own length, which no header can
+   inflate.
+2. `BST5CDT,M1.1.0/0,M1.1.0/1`, whose two changeovers land on the same
+   instant: the daylight-saving span is empty, so nothing ever changes. The
+   offset lookup already said so and the transition search did not.
+3. `BSTST5CDT1,M1.1.0/0,M1.1.1`, which runs daylight saving from the first
+   Sunday of January to the first *Monday* of January - so which changeover
+   comes first flips from year to year and the span wraps a year boundary.
+   The transition search deduced the offsets either side from which end of
+   the rule produced the candidate, which is only equivalent while the span
+   stays inside one year.
+
+The third is the one worth generalising. `gchron_posixtz_next_transition` now
+**reads the two sides back out of the offset lookup** rather than deducing
+them, so the two agree by construction; and a candidate whose two sides come
+out identical is not reported at all, because a transition that changes
+nothing is not a transition. The fuzz harness asserts exactly that invariant,
+which is why it found the case rather than merely surviving it - a harness
+that only checked for crashes would have passed all three of these.
+
+**What phase 1 deliberately did not build.** `gchron_zonedb_embedded()`
+returns `GCHRON_ERR_UNSUPPORTED` until phase 4 generates its table, rather
+than an empty database that answers every lookup with the same code and hides
+the reason; `gchron_zonedb_default()` therefore has only one candidate and
+nothing to compare versions of. `gchron_zone_canonical_id()` returns the
+identifier a zone was asked for, because TZif has nowhere to record what a
+link points at and the canonical-name table arrives with the embedded
+database. The Windows branches are written, marked `TODO(windows):` and listed
+in `WINDOWS-TODO.md`.
+
+**Where phase 1 departs from this page.** §13's layout puts every grammar in
+`parse.h`; RFC 9557 is declared in `zoned.h` instead, and implemented in
+`src/zone/rfc9557.c`. Resolving `[Europe/Paris]` needs a zone database, so
+putting it in `parse.h` would have meant that header reaching tier 2 - and the
+property the tier rule exists to protect is precisely that a consumer parsing
+RFC 3339 timestamps never sees a zone type. The `GCHRON_ZoneConflict` policy
+stays in `parse.h` beside the other three, so that §3.7's rule is still
+checkable in one place.
 
 **What phase 0 built, and what it deliberately did not.** `duration.h` carries
 the type, its sign invariant, `GCHRON_Overflow`, and the RFC 3339 Appendix A
