@@ -48,6 +48,23 @@ void gchron_parse_options_toml(GCHRON_ParseOptions * out) {
   out->allow_space_separator = true;
 }
 
+void gchron_parse_options_yaml(GCHRON_ParseOptions * out) {
+  if (out == NULL) {
+    return;
+  }
+  gchron_parse_options_default(out);
+  /*
+   * YAML states neither of these, which is why they are set here under the
+   * grammar's name rather than buried in the parser. The reasoning is in
+   * parse.h; the short form is that YAML's expression permits a fraction of
+   * any length and a `:60` second, and a reader that refused either would
+   * resolve a conformant `!!timestamp` as a `!!str` - changing what the
+   * document says rather than reporting that something is wrong with it.
+   */
+  out->fraction = GCHRON_FRACTION_TRUNCATE;
+  out->leap = GCHRON_LEAP_CLAMP;
+}
+
 void gchron_parse_options_json_schema(GCHRON_ParseOptions * out) {
   if (out == NULL) {
     return;

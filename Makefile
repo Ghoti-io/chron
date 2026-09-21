@@ -808,6 +808,16 @@ JSON_SCHEMA_SUITE := third_party/json-schema-test-suite/$(shell cat tools/corpus
 
 vectors: ## Regenerate every committed conformance vector file
 vectors: vectors-jsonschema vectors-zones vectors-calendar vectors-leap
+vectors: vectors-yaml
+
+vectors-yaml: ## Rebuild the YAML 1.1 timestamp vectors (needs PyYAML)
+	@if ! python3 -c 'import yaml' 2>/dev/null; then \
+		printf "\033[0;31mvectors-yaml: PyYAML is not installed.\033[0m\n" >&2; \
+		printf "It is the reference implementation of YAML 1.1 and the oracle\n" >&2; \
+		printf "for this grammar: pip install PyYAML\n" >&2; \
+		exit 1; \
+	fi
+	python3 tools/oracle/yaml_timestamp.py --out tests/data/vectors/parse
 
 vectors-leap: ## Rebuild the leap-second vectors (needs the tzdb leapseconds file)
 	python3 tools/oracle/leapseconds.py

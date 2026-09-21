@@ -1,7 +1,7 @@
 /**
  * @file
  *
- * Writing RFC 3339 section 5.6 and TOML v1.0.0 text.
+ * Writing RFC 3339 section 5.6, TOML v1.0.0 and YAML 1.1 text.
  *
  * These are direct writers, not a compiled pattern. format.h's LDML compiler
  * is a separate, tier-3 route to the same text and needs a names provider;
@@ -14,7 +14,8 @@
  * still set - so a caller can ask for the length by passing a zero-length
  * buffer.
  *
- * Reference: RFC 3339 (2002) sections 4.3 and 5.6; TOML v1.0.0.
+ * Reference: RFC 3339 (2002) sections 4.3 and 5.6; TOML v1.0.0; the YAML
+ * 1.1 type repository's `tag:yaml.org,2002:timestamp`.
  *
  * Copyright 2026 by Corey Pennycuff
  */
@@ -104,6 +105,24 @@ static void put_secfrac(char * out, size_t * at, int32_t nsec, int digits) {
       return;
     }
     digits = (nsec % 1000000 == 0) ? 3 : ((nsec % 1000 == 0) ? 6 : 9);
+  }
+  else if (digits == GCHRON_FRACTION_DIGITS_SHORTEST) {
+    int32_t rest;
+    if (nsec == 0) {
+      return;
+    }
+    /*
+     * The same rule as AUTO, at any width rather than at 3, 6 or 9: drop
+     * trailing zeros until one would change the value. A tenth of a second
+     * writes `.1`, which is what the YAML 1.1 type repository's canonical
+     * example shows.
+     */
+    digits = 9;
+    rest = nsec;
+    while (digits > 1 && rest % 10 == 0) {
+      rest /= 10;
+      digits -= 1;
+    }
   }
   if (digits < 1) {
     return;
@@ -284,6 +303,84 @@ GCHRON_Result gchron_write_toml(const GCHRON_TomlValue * value,
       break;
 
     case GCHRON_TOML_NONE:
+    default:
+      return GCHRON_ERR_INVALID;
+  }
+
+  return deliver(scratch, at, buf, buf_len, out_len);
+}
+
+GCHRON_Result gchron_write_yaml_timestamp(const GCHRON_YamlValue * value,
+    const GCHRON_WriteOptions * opts, char * buf, size_t buf_len,
+    size_t * out_len) {
+  char scratch[GCHRON_YAML_TIMESTAMP_MAX];
+  GCHRON_WriteOptions fallback;
+  size_t at = 0;
+  GCHRON_Result result;
+
+  if (buf == NULL && buf_len != 0) {
+    return GCHRON_ERR_INVALID;
+  }
+  if (value == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  if (opts == NULL) {
+    /*
+     * Not gchron_write_options_default(). YAML's canonical form writes the
+     * shortest fraction that loses nothing at any width - `.1`, not `.100` -
+     * and a caller normalising a document through this function wants the
+     * document back, not the document restyled. For the same reason the
+     * zero-offset spelling follows what the text said. A caller who passes
+     * options of their own has stated how they want it spelled, and
+     * GCHRON_YamlValue::offset_is_z then has no say.
+     */
+    gchron_write_options_default(&fallback);
+    fallback.fraction_digits = GCHRON_FRACTION_DIGITS_SHORTEST;
+    fallback.zero_offset_as_numeric = !value->offset_is_z;
+    opts = &fallback;
+  }
+
+  switch (value->kind) {
+    case GCHRON_YAML_DATE:
+      if (!gchron_date_is_valid(&value->civil.date)) {
+        return GCHRON_ERR_INVALID;
+      }
+      result = put_full_date(scratch, &at, &value->civil.date);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      break;
+
+    case GCHRON_YAML_DATE_TIME:
+    case GCHRON_YAML_OFFSET_DATE_TIME:
+      if (!gchron_datetime_is_valid(&value->civil)) {
+        return GCHRON_ERR_INVALID;
+      }
+      result = put_full_date(scratch, &at, &value->civil.date);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      /*
+       * `T` (or the options' alternative), never the run of spaces YAML also
+       * permits on the way in. A writer that reproduced the input's spelling
+       * would emit documents that a reader following the published expression
+       * to the letter is entitled to resolve as `!!str`.
+       */
+      scratch[at++] =
+          opts->space_separator ? ' ' : (opts->lowercase ? 't' : 'T');
+      put_partial_time(scratch, &at, &value->civil.time,
+          opts->fraction_digits);
+      if (value->kind == GCHRON_YAML_OFFSET_DATE_TIME) {
+        if (value->offset_sec <= -GCHRON_OFFSET_LIMIT_SECONDS
+            || value->offset_sec >= GCHRON_OFFSET_LIMIT_SECONDS) {
+          return GCHRON_ERR_INVALID;
+        }
+        put_offset(scratch, &at, value->offset_sec, value->offset_unknown,
+            opts);
+      }
+      break;
+
+    case GCHRON_YAML_NONE:
     default:
       return GCHRON_ERR_INVALID;
   }

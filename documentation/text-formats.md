@@ -1,8 +1,9 @@
 # The text formats `chron` reads and writes
 
-**Status:** describes what phases 0 through 3 shipped. The grammars
-`documentation/design.md` §8.1 lists but this page does not - YAML 1.1's
-timestamp and the Unix integer forms - are absent rather than stubbed.
+**Status:** describes what phases 0 through 4 shipped, plus the YAML 1.1
+timestamp added for `text`. The grammars `documentation/design.md` §8.1 lists
+but this page does not - the Unix integer forms - are absent rather than
+stubbed.
 
 `CONVENTIONS.md` §9 asks a library implementing an external standard to name
 the version it implements and its deviations. This page is that, one section
@@ -285,6 +286,180 @@ of its peers rejects:
 The writer emits the shortest correct spelling: no component that is zero
 unless the whole duration is (`PT0S`), and no trailing zeros in a fraction -
 `PT0.5S`, not `PT0.500S`.
+
+---
+
+## YAML 1.1 `!!timestamp`
+
+Implemented in full: `gchron_parse_yaml_timestamp` and
+`gchron_write_yaml_timestamp`, reporting which of three shapes it read in
+`GCHRON_YamlValue::kind`.
+
+YAML defines this type as a **regular expression**, not as a grammar built on
+RFC 3339, and the expression is the definition: a scalar it does not match is
+a `!!str`, and a reader that disagrees resolves a different tag than every
+other YAML 1.1 reader - which changes what the document *says*, not merely how
+it is spelled.
+
+```
+ [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
+|[0-9][0-9][0-9][0-9]
+ -[0-9][0-9]?
+ -[0-9][0-9]?
+ ([Tt]|[ \t]+)[0-9][0-9]?
+ :[0-9][0-9]
+ :[0-9][0-9]
+ (\.[0-9]*)?
+ (([ \t]*)Z|[-+][0-9][0-9]?(:[0-9][0-9])?)?
+```
+
+| Shape | Example | `kind` |
+| --- | --- | --- |
+| Date | `2001-12-14` | `GCHRON_YAML_DATE` |
+| Date-time, no zone | `2001-12-14T21:59:43` | `GCHRON_YAML_DATE_TIME` |
+| Date-time with a zone | `2001-12-14T21:59:43Z` | `GCHRON_YAML_OFFSET_DATE_TIME` |
+
+There is no time-only shape. Every YAML timestamp begins with a date, which is
+the difference design §11 records between this grammar and TOML's - TOML's
+*Local Time* is the one shape a YAML timestamp cannot hold.
+
+### How it differs from RFC 3339
+
+Enough that it is its own production rather than RFC 3339's with flags. Five
+independent switches on one scanner is the arrangement that makes a caller
+enable four things to get the one they wanted.
+
+| | RFC 3339 | YAML 1.1 |
+| --- | --- | --- |
+| Month, day | `2DIGIT` | `1*2DIGIT` - **but only with a time**, below |
+| Hour | `2DIGIT` | `1*2DIGIT` |
+| Minute, second | `2DIGIT` | `2DIGIT` - unchanged |
+| Separator | `T` | `T`, `t`, or **one or more** spaces or tabs |
+| Fraction | `"." 1*DIGIT` | `"." *DIGIT` - `21:59:43.` is a time |
+| Offset | required, `±HH:MM` | optional; `±H`, `±HH`, `±H:MM`, `±HH:MM` |
+| `z` | accepted | **refused**; see below |
+
+### The date-only form is the strict one
+
+YAML's *first* alternative is `YYYY-MM-DD` with both fields exactly two digits.
+Only the second - the one carrying a time - relaxes them. So:
+
+| Text | |
+| --- | --- |
+| `2001-12-14` | a timestamp |
+| `2001-12-4` | **a string** |
+| `2001-12-4T21:59:43Z` | a timestamp |
+
+That reads as an inconsistency and is what the type repository says. A parser
+that smoothed it over would resolve as `!!timestamp` a scalar every other
+YAML 1.1 reader resolves as `!!str`. The refusal carries
+`GCHRON_DIAG_YAML_DATE_WIDTH` rather than "expected a digit", because the
+field is present and the *form* is wrong.
+
+### `t` yes, `z` no
+
+The expression writes `[Tt]` for the separator and a bare `Z` for the zone.
+PyYAML's copy agrees. So `2001-12-14t21:59:43Z` is a timestamp and
+`2001-12-14T21:59:43z` is a string.
+
+This is the reverse of RFC 3339, where RFC 5234 §2.3 makes every ABNF literal
+case-insensitive and `z` is as conformant as `Z`. A parser that carried the
+habit from one grammar to the other would accept a scalar YAML treats as a
+string; the refusal has its own diagnostic, `GCHRON_DIAG_YAML_LOWERCASE_Z`,
+because "expected `Z` or an offset" reads as though nothing were there at all.
+
+### Deviation: whitespace before a numeric offset
+
+**This library accepts `2001-12-14T21:59:43 -05:00`. The published expression
+does not.**
+
+The expression places `[ \t]*` inside the `Z` branch alone - `(([ \t]*)Z|[-+]…)`
+- so a space may precede `Z` and may not precede `+05:00`. PyYAML hoists the
+same `[ \t]*` outside the whole group, and so accepts both. The two disagree,
+and something has to be accepted or refused.
+
+Accepting is the decision here, for three reasons. PyYAML is the reference
+implementation of YAML 1.1 and the parser most existing 1.1 documents were
+written against, so its reading is the one those documents assume. The
+published expression offers no reason why a space should be readable before
+`Z` and not before an offset, which reads as an oversight in a regex rather
+than a statement about the language. And accepting means this library reads
+every document either of them reads, where refusing would mean rejecting
+documents PyYAML has been accepting for twenty years.
+
+It is a deviation all the same, which is why it is written down here rather
+than left as a quiet permissiveness. **The writer never emits one**, so text
+normalised through this library is conformant under either reading.
+
+### Deviation: an offset minute of 60
+
+`2001-12-14T21:59:43+05:60` is `GCHRON_ERR_FORMAT` here, and PyYAML reads it
+as `+06:00`.
+
+The expression's `(:[0-9][0-9])?` does not check the field's range, exactly as
+it does not check that February has thirty days. This library refuses the
+sixtieth minute as it refuses the thirtieth of February, rather than carrying
+it into the hour and producing a value the document did not write. The case is
+named in `tests/conformance/test_yaml_timestamp.cpp`'s `DEVIATIONS` table, so
+it fails the differential unless it stays deliberate.
+
+### A zoneless timestamp is not UTC
+
+The type repository's canonical form is UTC, and the tempting shortcut is to
+fold a zoneless reading into it on the way in. `GCHRON_YAML_DATE_TIME` keeps
+the civil reading instead, because converting it would assert a zone the
+document did not write - design.md's mistake M1, in the one place a document
+format makes it easy to commit. A caller that knows which zone the document
+meant resolves it through `zoned.h`, where the conversion can say that the
+reading names no instant, or two.
+
+### `:60` and a long fraction
+
+YAML states nothing about either, and the grammar permits both:
+`[0-9][0-9]` matches `60`, and `\.[0-9]*` has no length limit. The preset
+`gchron_parse_options_yaml()` therefore reads them rather than refusing -
+`GCHRON_LEAP_CLAMP` and `GCHRON_FRACTION_TRUNCATE` - with
+`GCHRON_ParseInfo::leap_second` and `::fraction_truncated` as the evidence.
+This is the one grammar here whose preset is looser than design §3.7's strict
+zero, and the reason is the one above: a refusal would resolve a conformant
+`!!timestamp` as a `!!str`, which reports nothing and changes the document.
+A caller who has decided the question passes the level they want.
+
+Note that `GCHRON_LEAP_MINUTE` and `GCHRON_LEAP_TABLE` **refuse a `:60` that
+carries no offset**. YAML is the one grammar here whose timestamp may omit the
+zone, so it is the one where "is this 23:59 in UTC?" can have no answer, and
+assuming UTC to get one would be inventing the missing half.
+
+### What the writer emits
+
+The canonical spelling of whichever shape the value carries: four-digit year,
+two-digit everything else, `T` between the date and the time, and the shortest
+fraction that loses nothing at any width - `.1`, not `.100`, which is what the
+type repository's own canonical example shows and what
+`GCHRON_FRACTION_DIGITS_SHORTEST` means. None of the relaxed input spellings
+survives a round trip, deliberately: a writer that reproduced them would emit
+documents a strict reader is entitled to read as strings.
+
+`GCHRON_YamlValue::offset_is_z` decides `Z` against `+00:00` for a zero
+offset, so a document normalised through this library keeps the spelling it
+arrived with rather than being silently restyled; `-00:00` is written back as
+itself, because that spelling is the only one that says the offset is unknown.
+
+### The oracle
+
+`tools/oracle/yaml_timestamp.py` runs a corpus through **PyYAML** and commits
+the verdicts to `tests/data/vectors/parse/yaml_timestamp.vec`; `make
+vectors-yaml` regenerates it. Both of PyYAML's regular expressions are read
+out of the installed module rather than retyped - the resolver's, which says
+whether a scalar is a timestamp at all, and the constructor's named groups,
+which say what its fields are.
+
+The value comparison uses those groups rather than the `datetime` PyYAML goes
+on to build, because that object is truncated to microseconds and normalises
+an offset minute of 60 into an extra hour; comparing against it would test
+Python's arithmetic rather than this library's reading of the text. The two
+cases Python cannot represent at all - a `:60` second - are counted and
+printed rather than dropped.
 
 ---
 

@@ -138,6 +138,10 @@ typedef enum {
   GCHRON_DIAG_ANNOTATION_CRITICAL,     ///< A `!` annotation not understood.
   GCHRON_DIAG_OFFSET_ZONE_CONFLICT,    ///< The offset and the zone disagree.
 
+  /* YAML 1.1 timestamps. */
+  GCHRON_DIAG_YAML_DATE_WIDTH,         ///< A date with no time needs `YYYY-MM-DD`.
+  GCHRON_DIAG_YAML_LOWERCASE_Z,        ///< `z`; YAML's zone is upper case only.
+
   /* Format patterns. */
   GCHRON_DIAG_UNTERMINATED_QUOTE,      ///< A `'` with no closing `'`.
   GCHRON_DIAG_PATTERN_LETTER_UNKNOWN,  ///< A letter this library has no field for.

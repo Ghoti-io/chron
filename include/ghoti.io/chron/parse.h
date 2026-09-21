@@ -526,6 +526,143 @@ GCHRON_API GCHRON_Result gchron_parse_toml(const char * text, size_t len,
     GCHRON_ParseInfo * info, GCHRON_Error * err);
 
 /*--------------------------------------------------------------------------*
+ * YAML 1.1
+ *--------------------------------------------------------------------------*/
+
+/**
+ * @brief Which shape a YAML 1.1 `!!timestamp` turned out to be.
+ *
+ * YAML, like TOML, distinguishes its shapes by which fields are present
+ * rather than by a tag, so a parser that reads any of them has to report
+ * which it read. Zero is not one of them, so a zero-initialised
+ * GCHRON_YamlValue is recognisably unset.
+ *
+ * There is no "local time" here. YAML's grammar has no time-only production
+ * at all - every timestamp begins with a date - which is the difference
+ * design.md section 11 records between this grammar and TOML's.
+ */
+typedef enum {
+  GCHRON_YAML_NONE = 0,          ///< Not set.
+  GCHRON_YAML_DATE,              ///< `2001-12-14`.
+  GCHRON_YAML_DATE_TIME,         ///< `2001-12-14T21:59:43`, with no zone.
+  GCHRON_YAML_OFFSET_DATE_TIME   ///< `2001-12-14T21:59:43Z`, or `-05:00`.
+} GCHRON_YamlKind;
+
+/**
+ * @brief A YAML 1.1 `!!timestamp`.
+ *
+ * **A timestamp with no zone is not UTC.** The YAML 1.1 type repository's
+ * canonical form is UTC, and an implementation that folded a zoneless reading
+ * into UTC on the way in would be asserting a zone the document did not
+ * write - design.md's mistake M1, in the one place a document format makes it
+ * easy to commit. GCHRON_YAML_DATE_TIME keeps the reading as the civil time
+ * it is, and a caller that knows which zone the document meant resolves it
+ * through zoned.h.
+ */
+typedef struct GCHRON_YamlValue {
+  /** Which of the three this is, and so which fields below mean anything. */
+  GCHRON_YamlKind kind;
+
+  /**
+   * The civil reading.
+   *
+   * For GCHRON_YAML_DATE the time half is all zeroes and means nothing.
+   */
+  GCHRON_DateTime civil;
+
+  /** Seconds ahead of UTC. Only for GCHRON_YAML_OFFSET_DATE_TIME. */
+  int32_t offset_sec;
+
+  /** The offset was `-00:00`. Only for GCHRON_YAML_OFFSET_DATE_TIME. */
+  bool offset_unknown;
+
+  /**
+   * The offset was written `Z` or `z` rather than `+00:00`.
+   *
+   * RFC 3339 section 4.3 makes the two the same instant, and every comparison
+   * in this library agrees. This field is not about the value: it is what the
+   * writer needs to hand back the spelling the document used, so that a
+   * document normalised through this library is not also silently restyled.
+   * `gchron_yaml_timestamp_identical()` is where it counts.
+   */
+  bool offset_is_z;
+} GCHRON_YamlValue;
+
+/**
+ * @brief Fill in the options the YAML 1.1 timestamp type calls for.
+ *
+ * Two of them, and YAML states neither - which is why they are here under the
+ * grammar's own name rather than hidden in the parser:
+ *
+ * - **GCHRON_FRACTION_TRUNCATE.** YAML's fraction is `(\.[0-9]*)?` - any
+ *   number of digits, with no statement about an implementation that holds
+ *   fewer. Refusing a conformant timestamp is the worse failure for a
+ *   document format, so the preset truncates and
+ *   GCHRON_ParseInfo::fraction_truncated is the evidence. Truncation never
+ *   rounds, for the reason GCHRON_FRACTION_REJECT gives.
+ * - **GCHRON_LEAP_CLAMP.** YAML's second is `[0-9][0-9]`, which matches `60`,
+ *   and YAML says nothing about leap seconds. The grammar *is* the definition
+ *   of the type here - a reader that refuses `2001-12-14T21:59:60Z` resolves
+ *   it as `!!str`, changing the document's meaning rather than reporting an
+ *   error - so the preset accepts it and records it in
+ *   GCHRON_ParseInfo::leap_second. A caller who has decided the question
+ *   passes the level they want.
+ *
+ * @param out Structure to populate. NULL is ignored.
+ */
+GCHRON_API void gchron_parse_options_yaml(GCHRON_ParseOptions * out);
+
+/**
+ * @brief Parse a YAML 1.1 `!!timestamp`.
+ *
+ * The grammar is the regular expression in the YAML 1.1 type repository, and
+ * differs from RFC 3339 in more ways than it resembles it: a one- or
+ * two-digit month, day and hour; one *or more* spaces or tabs in place of
+ * `T`; a fraction that may carry no digits at all; an offset that may omit
+ * its minutes or write its hour in one digit; and no offset required.
+ *
+ * Those differences are why this is its own production rather than RFC 3339's
+ * with flags. Five independent switches on one scanner is the shape that
+ * makes a caller enable four things to get the one they wanted.
+ *
+ * **The date-only form is the strict one.** YAML's first alternative is
+ * `YYYY-MM-DD` with both fields exactly two digits, and only the second - the
+ * one that carries a time - relaxes them. So `2001-12-4` is not a timestamp
+ * and `2001-12-4T21:59:43Z` is, which looks like an inconsistency and is what
+ * the specification says.
+ *
+ * @param text The input. Not assumed to be NUL-terminated.
+ * @param len Bytes of input.
+ * @param opts Options. NULL means gchron_parse_options_yaml() - as with
+ *   gchron_parse_toml(), a caller who named the grammar has already chosen
+ *   them.
+ * @param out Receives the value and its kind on success; untouched on
+ *   failure.
+ * @param info Receives what the text said. May be NULL.
+ * @param err Receives the failure and its position. May be NULL.
+ * @return As gchron_parse_rfc3339_date_time().
+ */
+GCHRON_API GCHRON_Result gchron_parse_yaml_timestamp(const char * text,
+    size_t len, const GCHRON_ParseOptions * opts, GCHRON_YamlValue * out,
+    GCHRON_ParseInfo * info, GCHRON_Error * err);
+
+/**
+ * @brief Whether two YAML timestamps are the same value **and** the same
+ *   statement.
+ *
+ * Every field, the `Z`-versus-`+00:00` spelling included. Two values that
+ * name the same instant in different words are *not* identical, which is the
+ * distinction design.md section 7 draws and the reason `memcmp` is the wrong
+ * tool: GCHRON_YamlValue has padding, and padding is not part of the value.
+ *
+ * @param a First value.
+ * @param b Second value.
+ * @return `true` when every field matches. Two NULLs are identical.
+ */
+GCHRON_API bool gchron_yaml_timestamp_identical(const GCHRON_YamlValue * a,
+    const GCHRON_YamlValue * b);
+
+/*--------------------------------------------------------------------------*
  * Writing
  *--------------------------------------------------------------------------*/
 
@@ -534,6 +671,17 @@ GCHRON_API GCHRON_Result gchron_parse_toml(const char * text, size_t len,
 
 /** Write no fraction at all, whatever the value carries. */
 #define GCHRON_FRACTION_DIGITS_NONE (-1)
+
+/**
+ * Write the shortest fraction that loses nothing, at any width 1..9.
+ *
+ * Where GCHRON_FRACTION_DIGITS_AUTO rounds the *count* up to 0, 3, 6 or 9 -
+ * the widths a reader expects of an RFC 3339 timestamp - this one stops as
+ * soon as the remaining digits are zeros, so a tenth of a second writes `.1`
+ * rather than `.100`. That is the spelling the YAML 1.1 type repository's own
+ * canonical example uses, and it loses no more and no less than AUTO does.
+ */
+#define GCHRON_FRACTION_DIGITS_SHORTEST (-2)
 
 /**
  * @brief How to spell the output.
@@ -585,6 +733,15 @@ GCHRON_API void gchron_write_options_default(GCHRON_WriteOptions * out);
 
 /** Bytes an RFC 3339 appendix A `duration` needs, the NUL included. */
 #define GCHRON_RFC3339_DURATION_MAX ((size_t)160)
+
+/**
+ * Bytes a YAML 1.1 `!!timestamp` needs, the terminating NUL included.
+ *
+ * The same as an RFC 3339 `date-time`: this writer emits the two-digit,
+ * `T`-separated spelling whatever the input looked like, so the widest output
+ * is the widest RFC 3339 one.
+ */
+#define GCHRON_YAML_TIMESTAMP_MAX GCHRON_RFC3339_DATE_TIME_MAX
 
 /**
  * @brief Write an offset date-time as RFC 3339 `date-time`.
@@ -692,6 +849,36 @@ GCHRON_API GCHRON_Result gchron_write_rfc3339_duration(
 GCHRON_API GCHRON_Result gchron_write_toml(const GCHRON_TomlValue * value,
     const GCHRON_WriteOptions * opts, char * buf, size_t buf_len,
     size_t * out_len);
+
+/**
+ * @brief Write a YAML 1.1 `!!timestamp`.
+ *
+ * Writes the canonical shape of whichever @ref GCHRON_YamlValue::kind says:
+ * four-digit year, two-digit everything else, `T` between the date and the
+ * time. YAML permits the one-digit and whitespace-separated spellings on the
+ * way *in* only; a writer that reproduced them would be emitting a document
+ * that some other YAML 1.1 reader is entitled to read as a string.
+ *
+ * The default options here are not gchron_write_options_default(): a NULL
+ * @p opts writes GCHRON_FRACTION_DIGITS_SHORTEST, so `.10` comes back as
+ * `.1`, which is what the type repository's canonical form shows. Pass an
+ * options structure to spell it any other way.
+ *
+ * GCHRON_YamlValue::offset_is_z decides `Z` against `+00:00` for a zero
+ * offset, so a document normalised through this library keeps the spelling it
+ * arrived with; GCHRON_WriteOptions::zero_offset_as_numeric overrides it when
+ * a caller passes options of their own.
+ *
+ * @param value A value whose @ref GCHRON_YamlValue::kind says which shape.
+ * @param opts Options, or NULL for the shortest-fraction default above.
+ * @param buf Where to write; see gchron_write_rfc3339_date_time().
+ * @param buf_len Bytes available at @p buf.
+ * @param out_len Receives the length written, without the NUL. May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_LIMIT; GCHRON_ERR_RANGE; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_write_yaml_timestamp(
+    const GCHRON_YamlValue * value, const GCHRON_WriteOptions * opts,
+    char * buf, size_t buf_len, size_t * out_len);
 
 #ifdef __cplusplus
 }
