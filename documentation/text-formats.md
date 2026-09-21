@@ -391,7 +391,7 @@ It is a deviation all the same, which is why it is written down here rather
 than left as a quiet permissiveness. **The writer never emits one**, so text
 normalised through this library is conformant under either reading.
 
-### Deviation: an offset minute of 60
+### Deviation: an out-of-range offset minute
 
 `2001-12-14T21:59:43+05:60` is `GCHRON_ERR_FORMAT` here, and PyYAML reads it
 as `+06:00`.
@@ -399,9 +399,33 @@ as `+06:00`.
 The expression's `(:[0-9][0-9])?` does not check the field's range, exactly as
 it does not check that February has thirty days. This library refuses the
 sixtieth minute as it refuses the thirtieth of February, rather than carrying
-it into the hour and producing a value the document did not write. The case is
-named in `tests/conformance/test_yaml_timestamp.cpp`'s `DEVIATIONS` table, so
-it fails the differential unless it stays deliberate.
+it into the hour and producing a value the document did not write.
+
+**PyYAML's reading is not a policy, and cannot be followed even if one wanted
+to.** Its constructor builds the offset as
+`datetime.timedelta(hours=tz_hour, minutes=tz_minute)`, and what looks like
+leniency is that type normalising:
+
+| Text | PyYAML |
+| --- | --- |
+| `+05:60` | `+06:00` |
+| `+00:99` | `+01:39` |
+| `+23:60` | **refused** |
+| `+24:00` | **refused** |
+
+`+05:60` and `+23:60` are the same malformation and are treated differently,
+because the refusal comes from `datetime.timezone`'s +/-24 hour bound rather
+than from anything about the field. Matching this would mean reproducing an
+incoherence, and there is no spelling of the rule that a caller could be told.
+
+The line this library draws instead: a `:60` **second** is accepted, because
+it is a real reading a real clock produced and the only question is where to
+put it; a `:60` **offset minute** is refused, because no zone has ever had one
+and "accepting" it means doing arithmetic that replaces the field the document
+wrote with a different one.
+
+The case is named in `tests/conformance/test_yaml_timestamp.cpp`'s
+`DEVIATIONS` table, so it fails the differential unless it stays deliberate.
 
 ### A zoneless timestamp is not UTC
 

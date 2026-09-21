@@ -76,10 +76,15 @@ struct Deviation {
 
 const Deviation DEVIATIONS[] = {
   { "2001-12-14T21:59:43+05:60",
-    "an offset minute of 60. The regex permits it and PyYAML carries the "
-    "sixtieth minute into the hour, turning +05:60 into +06:00 - a value the "
-    "document did not write. This library refuses the field, as it refuses "
-    "the 30th of February, rather than silently correcting it." },
+    "an out-of-range offset minute. The regex permits it and PyYAML carries "
+    "the sixtieth minute into the hour, turning +05:60 into +06:00 - a value "
+    "the document did not write. That is not a policy of PyYAML's but its "
+    "datetime.timedelta normalising: it reads +00:99 as +01:39 and yet "
+    "refuses +23:60, because the refusal comes from datetime.timezone's "
+    "+/-24 hour bound and not from the field. This library refuses the field, "
+    "as it refuses the 30th of February. A :60 *second* is accepted instead, "
+    "because that is a reading a real clock produced; no zone has ever been "
+    "at +05:60." },
 };
 
 /** Whether a case is a named deviation, and why. */
