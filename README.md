@@ -250,3 +250,12 @@ only two things here that touch the network. Nothing has been run on Windows;
 the parent `WINDOWS-TODO.md` §6b and §6c say what would make it so.
 
 Version 0.0.0. MIT licensed.
+
+## License
+
+LGPL-3.0-only. See [COPYING.LESSER](COPYING.LESSER) for the license, and
+[COPYING](COPYING) for the GPL text it is written as additional permissions
+on top of.
+
+Contributions are not being accepted at this time; see
+[CONTRIBUTING.md](CONTRIBUTING.md) for what is useful instead.

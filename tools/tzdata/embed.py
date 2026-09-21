@@ -199,7 +199,33 @@ def render(version, names, blobs, tzdir):
     }
 
 
-TEMPLATE = '''/**
+# Every generated source carries the same licence notice as a hand-written
+# one. It is emitted here rather than added afterwards, so that regenerating
+# does not quietly drop it.
+LICENSE_NOTICE = """\
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Chron.
+ *
+ * Ghoti.io Chron is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ *
+ * Ghoti.io Chron is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+"""
+
+
+TEMPLATE = LICENSE_NOTICE + "\n" + '''/**
  * @file
  *
  * The time-zone database compiled into this library.
@@ -211,8 +237,6 @@ TEMPLATE = '''/**
  * %(blob_count)d distinct TZif images totalling %(blob_bytes)d bytes. A link
  * and its target are the same bytes, so they are stored once; what the link
  * adds is a canonical name, which TZif itself has nowhere to record.
- *
- * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/chron/macros.h>

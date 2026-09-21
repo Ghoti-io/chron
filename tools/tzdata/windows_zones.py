@@ -107,7 +107,33 @@ def render(rows, version, source):
     }
 
 
-TEMPLATE = '''/**
+# Every generated source carries the same licence notice as a hand-written
+# one. It is emitted here rather than added afterwards, so that regenerating
+# does not quietly drop it.
+LICENSE_NOTICE = """\
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Chron.
+ *
+ * Ghoti.io Chron is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ *
+ * Ghoti.io Chron is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+"""
+
+
+TEMPLATE = LICENSE_NOTICE + "\n" + '''/**
  * @file
  *
  * Windows time-zone names, mapped to IANA identifiers.
@@ -126,8 +152,6 @@ TEMPLATE = '''/**
  * as well as New York - and they agree on offsets and rules, which is what
  * makes one of them a usable answer. A caller who needs the territory
  * distinction wants a locale database, not this.
- *
- * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/chron/macros.h>

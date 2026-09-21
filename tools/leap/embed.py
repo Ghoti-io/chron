@@ -109,7 +109,33 @@ def render(entries, updated, expiry, source):
     }
 
 
-TEMPLATE = '''/**
+# Every generated source carries the same licence notice as a hand-written
+# one. It is emitted here rather than added afterwards, so that regenerating
+# does not quietly drop it.
+LICENSE_NOTICE = """\
+/*
+ * SPDX-License-Identifier: LGPL-3.0-only
+ *
+ * Copyright (C) 2026 Corey Pennycuff
+ *
+ * This file is part of Ghoti.io Chron.
+ *
+ * Ghoti.io Chron is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Lesser General Public License version 3 as
+ * published by the Free Software Foundation.
+ *
+ * Ghoti.io Chron is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public
+ * License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+"""
+
+
+TEMPLATE = LICENSE_NOTICE + "\n" + '''/**
  * @file
  *
  * The leap-second table compiled into this library.
@@ -122,8 +148,6 @@ TEMPLATE = '''/**
  * GCHRON_ERR_EXPIRED rather than assuming no further leap second was issued.
  * A binary built years ago must not answer confidently about a year it could
  * not have known about (design.md section 5.1 item 3).
- *
- * Copyright 2026 by Corey Pennycuff
  */
 
 #include <ghoti.io/chron/leap.h>
