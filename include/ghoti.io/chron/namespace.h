@@ -69,6 +69,7 @@
 #define GCHRON_TabularCalendar GHOTIIO_CHRON(GCHRON_TabularCalendar)
 #define GCHRON_TaiInstant GHOTIIO_CHRON(GCHRON_TaiInstant)
 #define GCHRON_Tick GHOTIIO_CHRON(GCHRON_Tick)
+#define GCHRON_TickSource GHOTIIO_CHRON(GCHRON_TickSource)
 #define GCHRON_Time GHOTIIO_CHRON(GCHRON_Time)
 #define GCHRON_TomlKind GHOTIIO_CHRON(GCHRON_TomlKind)
 #define GCHRON_TomlValue GHOTIIO_CHRON(GCHRON_TomlValue)

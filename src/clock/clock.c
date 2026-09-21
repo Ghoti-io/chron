@@ -23,6 +23,8 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+/* QueryInterruptTimePrecise and QueryUnbiasedInterruptTimePrecise. */
+#include <realtimeapiset.h>
 #else
 #include <time.h>
 #endif
@@ -63,28 +65,52 @@ static GCHRON_Result system_resolution(const GCHRON_Clock * self,
   return gchron_duration_from_exact_seconds(0, 100, out);
 }
 
-GCHRON_Result gchron_tick_now(GCHRON_Tick * out) {
-  LARGE_INTEGER counter;
-  static LARGE_INTEGER frequency;
-  static int have_frequency = 0;
+/*
+ * TODO(windows): neither counter has been read on Windows. WINDOWS-TODO.md
+ * section 6d says what would settle it, and the check has to be done on real
+ * hardware because the question is what the machine does across a real
+ * suspend.
+ *
+ * QueryPerformanceCounter is deliberately *not* used here, though it was
+ * before this pair existed and though it has the finer resolution. Microsoft
+ * does not define what it does across a sleep transition - it is specified as
+ * a high-resolution stamp, not as a clock with a stated relationship to
+ * suspend - so building the suspend distinction on it would mean guessing at
+ * the one property being distinguished.
+ *
+ * The interrupt-time pair says it outright instead. Windows calls the sleep
+ * time a *bias*: interrupt time includes it, and "unbiased" interrupt time is
+ * the same counter with it removed. That is exactly GCHRON_TICK_CONTINUOUS
+ * and GCHRON_TICK_SUSPENDING, named by the platform itself. The `Precise`
+ * variants are used because the plain ones advance only on the timer tick,
+ * about every 15 milliseconds, which would make a frame time either zero or a
+ * whole frame. They want Windows 10 1803 or later; this file already requires
+ * Windows 8 for GetSystemTimePreciseAsFileTime.
+ */
+GCHRON_Result gchron_tick_now(GCHRON_TickSource source, GCHRON_Tick * out) {
+  ULONGLONG hundred_nanos = 0;
 
   if (out == NULL) {
     return GCHRON_ERR_INVALID;
   }
-  if (!have_frequency) {
-    if (!QueryPerformanceFrequency(&frequency) || frequency.QuadPart == 0) {
-      return GCHRON_ERR_IO;
-    }
-    have_frequency = 1;
+  switch (source) {
+    case GCHRON_TICK_SUSPENDING:
+      /* Both return VOID, unlike the non-Precise QueryUnbiasedInterruptTime
+       * beside them, which returns BOOL. There is no failure to check. */
+      QueryUnbiasedInterruptTimePrecise(&hundred_nanos);
+      break;
+    case GCHRON_TICK_CONTINUOUS:
+      QueryInterruptTimePrecise(&hundred_nanos);
+      break;
+    case GCHRON_TICK_NONE:
+    default:
+      return GCHRON_ERR_INVALID;
   }
-  if (!QueryPerformanceCounter(&counter)) {
-    return GCHRON_ERR_IO;
+  if (hundred_nanos > (ULONGLONG)INT64_MAX / 100) {
+    return GCHRON_ERR_RANGE;
   }
-  /* Scaled in two steps so that the product does not overflow: the counter
-   * reaches the billions and a nanosecond scale would multiply it by 1e9. */
-  out->nsec = (counter.QuadPart / frequency.QuadPart) * INT64_C(1000000000)
-      + ((counter.QuadPart % frequency.QuadPart) * INT64_C(1000000000))
-          / frequency.QuadPart;
+  out->nsec = (int64_t)hundred_nanos * 100;
+  out->source = source;
   return GCHRON_OK;
 }
 
@@ -123,14 +149,38 @@ static GCHRON_Result system_resolution(const GCHRON_Clock * self,
       (int32_t)ts.tv_nsec, out);
 }
 
-GCHRON_Result gchron_tick_now(GCHRON_Tick * out) {
+GCHRON_Result gchron_tick_now(GCHRON_TickSource source, GCHRON_Tick * out) {
   struct timespec ts;
   int64_t nanos;
+  clockid_t which;
 
   if (out == NULL) {
     return GCHRON_ERR_INVALID;
   }
-  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+  switch (source) {
+    case GCHRON_TICK_SUSPENDING:
+      which = CLOCK_MONOTONIC;
+      break;
+    case GCHRON_TICK_CONTINUOUS:
+#if defined(CLOCK_BOOTTIME)
+      which = CLOCK_BOOTTIME;
+      break;
+#else
+      /*
+       * Linux's name, and only Linux's. There is no portable POSIX clock that
+       * counts through a suspend, and substituting CLOCK_MONOTONIC would hand
+       * back a counter that stops while the machine sleeps to the one caller
+       * who asked for a counter that does not - the single mistake this whole
+       * enum exists to prevent, delivered silently. design.md section 3: what
+       * a platform cannot do is absent, not approximated.
+       */
+      return GCHRON_ERR_UNSUPPORTED;
+#endif
+    case GCHRON_TICK_NONE:
+    default:
+      return GCHRON_ERR_INVALID;
+  }
+  if (clock_gettime(which, &ts) != 0) {
     return GCHRON_ERR_IO;
   }
   if (!gchron_mul_i64((int64_t)ts.tv_sec, GCHRON_NANOS_PER_SECOND, &nanos)
@@ -138,6 +188,7 @@ GCHRON_Result gchron_tick_now(GCHRON_Tick * out) {
     return GCHRON_ERR_RANGE;
   }
   out->nsec = nanos;
+  out->source = source;
   return GCHRON_OK;
 }
 
@@ -208,6 +259,22 @@ GCHRON_Result gchron_tick_since(GCHRON_Tick from, GCHRON_Tick to,
   int64_t nanos;
 
   if (out == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  /*
+   * The two counters have different origins, and in any interval containing a
+   * suspend they have advanced by different amounts - so the difference
+   * between one of each is not a number with a meaning. Refused here rather
+   * than trusted to the caller, for the reason GCHRON_Tick is a separate type
+   * from GCHRON_Instant at all (M23): the mistake is easy, and its result
+   * looks exactly like an answer.
+   *
+   * GCHRON_TICK_NONE catches the other half of it - a GCHRON_Tick that was
+   * zeroed and never read, whose nsec of 0 would otherwise pass for a
+   * perfectly good reading taken at the origin.
+   */
+  if (from.source == GCHRON_TICK_NONE || to.source == GCHRON_TICK_NONE
+      || from.source != to.source) {
     return GCHRON_ERR_INVALID;
   }
   if (!gchron_sub_i64(to.nsec, from.nsec, &nanos)) {

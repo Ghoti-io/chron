@@ -90,31 +90,137 @@ TEST(Clock, ANullClockIsRefusedRatherThanDefaulted) {
  * a separate type with exactly one operation.
  */
 TEST(Tick, OnlyTheDifferenceBetweenTwoReadingsMeansAnything) {
-  GCHRON_Tick first{};
-  GCHRON_Tick second{};
-  ASSERT_EQ(GCHRON_OK, gchron_tick_now(&first));
-  // Some work, so that the counter has somewhere to go.
-  volatile int64_t sink = 0;
-  for (int i = 0; i < 100000; ++i) {
-    sink += i;
+  for (GCHRON_TickSource source : { GCHRON_TICK_SUSPENDING,
+                                    GCHRON_TICK_CONTINUOUS }) {
+    GCHRON_Tick first{};
+    GCHRON_Tick second{};
+    GCHRON_Result begin = gchron_tick_now(source, &first);
+    if (begin == GCHRON_ERR_UNSUPPORTED) {
+      // Counted and named, never silent: this platform has no such counter.
+      // CLOCK_BOOTTIME is Linux's spelling and POSIX has no other.
+      GTEST_SKIP() << "no continuous counter on this platform";
+    }
+    ASSERT_EQ(GCHRON_OK, begin);
+    EXPECT_EQ(source, first.source) << "the reading does not say where it came from";
+
+    // Some work, so that the counter has somewhere to go.
+    volatile int64_t sink = 0;
+    for (int i = 0; i < 100000; ++i) {
+      sink += i;
+    }
+    ASSERT_EQ(GCHRON_OK, gchron_tick_now(source, &second));
+    (void)sink;
+
+    GCHRON_Duration elapsed{};
+    ASSERT_EQ(GCHRON_OK, gchron_tick_since(first, second, &elapsed));
+    EXPECT_TRUE(gchron_duration_is_valid(&elapsed));
+    EXPECT_GE(gchron_duration_sign(&elapsed), 0)
+        << "a monotonic counter does not go backwards";
+
+    // And the other way round is negative, which is the only other thing a
+    // difference can be.
+    GCHRON_Duration backwards{};
+    ASSERT_EQ(GCHRON_OK, gchron_tick_since(second, first, &backwards));
+    EXPECT_LE(gchron_duration_sign(&backwards), 0);
+
+    EXPECT_EQ(GCHRON_ERR_INVALID, gchron_tick_now(source, nullptr));
+    EXPECT_EQ(GCHRON_ERR_INVALID, gchron_tick_since(first, second, nullptr));
   }
-  ASSERT_EQ(GCHRON_OK, gchron_tick_now(&second));
-  (void)sink;
+}
+
+TEST(Tick, TheCallerHasToSayWhichCounterItWants) {
+  /*
+   * There is no default. The two counters answer different questions - "how
+   * long did this take" and "has enough time passed" - and the second is the
+   * one that fails silently, because a timeout measured on a counter that
+   * stops while the machine sleeps simply never fires. Section 3.7's rule
+   * applied to a selector: the zero value refuses.
+   */
+  GCHRON_Tick tick{};
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_tick_now(GCHRON_TICK_NONE, &tick));
+  EXPECT_EQ(GCHRON_ERR_INVALID,
+      gchron_tick_now(static_cast<GCHRON_TickSource>(99), &tick));
+  EXPECT_EQ(GCHRON_TICK_NONE, tick.source) << "a refused read wrote the struct";
+}
+
+TEST(Tick, TwoReadingsFromDifferentCountersCannotBeSubtracted) {
+  /*
+   * The counters have different origins, and across a suspend they have
+   * advanced by different amounts, so the difference between one of each is
+   * not a number with a meaning - it just looks like one. The same reason
+   * GCHRON_Tick is a separate type from GCHRON_Instant (M23).
+   */
+  GCHRON_Tick suspending{};
+  GCHRON_Tick continuous{};
+  ASSERT_EQ(GCHRON_OK, gchron_tick_now(GCHRON_TICK_SUSPENDING, &suspending));
+  if (gchron_tick_now(GCHRON_TICK_CONTINUOUS, &continuous)
+      == GCHRON_ERR_UNSUPPORTED) {
+    GTEST_SKIP() << "no continuous counter on this platform";
+  }
+
+  GCHRON_Duration mixed{};
+  EXPECT_EQ(GCHRON_ERR_INVALID,
+      gchron_tick_since(suspending, continuous, &mixed));
+  EXPECT_EQ(GCHRON_ERR_INVALID,
+      gchron_tick_since(continuous, suspending, &mixed));
+}
+
+TEST(Tick, AZeroedReadingIsNotAReading) {
+  /*
+   * A GCHRON_Tick that was declared and never filled holds nsec 0, which
+   * would otherwise pass for a perfectly good reading taken at the origin -
+   * and would make an elapsed time equal to the whole uptime of the machine.
+   * The source tag is what makes it detectable.
+   */
+  GCHRON_Tick never_read{};
+  GCHRON_Tick real{};
+  ASSERT_EQ(GCHRON_OK, gchron_tick_now(GCHRON_TICK_SUSPENDING, &real));
 
   GCHRON_Duration elapsed{};
-  ASSERT_EQ(GCHRON_OK, gchron_tick_since(first, second, &elapsed));
-  EXPECT_TRUE(gchron_duration_is_valid(&elapsed));
-  EXPECT_GE(gchron_duration_sign(&elapsed), 0)
-      << "a monotonic counter does not go backwards";
+  EXPECT_EQ(GCHRON_ERR_INVALID,
+      gchron_tick_since(never_read, real, &elapsed));
+  EXPECT_EQ(GCHRON_ERR_INVALID,
+      gchron_tick_since(real, never_read, &elapsed));
+}
 
-  // And the other way round is negative, which is the only other thing a
-  // difference can be.
-  GCHRON_Duration backwards{};
-  ASSERT_EQ(GCHRON_OK, gchron_tick_since(second, first, &backwards));
-  EXPECT_LE(gchron_duration_sign(&backwards), 0);
+TEST(Tick, TheContinuousCounterHasCountedAtLeastAsMuchAsTheOther) {
+  /*
+   * The two counters differ by exactly the time the machine has spent
+   * suspended, and a test cannot cause a suspend - so what is checkable here
+   * is the ordering, and *whether the gap is real*.
+   *
+   * The naive version of this test - assert the two readings differ - passes
+   * on a machine that has never suspended, because reading two clocks takes
+   * time and the second is always a few dozen nanoseconds later. Measured on
+   * the machine this was written on: the gap was 16 to 39 ns while two
+   * back-to-back reads of the *same* clock differed by 33 to 80. It was
+   * measuring the cost of a system call and calling it evidence.
+   *
+   * So the threshold is a second. Below it, nothing can be concluded and the
+   * test says so out loud rather than passing quietly (section 12.3).
+   */
+  GCHRON_Tick suspending{};
+  GCHRON_Tick continuous{};
+  ASSERT_EQ(GCHRON_OK, gchron_tick_now(GCHRON_TICK_SUSPENDING, &suspending));
+  if (gchron_tick_now(GCHRON_TICK_CONTINUOUS, &continuous)
+      == GCHRON_ERR_UNSUPPORTED) {
+    GTEST_SKIP() << "no continuous counter on this platform";
+  }
 
-  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_tick_now(nullptr));
-  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_tick_since(first, second, nullptr));
+  // Read second, so it cannot be behind by anything but a real difference.
+  EXPECT_GE(continuous.nsec, suspending.nsec)
+      << "the continuous counter is behind the suspending one, which it "
+         "cannot be: it counts everything the other one counts, and the "
+         "suspends as well";
+
+  const int64_t gap = continuous.nsec - suspending.nsec;
+  if (gap < 1000000000) {
+    GTEST_SKIP() << "this machine has not suspended since it booted (the two "
+                    "counters differ by " << gap << " ns, which is the cost "
+                    "of reading them), so there is no gap here to measure";
+  }
+  // It has suspended, and the gap is that suspend.
+  EXPECT_GT(gap, 0);
 }
 
 /*

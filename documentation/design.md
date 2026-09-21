@@ -967,7 +967,7 @@ typedef struct GCHRON_Clock {
 
 const GCHRON_Clock * gchron_clock_system(void);            /* CLOCK_REALTIME / GetSystemTimePreciseAsFileTime */
 GCHRON_Result        gchron_clock_fixed(GCHRON_Instant, GCHRON_Clock * out);   /* for tests */
-GCHRON_Result        gchron_tick_now(GCHRON_Tick * out);   /* CLOCK_MONOTONIC / QueryPerformanceCounter */
+GCHRON_Result        gchron_tick_now(GCHRON_TickSource, GCHRON_Tick * out);
 GCHRON_Result        gchron_clock_resolution(const GCHRON_Clock *, GCHRON_Duration * out);
 ```
 
@@ -982,6 +982,64 @@ reboots, and only `gchron_tick_since(a, b)` - a `GCHRON_Duration` - has a
 meaning (M23). `cjelly` will use it for frame timing; `cutil`'s semaphore,
 which is below this library in the dependency graph, keeps its own
 `clock_gettime` call.
+
+### 9.1 There are two monotonic counters, and the caller names one
+
+"Monotonic" answers one question - the reading never goes backwards when
+somebody sets the system clock - and leaves a second one open: **does it keep
+counting while the machine is suspended?** The two answers are different
+clocks, and both are right for different questions.
+
+| | `GCHRON_TICK_SUSPENDING` | `GCHRON_TICK_CONTINUOUS` |
+|---|---|---|
+| counts a suspend | no | yes |
+| Linux | `CLOCK_MONOTONIC` | `CLOCK_BOOTTIME` |
+| Windows | `QueryUnbiasedInterruptTimePrecise` | `QueryInterruptTimePrecise` |
+| for | how long did this take - a frame, a benchmark | has enough time passed - a cache entry, a token, an idle timeout |
+
+The second is the one that fails silently. A timeout measured on a counter
+that stops while the machine sleeps never fires: nothing crashes, and the
+check quietly stops doing its job. An hour-long expiry survives a night with
+the lid closed. That is why there is no default and `GCHRON_TICK_NONE` is the
+zero value (§3.7) - the caller states which question they are asking.
+
+The source is carried **in the reading**, and `gchron_tick_since()` refuses
+two that disagree. The counters have different origins and, across a suspend,
+have advanced by different amounts, so the difference between one of each is
+not a number with a meaning - it merely looks like one, which is the same
+reason `GCHRON_Tick` is not a `GCHRON_Instant`. The tag also catches a
+`GCHRON_Tick` that was declared and never read: its `nsec` of zero would
+otherwise pass for a reading taken at the origin, and make an elapsed time
+equal to the machine's whole uptime.
+
+**There is no portable POSIX spelling of the second**, and a system without
+`CLOCK_BOOTTIME` reports `GCHRON_ERR_UNSUPPORTED` rather than answering with
+`CLOCK_MONOTONIC` under the other name. Falling back would hand a counter
+that stops during sleep to the one caller who asked for a counter that does
+not - the single mistake this distinction exists to prevent, delivered
+silently. §3's rule: what a platform cannot do is absent, not approximated.
+
+Windows deliberately does not use `QueryPerformanceCounter`, which is what
+this function called before the pair existed and which has the finer
+resolution. Microsoft specifies it as a high-resolution stamp and does not
+state what it does across a sleep transition, so building the suspend
+distinction on it would mean guessing at the one property being
+distinguished. The interrupt-time pair states it: Windows calls the sleep
+time a *bias*, interrupt time includes it, and "unbiased" interrupt time is
+the same counter with it removed - which is this table's two rows, named by
+the platform. The `Precise` variants are used because the plain ones advance
+only on the timer tick, roughly every 15 ms, which would round a frame time
+to zero or to a whole frame.
+
+None of the Windows half has been run; `WINDOWS-TODO.md` §6d says what would
+settle it. Neither can the suspend behaviour be tested anywhere in CI, because
+a test cannot suspend the machine it runs on: `tests/unit/test_clock.cpp`
+checks the ordering, the refusals and the tagging, and **skips with a stated
+reason** on a machine that has not slept since it booted. The first draft of
+that test asserted only that the two readings differ, and passed on a
+never-suspended machine because reading two clocks takes time - the gap was
+16-39 ns where two reads of the *same* clock differed by 33-80. A gate
+measuring the cost of a system call and calling it evidence (§12.3).
 
 ---
 

@@ -117,6 +117,61 @@ GCHRON_API GCHRON_Result gchron_clock_resolution(const GCHRON_Clock * clock,
     GCHRON_Duration * out);
 
 /**
+ * @brief Which monotonic counter a reading came from.
+ *
+ * "Monotonic" answers only one question - the reading never goes backwards
+ * when somebody sets the system clock. It leaves a second one open, and the
+ * two answers are different clocks: **does it keep counting while the machine
+ * is suspended?**
+ *
+ * Both are right, for different questions.
+ *
+ * - *How long did this take?* - a frame, a benchmark, an operation. If the
+ *   lid closes in the middle, the eight hours are not part of the answer.
+ *   That is ::GCHRON_TICK_SUSPENDING.
+ * - *Has enough time passed?* - a cache entry, a session, a token, an idle
+ *   timeout. If the lid closes for eight hours, an hour-long expiry has
+ *   certainly expired. That is ::GCHRON_TICK_CONTINUOUS.
+ *
+ * The second is the one that fails silently. A timeout measured on a clock
+ * that stops while the machine sleeps simply never fires, nothing crashes,
+ * and the check quietly stops doing its job - which is why this library makes
+ * the caller name the clock rather than picking one.
+ */
+typedef enum {
+  /**
+   * Not a reading.
+   *
+   * Zero, so that a zeroed GCHRON_Tick is refused by gchron_tick_since()
+   * rather than being taken for a real reading of the first clock
+   * (design.md section 3.7).
+   */
+  GCHRON_TICK_NONE = 0,
+
+  /**
+   * Stops while the machine is suspended.
+   *
+   * `CLOCK_MONOTONIC` on POSIX; `QueryUnbiasedInterruptTimePrecise` on
+   * Windows, whose "unbiased" means precisely this - the sleep bias removed.
+   */
+  GCHRON_TICK_SUSPENDING,
+
+  /**
+   * Counts through it.
+   *
+   * `CLOCK_BOOTTIME` on Linux; `QueryInterruptTimePrecise` on Windows.
+   *
+   * There is no portable POSIX spelling: `CLOCK_BOOTTIME` is Linux's, and a
+   * POSIX system without it reports GCHRON_ERR_UNSUPPORTED rather than
+   * quietly answering with ::GCHRON_TICK_SUSPENDING instead. Falling back
+   * would hand back a clock that stops while the machine sleeps, under the
+   * name of one that does not, to the caller who asked for the difference -
+   * which is the one mistake this enum exists to prevent.
+   */
+  GCHRON_TICK_CONTINUOUS
+} GCHRON_TickSource;
+
+/**
  * @brief A reading from a monotonic counter.
  *
  * **Not an instant**, and a separate type on purpose (design.md, mistake
@@ -128,19 +183,34 @@ GCHRON_API GCHRON_Result gchron_clock_resolution(const GCHRON_Clock * clock,
  * `cjelly` will use it for frame timing.
  */
 typedef struct GCHRON_Tick {
-  int64_t nsec; ///< Nanoseconds from an unspecified origin.
+  int64_t nsec;               ///< Nanoseconds from an unspecified origin.
+  /**
+   * Which counter produced it.
+   *
+   * Carried in the value rather than trusted to the caller, because the two
+   * counters have different origins *and* different rates in any interval
+   * containing a suspend. Subtracting one from the other is not a smaller
+   * error than subtracting two instants from different epochs, and it is
+   * exactly as easy to do by accident.
+   */
+  GCHRON_TickSource source;
 } GCHRON_Tick;
 
 /**
- * @brief Read the monotonic counter.
+ * @brief Read a monotonic counter.
  *
- * `CLOCK_MONOTONIC` on POSIX, `QueryPerformanceCounter` on Windows. Unaffected
- * by anything that sets the wall clock.
+ * Neither counter is a point on any calendar, and neither is affected by
+ * anything that sets the wall clock.
  *
+ * @param source Which counter to read. ::GCHRON_TICK_NONE is
+ *   GCHRON_ERR_INVALID: there is no default, because the two answer different
+ *   questions and guessing wrong is silent.
  * @param out Receives the reading on success; untouched on failure.
- * @return GCHRON_OK, GCHRON_ERR_INVALID or GCHRON_ERR_IO.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID; GCHRON_ERR_IO;
+ *   GCHRON_ERR_UNSUPPORTED when this platform has no such counter.
  */
-GCHRON_API GCHRON_Result gchron_tick_now(GCHRON_Tick * out);
+GCHRON_API GCHRON_Result gchron_tick_now(GCHRON_TickSource source,
+    GCHRON_Tick * out);
 
 /**
  * @brief How long passed between two readings.
@@ -148,6 +218,10 @@ GCHRON_API GCHRON_Result gchron_tick_now(GCHRON_Tick * out);
  * The only operation a GCHRON_Tick has. Comparing two of them from different
  * processes, or across a reboot, is meaningless - and there is deliberately
  * no function here that would let a caller do it by accident.
+ *
+ * Two readings from *different counters* are meaningless in the same way, and
+ * are refused: GCHRON_ERR_INVALID. So is a reading whose source is
+ * ::GCHRON_TICK_NONE, which is what a zeroed struct holds.
  *
  * @param from The earlier reading.
  * @param to The later reading.
