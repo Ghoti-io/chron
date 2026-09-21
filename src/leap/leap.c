@@ -23,6 +23,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <ghoti.io/cutil/allocator.h>
+#include <ghoti.io/cutil/file.h>
+#include <ghoti.io/cutil/path.h>
+#include <ghoti.io/cutil/safemath.h>
+
 #include "../core/core_internal.h"
 #include "leap_internal.h"
 
@@ -30,6 +35,18 @@
 #ifndef GCHRON_LEAP_SECONDS_PATH
 #define GCHRON_LEAP_SECONDS_PATH "/usr/share/zoneinfo/leap-seconds.list"
 #endif
+
+/** The name inside a zoneinfo directory. */
+#define GCHRON_LEAP_SECONDS_NAME "leap-seconds.list"
+
+/**
+ * The most this file is allowed to be.
+ *
+ * The real one is about five kilobytes; the cap is generous and finite. It is
+ * a refusal rather than a truncation - half a leap-second table parses
+ * perfectly well and answers wrongly.
+ */
+#define GCHRON_LEAP_SECONDS_MAX ((size_t)(1024 * 1024))
 
 /* ------------------------------------------------------------------ */
 /* Parsing                                                            */
@@ -297,13 +314,48 @@ GCHRON_Result gchron_leap_table_parse(const char * text, size_t len,
   return GCHRON_OK;
 }
 
+/**
+ * `<dir>/leap-seconds.list`, allocated, or NULL.
+ *
+ * cutil's join owns the separator question, which matters more here than it
+ * looks: the string that was concatenated by hand always wrote one, so a
+ * `TZDIR` ending in a slash produced a doubled one. POSIX collapses that and
+ * the file still opened, which is why nobody noticed - but the same hand-
+ * written rule is the one that has to work on Windows, where the separator is
+ * not `/` at all.
+ */
+static char * leap_path_in(const char * dir,
+    const GCHRON_Allocator * allocator) {
+  size_t length = 0;
+  size_t size;
+  char * joined;
+
+  if (dir == NULL || dir[0] == '\0') {
+    return NULL;
+  }
+  if (gcu_path_join(GCU_PATH_NATIVE, dir, GCHRON_LEAP_SECONDS_NAME, NULL, 0,
+          &length) != GCU_PATH_OK
+      || !gcu_safe_add_size(length, 1, &size)) {
+    return NULL;
+  }
+  joined = (char *)gcu_allocator_malloc(allocator, size);
+  if (joined == NULL) {
+    return NULL;
+  }
+  if (gcu_path_join(GCU_PATH_NATIVE, dir, GCHRON_LEAP_SECONDS_NAME, joined,
+          size, NULL) != GCU_PATH_OK) {
+    gcu_allocator_free(allocator, joined);
+    return NULL;
+  }
+  return joined;
+}
+
 GCHRON_Result gchron_leap_table_file(const char * path,
     const GCHRON_Allocator * allocator, GCHRON_LeapTable ** out,
     GCHRON_Error * err) {
-  FILE * file = NULL;
-  char * buffer = NULL;
-  size_t size = 0;
-  size_t filled = 0;
+  void * data = NULL;
+  size_t len = 0;
+  GCU_File_Result read;
   GCHRON_Result result;
 
   if (out == NULL) {
@@ -313,57 +365,47 @@ GCHRON_Result gchron_leap_table_file(const char * path,
     allocator = gchron_allocator_default();
   }
 
-  if (path == NULL) {
-    /* $TZDIR, exactly as the zone database honours it. */
-    const char * tzdir = getenv("TZDIR");
-    if (tzdir != NULL && tzdir[0] != '\0') {
-      size_t dir_len = strlen(tzdir);
-      static const char name[] = "/leap-seconds.list";
-      char * joined = (char *)gcu_allocator_malloc(allocator,
-          dir_len + sizeof(name));
-      if (joined == NULL) {
-        return gchron_fail(err, GCHRON_ERR_OOM, GCHRON_DIAG_NONE, 0, 0);
-      }
-      memcpy(joined, tzdir, dir_len);
-      memcpy(joined + dir_len, name, sizeof(name));
-      file = fopen(joined, "rb");
-      gcu_allocator_free(allocator, joined);
-    }
-    if (file == NULL) {
-      file = fopen(GCHRON_LEAP_SECONDS_PATH, "rb");
-    }
+  if (path != NULL) {
+    read = gcu_file_read(path, GCHRON_LEAP_SECONDS_MAX, allocator, &data,
+        &len);
   }
   else {
-    file = fopen(path, "rb");
-  }
-  if (file == NULL) {
-    return gchron_fail(err, GCHRON_ERR_IO, GCHRON_DIAG_NONE, 0, 0);
+    /* $TZDIR, exactly as the zone database honours it. */
+    char * joined = leap_path_in(getenv("TZDIR"), allocator);
+    read = GCU_FILE_ERR_IO;
+    if (joined != NULL) {
+      read = gcu_file_read(joined, GCHRON_LEAP_SECONDS_MAX, allocator, &data,
+          &len);
+      gcu_allocator_free(allocator, joined);
+    }
+    /*
+     * Only a file that could not be opened sends us on to the usual place. A
+     * copy under $TZDIR that is too large, or unreadable part way through, is
+     * an answer - and quietly reading a different file instead would hide it.
+     */
+    if (read == GCU_FILE_ERR_IO) {
+      read = gcu_file_read(GCHRON_LEAP_SECONDS_PATH, GCHRON_LEAP_SECONDS_MAX,
+          allocator, &data, &len);
+    }
   }
 
-  /* The file is about five kilobytes; the cap is generous and finite. */
-  size = 1024 * 1024;
-  buffer = (char *)gcu_allocator_malloc(allocator, size);
-  if (buffer == NULL) {
-    fclose(file);
-    return gchron_fail(err, GCHRON_ERR_OOM, GCHRON_DIAG_NONE, 0, 0);
+  switch (read) {
+    case GCU_FILE_OK:
+      break;
+    case GCU_FILE_ERR_LIMIT:
+      return gchron_fail(err, GCHRON_ERR_LIMIT, GCHRON_DIAG_INPUT_TOO_LONG,
+          0, 0);
+    case GCU_FILE_ERR_OOM:
+      return gchron_fail(err, GCHRON_ERR_OOM, GCHRON_DIAG_NONE, 0, 0);
+    case GCU_FILE_ERR_INVALID:
+    case GCU_FILE_ERR_IO:
+    case GCU_FILE_RESULT_COUNT:
+      return gchron_fail(err, GCHRON_ERR_IO, GCHRON_DIAG_NONE, 0, 0);
   }
-  filled = fread(buffer, 1, size, file);
-  if (ferror(file) != 0) {
-    fclose(file);
-    gcu_allocator_free(allocator, buffer);
-    return gchron_fail(err, GCHRON_ERR_IO, GCHRON_DIAG_NONE, 0, 0);
-  }
-  if (filled == size) {
-    /* Larger than any real copy of this file; refuse rather than truncate. */
-    fclose(file);
-    gcu_allocator_free(allocator, buffer);
-    return gchron_fail(err, GCHRON_ERR_LIMIT, GCHRON_DIAG_INPUT_TOO_LONG,
-        0, 0);
-  }
-  fclose(file);
 
-  result = gchron_leap_table_parse(buffer, filled, allocator, out, err);
-  gcu_allocator_free(allocator, buffer);
+  result = gchron_leap_table_parse((const char *)data, len, allocator, out,
+      err);
+  gcu_file_free(allocator, data);
   return result;
 }
 

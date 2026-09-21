@@ -26,7 +26,9 @@
 #include <string.h>
 
 #include <ghoti.io/cutil/allocator.h>
+#include <ghoti.io/cutil/file.h>
 #include <ghoti.io/cutil/mutex.h>
+#include <ghoti.io/cutil/path.h>
 #include <ghoti.io/cutil/safemath.h>
 
 #include "../core/core_internal.h"
@@ -136,72 +138,81 @@ bool gchron_zone_id_is_safe(const char * id) {
 
 GCHRON_Result gchron_zone_read_file(const char * path, size_t max_bytes,
     const GCHRON_Allocator * allocator, void ** out_data, size_t * out_len) {
-  FILE * handle;
-  long size;
-  void * buffer;
-  size_t read_bytes;
-
-  handle = fopen(path, "rb");
-  if (handle == NULL) {
-    return GCHRON_ERR_IO;
+  /*
+   * cutil owns whole-file reading for the suite, so this is now the boundary
+   * between its result enum and ours rather than a second copy of the loop.
+   *
+   * It is not only a deduplication. What stood here sized the file with
+   * fseek() and ftell() and then read that many bytes, which reports an empty
+   * file for anything that has no size to tell - a pipe, a character device,
+   * anything under /proc - and `/etc/localtime` is a regular file by
+   * convention rather than by rule. cutil reads in chunks instead, and on
+   * Windows it opens through the wide entry point, which fopen() cannot do
+   * for a path whose bytes are UTF-8.
+   *
+   * GCU_FILE_UNLIMITED is 0, which is what this function already documented
+   * `max_bytes` of 0 to mean, so the caller-facing contract is unchanged.
+   */
+  switch (gcu_file_read(path, max_bytes, allocator, out_data, out_len)) {
+    case GCU_FILE_OK:
+      return GCHRON_OK;
+    case GCU_FILE_ERR_LIMIT:
+      return GCHRON_ERR_LIMIT;
+    case GCU_FILE_ERR_OOM:
+      return GCHRON_ERR_OOM;
+    case GCU_FILE_ERR_INVALID:
+      return GCHRON_ERR_INVALID;
+    case GCU_FILE_ERR_IO:
+    case GCU_FILE_RESULT_COUNT:
+      break;
   }
-  if (fseek(handle, 0, SEEK_END) != 0) {
-    fclose(handle);
-    return GCHRON_ERR_IO;
-  }
-  size = ftell(handle);
-  if (size < 0) {
-    fclose(handle);
-    return GCHRON_ERR_IO;
-  }
-  if (max_bytes != 0 && (size_t)size > max_bytes) {
-    /* Checked before the allocation, not after the read: the size is the
-     * whole of what an attacker controls here. */
-    fclose(handle);
-    return GCHRON_ERR_LIMIT;
-  }
-  if (fseek(handle, 0, SEEK_SET) != 0) {
-    fclose(handle);
-    return GCHRON_ERR_IO;
-  }
-
-  buffer = gcu_allocator_malloc(allocator, (size_t)size + 1);
-  if (buffer == NULL) {
-    fclose(handle);
-    return GCHRON_ERR_OOM;
-  }
-  read_bytes = fread(buffer, 1, (size_t)size, handle);
-  fclose(handle);
-  if (read_bytes != (size_t)size) {
-    gcu_allocator_free(allocator, buffer);
-    return GCHRON_ERR_IO;
-  }
-  ((char *)buffer)[size] = '\0';
-  *out_data = buffer;
-  *out_len = (size_t)size;
-  return GCHRON_OK;
+  return GCHRON_ERR_IO;
 }
 
-/** Build `<directory>/<id>`. */
+/**
+ * Build `<directory>/<id>`, through cutil's path rules.
+ *
+ * The name is checked here rather than only at the entry point, because this
+ * is the single place in the library that turns an identifier into a path,
+ * and gcu_path_join() deliberately lets an absolute right-hand side replace
+ * the left - the rule that makes a configuration override behave, and exactly
+ * the wrong one for a name that is supposed to select a file *within* a
+ * directory. gchron_zone_id_is_safe() refuses a leading separator and a `..`,
+ * which is what keeps the two rules from disagreeing.
+ *
+ * Putting it here also closes a gap. Callers were checking the identifier the
+ * *caller* supplied, and then load_zone() fell back to a name it had read out
+ * of the directory's own `tzdata.zi` without checking that one. A link line
+ * reading `L ../../../etc/shadow Foo` would have been joined unexamined.
+ *
+ * @return The path, for the caller to free, or NULL if the name is unsafe,
+ *   the join does not fit, or the allocation failed.
+ */
 static char * join_path(const GCHRON_Allocator * allocator,
     const char * directory, const char * id) {
-  size_t dir_len = strlen(directory);
-  size_t id_len = strlen(id);
-  size_t total;
+  size_t length = 0;
+  size_t size;
   char * path;
 
-  if (!gcu_safe_add_size(dir_len, id_len, &total)
-      || !gcu_safe_add_size(total, 2, &total)) {
+  if (directory == NULL || id == NULL || !gchron_zone_id_is_safe(id)) {
     return NULL;
   }
-  path = (char *)gcu_allocator_malloc(allocator, total);
+  /* Measure, then write: the join has no allocating form, because its result
+   * is always bounded by its inputs. */
+  if (gcu_path_join(GCU_PATH_NATIVE, directory, id, NULL, 0, &length)
+      != GCU_PATH_OK
+      || !gcu_safe_add_size(length, 1, &size)) {
+    return NULL;
+  }
+  path = (char *)gcu_allocator_malloc(allocator, size);
   if (path == NULL) {
     return NULL;
   }
-  memcpy(path, directory, dir_len);
-  path[dir_len] = '/';
-  memcpy(path + dir_len + 1, id, id_len);
-  path[dir_len + 1 + id_len] = '\0';
+  if (gcu_path_join(GCU_PATH_NATIVE, directory, id, path, size, NULL)
+      != GCU_PATH_OK) {
+    gcu_allocator_free(allocator, path);
+    return NULL;
+  }
   return path;
 }
 

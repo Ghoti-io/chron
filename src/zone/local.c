@@ -30,6 +30,7 @@
 #include <string.h>
 
 #include <ghoti.io/cutil/allocator.h>
+#include <ghoti.io/cutil/path.h>
 #include <ghoti.io/cutil/safemath.h>
 
 #include "../core/core_internal.h"
@@ -330,26 +331,17 @@ static bool is_tzif_file(const char * path) {
  * Join two path components, refusing to truncate.
  *
  * A truncated path is not a cosmetic problem: it names a *different file*,
- * which would then be opened and read as a zone. `snprintf` reports the
- * length it wanted, so the one case worth handling is the one where that
- * exceeds the buffer.
+ * which would then be opened and read as a zone. cutil's join makes that
+ * refusal its contract - it returns GCU_PATH_ERR_LIMIT and leaves the buffer
+ * untouched rather than writing a shorter path that still looks like one - so
+ * this is now a rename of that promise rather than a second implementation of
+ * it.
  *
  * @return `true` when the whole path fit.
  */
 static bool join_into(char * out, size_t size, const char * a,
     const char * b) {
-  int written;
-
-  if (a[0] == '\0') {
-    written = snprintf(out, size, "%s", b);
-  }
-  else if (b[0] == '\0') {
-    written = snprintf(out, size, "%s", a);
-  }
-  else {
-    written = snprintf(out, size, "%s/%s", a, b);
-  }
-  return written > 0 && (size_t)written < size;
+  return gcu_path_join(GCU_PATH_NATIVE, a, b, out, size, NULL) == GCU_PATH_OK;
 }
 
 /** Walk a directory, visiting every zone identifier under it. */

@@ -13,7 +13,12 @@
 
 #include <ghoti.io/chron/chron.h>
 #include <gtest/gtest.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -366,6 +371,119 @@ TEST(ZoneDbLinks, WhatTheDatabaseListsIsWhatItCanOpen) {
     ++checked;
   }
   EXPECT_GT(checked, 40u);
+  gchron_zonedb_destroy(db);
+}
+
+/**
+ * A throwaway zoneinfo tree, removed when the test ends.
+ *
+ * Small enough to build by hand: two directories, two copies of a real TZif
+ * file, and a `tzdata.zi` the test writes itself.
+ */
+class Fixture {
+public:
+  bool build() {
+    char pattern[] = "/tmp/gchron_link_XXXXXX";
+    const char * made = mkdtemp(pattern);
+    if (made == nullptr) {
+      return false;
+    }
+    root_ = made;
+
+    std::string tzif = read_file("/usr/share/zoneinfo/UTC");
+    if (tzif.size() < 4 || tzif.compare(0, 4, "TZif") != 0) {
+      return false;
+    }
+    return mkdir((root_ + "/db").c_str(), 0700) == 0
+        && mkdir((root_ + "/outside").c_str(), 0700) == 0
+        && write_file(root_ + "/db/Inside", tzif)
+        && write_file(root_ + "/outside/Target", tzif);
+  }
+
+  /** The database directory. */
+  std::string db() const { return root_ + "/db"; }
+
+  bool write_zi(const std::string & text) {
+    return write_file(root_ + "/db/tzdata.zi", text);
+  }
+
+  ~Fixture() {
+    if (root_.empty()) {
+      return;
+    }
+    static const char * const kFiles[] = {
+      "/db/Inside", "/db/tzdata.zi", "/outside/Target",
+    };
+    for (const char * file : kFiles) {
+      std::remove((root_ + file).c_str());
+    }
+    rmdir((root_ + "/db").c_str());
+    rmdir((root_ + "/outside").c_str());
+    rmdir(root_.c_str());
+  }
+
+private:
+  static std::string read_file(const char * path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+  }
+  static bool write_file(const std::string & path, const std::string & body) {
+    std::ofstream out(path, std::ios::binary);
+    out.write(body.data(), static_cast<std::streamsize>(body.size()));
+    return out.good();
+  }
+
+  std::string root_;
+};
+
+TEST(ZoneDbLinks, ALinkCannotNameAFileOutsideTheDatabase) {
+  /*
+   * A zone identifier that reaches this library from a document goes through
+   * gchron_zone_id_is_safe() before it is turned into a path. The *target* of
+   * a link did not: it is read out of the directory's own `tzdata.zi`, which
+   * looked trustworthy because in practice it is written by zic.
+   *
+   * It is not trustworthy in the only case that matters. A caller may open a
+   * database anywhere - $TZDIR names one, and so does an unpacked archive or
+   * a container image - and a `tzdata.zi` in it is then whatever that
+   * directory holds. `L ../outside/Target Escape` would have been joined
+   * unexamined, so a lookup of a name the database *lists* would have read
+   * and parsed a file the database does not contain.
+   *
+   * The escape is built to succeed if it is allowed to: the target is a real
+   * TZif file, so without the check this test reports GCHRON_OK for `Escape`
+   * rather than failing on the parse afterwards and leaving the reason
+   * ambiguous.
+   */
+  Fixture fixture;
+  if (!fixture.build()) {
+    GTEST_SKIP() << "could not build a fixture zoneinfo tree";
+  }
+  ASSERT_TRUE(fixture.write_zi("# version test\n"
+      "L Inside Alias\n"
+      "L ../outside/Target Escape\n"));
+
+  GCHRON_ZoneDb * db = nullptr;
+  ASSERT_EQ(GCHRON_OK,
+      gchron_zonedb_directory(fixture.db().c_str(), nullptr, nullptr, &db));
+
+  /*
+   * First that the mechanism is live in this fixture. Without this the test
+   * would pass just as well against a build in which link resolution was
+   * broken outright, which is not what it is asking.
+   */
+  const GCHRON_Zone * alias = nullptr;
+  EXPECT_EQ(GCHRON_OK, gchron_zonedb_zone(db, "Alias", &alias))
+      << "the fixture's ordinary link does not resolve, so this test cannot "
+         "tell a refused escape from a link table that never loaded";
+
+  const GCHRON_Zone * escaped = nullptr;
+  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
+      gchron_zonedb_zone(db, "Escape", &escaped))
+      << "a link target left the database directory";
+  EXPECT_EQ(nullptr, escaped);
+
   gchron_zonedb_destroy(db);
 }
 
