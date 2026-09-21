@@ -279,6 +279,7 @@
 #define gchron_zone_offset_at GHOTIIO_CHRON(gchron_zone_offset_at)
 #define gchron_zone_offsets_for_civil GHOTIIO_CHRON(gchron_zone_offsets_for_civil)
 #define gchron_zone_prev_transition GHOTIIO_CHRON(gchron_zone_prev_transition)
+#define gchron_zone_windows_mapping_at GHOTIIO_CHRON(gchron_zone_windows_mapping_at)
 #define gchron_zone_windows_mapping_count GHOTIIO_CHRON(gchron_zone_windows_mapping_count)
 #define gchron_zone_windows_mapping_version GHOTIIO_CHRON(gchron_zone_windows_mapping_version)
 #define gchron_zoned_add GHOTIIO_CHRON(gchron_zoned_add)

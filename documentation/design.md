@@ -599,7 +599,13 @@ GCHRON_Result gchron_zonedb_list(const GCHRON_ZoneDb *, ...);
   rule in the library that is stronger than `CONVENTIONS.md` §5's default,
   and the header says so.
 - Backward-compatibility links (`US/Eastern`, `Asia/Calcutta`) resolve, and
-  `gchron_zone_canonical_id()` says what they resolved to.
+  `gchron_zone_canonical_id()` says what they resolved to - **including when
+  the directory has no file for them**, which on a default Debian install is
+  all of them. `tzdata.zi` lists every link the tzdb defines and ships with
+  base tzdata, so it is what both the embedded generator and a
+  directory-backed database consult. Without it the two sources disagreed
+  about which names existed, and `gchron_zonedb_default()` inherited the
+  disagreement.
 
 ### 6.3 What a zone answers
 
@@ -1230,18 +1236,45 @@ and order lexically, so the comparison is `strcmp` and not an approximation of
 one; ties and unknown versions both go to the system database, on the
 reasoning that the operating system's copy is the one somebody is updating.
 
-**What phase 4 could not finish, and why.** The Windows zone mapping needs
-CLDR's `windowsZones.xml`, and nothing in this build reaches the network. The
-generator, the fetch script and the public `gchron_zone_id_from_windows()`
-are here; the table is not, and until someone runs
-`tools/tzdata/fetch-cldr.sh` the library reports **having no table** rather
-than an empty one. That distinction is the point: "there is no table" has a
-fix the caller can carry out, and "this table does not carry that name" -
-which is what a complete mapping says about a zone Windows added last year -
-does not. The Windows branch of `gchron_zonedb_local()` is written, marked
-`TODO(windows):`, and listed in `WINDOWS-TODO.md` as 6b, with "done" being
-that a machine set to Pacific Standard Time returns `America/Los_Angeles`.
-Per `CONVENTIONS.md` section 11 it is not claimed to work.
+**The Windows mapping, and the gap it exposed.** CLDR's `windowsZones.xml`
+gives 139 Windows zone names - `"Pacific Standard Time"` and the rest - and
+`tools/tzdata/windows_zones.py` turns it into a committed table.
+`tools/tzdata/fetch-cldr.sh` downloads it; the build never reaches the
+network, which is why this one table is committed while the tzdata one is not.
+
+Checking those 139 identifiers against the embedded database found a real
+gap, and then a larger one behind it. Seven of them - `Asia/Calcutta`,
+`Europe/Kiev`, `America/Godthab` and four more - are backward-compatibility
+names, and Debian ships those as a separate `tzdata-legacy` package that is
+not installed by default. So the embedded table, built from the files present
+in the zoneinfo directory, lacked precisely the names Windows would hand it.
+
+The larger gap was that **the same was true of every database built from a
+directory**, which on Linux is the one `gchron_zonedb_default()` picks. A
+caller on a stock Debian could not open `Asia/Calcutta`, `Europe/Kiev` or
+`US/Eastern` at all - names that CLDR, Java and a great deal of existing
+configuration still use - while the embedded database could. The default
+therefore answered differently depending on which source it had chosen, which
+is exactly what §6.2 says must not happen.
+
+Both are fixed from the same place: `tzdata.zi`, which ships with base tzdata,
+lists every link the tzdb defines, and this library already read that file for
+its version string. The generator folds those links into the embedded table
+(485 zone names became 598), and a directory-backed database consults them
+when a file is not there - for the lookup, for the listing, and for
+`gchron_zone_canonical_id()`, which a directory-backed database could not
+previously answer at all. The two sources now agree on which names exist and
+on what each resolves to, which is what a test asserts.
+
+The test sweeps every row of the Windows mapping rather than sampling,
+because the seven missing names were exactly the ones a spot check would not
+have thought to include.
+
+The Windows branch of `gchron_zonedb_local()` is written, marked
+`TODO(windows):`, and listed in `WINDOWS-TODO.md` as 6b and 6c. Nothing here
+has been run on Windows and, per `CONVENTIONS.md` section 11, it is not
+claimed to work: "done" is a machine set to Pacific Standard Time returning
+`America/Los_Angeles`.
 
 **What phase 3 built, and what found its defects.** `format.h`: the LDML
 (TR35) pattern compiler, `strftime` lowered onto the same item list, the

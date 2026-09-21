@@ -255,23 +255,27 @@ INCLUDE += $(CUTIL_CFLAGS)
 EMBEDDED_TZDATA := src/zone/tzdata_embedded.c
 
 #
-# The Windows zone mapping is generated from CLDR data the build never
-# fetches, so it may simply not be here. Exactly one of the two is compiled:
-# the generated table when it exists, and otherwise the file that reports
-# having no table at all. Not an empty table - see
-# src/zone/windows_zones_absent.c for why the distinction matters.
+# The Windows zone mapping is generated from CLDR's windowsZones.xml, and
+# unlike the tzdata table it *is* committed: it is ten kilobytes, it changes
+# about as often as Windows adds a time zone, and regenerating it needs the
+# network - so a build that had to fetch it would be a build that fails
+# without one. If it is missing, the build says what to run rather than
+# quietly producing a library whose Windows branch cannot work.
 #
 WINDOWS_ZONES := src/zone/windows_zones.c
-WINDOWS_ZONES_ABSENT := src/zone/windows_zones_absent.c
-ifneq ($(wildcard $(WINDOWS_ZONES)),)
-	WINDOWS_ZONES_SRC := $(WINDOWS_ZONES)
-else
-	WINDOWS_ZONES_SRC := $(WINDOWS_ZONES_ABSENT)
+#
+# Guarded on the goal, because this is evaluated when the Makefile is read and
+# an unguarded $(error) would break `make clean` and `make help` too - the two
+# things someone whose tree is in a strange state is most likely to reach for.
+#
+ifeq ($(wildcard $(WINDOWS_ZONES)),)
+ifeq ($(filter clean help embed-windows-zones,$(MAKECMDGOALS)),)
+$(error $(WINDOWS_ZONES) is missing. Run tools/tzdata/fetch-cldr.sh and then \
+	make embed-windows-zones)
+endif
 endif
 
-SOURCES := $(sort $(filter-out $(WINDOWS_ZONES) $(WINDOWS_ZONES_ABSENT),\
-	$(shell find src -type f -name '*.c')) \
-	$(EMBEDDED_TZDATA) $(WINDOWS_ZONES_SRC))
+SOURCES := $(sort $(shell find src -type f -name '*.c') $(EMBEDDED_TZDATA))
 
 #
 # TZDATA_DIR is where the generator reads from. A machine with no zoneinfo
@@ -1036,7 +1040,15 @@ test-asan: $(ASAN_TEST_EXECUTABLES)
 FUZZ_CC ?= clang
 FUZZ_CXX ?= clang++
 FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
-FUZZ_SAN := -fsanitize=address,undefined -fno-omit-frame-pointer -g -O1
+#
+# -fno-sanitize-recover=undefined is what makes UBSan a *finding* rather than
+# a log line. Without it undefined behaviour prints and execution continues,
+# so libFuzzer never sees a crash and the input that caused it is not saved -
+# the fuzzer runs on happily past the defect it just found. ASan aborts either
+# way; UBSan does not. `regex` had this flag and this library did not.
+#
+FUZZ_SAN := -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+	-fno-omit-frame-pointer -g -O1
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
 FUZZ_DIR := $(BUILD_DIR)/fuzz

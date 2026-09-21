@@ -244,11 +244,9 @@ time-zone database is generated at build time from the machine's zoneinfo
 tree, and `gchron_zonedb_default()` picks whichever of it and the system
 database is the newer tzdata release.
 
-The Windows zone mapping needs CLDR data the build does not fetch: run
-`tools/tzdata/fetch-cldr.sh` and then `tools/tzdata/windows_zones.py` once.
-Without it the library reports having no mapping, which is deliberately a
-different answer from having one that does not know a name. Nothing here has
-been run on Windows; the parent `WINDOWS-TODO.md` §6b and §6c say what would
-make it so.
+The Windows zone mapping is committed - 139 names from CLDR, refreshed with
+`tools/tzdata/fetch-cldr.sh` and `make embed-windows-zones`, which are the
+only two things here that touch the network. Nothing has been run on Windows;
+the parent `WINDOWS-TODO.md` §6b and §6c say what would make it so.
 
 Version 0.0.0. MIT licensed.

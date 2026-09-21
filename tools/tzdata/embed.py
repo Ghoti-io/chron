@@ -67,6 +67,33 @@ def find_version(tzdir):
     return None
 
 
+def read_links(tzdir):
+    """The tzdb's own link table, from `tzdata.zi`: {link name: target}.
+
+    Symbolic links in the directory are not enough. Distributions differ in
+    how they materialise backward-compatibility names: Debian splits them into
+    a `tzdata-legacy` package that is not installed by default, so on a stock
+    Debian there is no `Asia/Calcutta` file at all - while `tzdata.zi`, which
+    ships with base tzdata, lists every one of them.
+
+    That gap matters more here than anywhere else. The embedded table is what
+    Windows uses, and CLDR's Windows mapping names `Asia/Calcutta`,
+    `Europe/Kiev` and five more like them - so a table built only from the
+    files present would fail to resolve exactly the names Windows hands it.
+    """
+    links = {}
+    path = os.path.join(tzdir, "tzdata.zi")
+    if not os.path.exists(path):
+        return links
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            parts = line.split()
+            # `L <target> <link name>`, or the long spelling `Link`.
+            if len(parts) >= 3 and parts[0] in ("L", "Link"):
+                links[parts[2]] = parts[1]
+    return links
+
+
 def collect(tzdir):
     """Return (names, blobs) where names maps zone id -> (sha, link_target)."""
     names = {}
@@ -100,6 +127,18 @@ def collect(tzdir):
                 if target is not None and target.startswith(".."):
                     target = None
             names[zone] = (digest, target)
+
+    # Now fold in the tzdb's own link table. A name it lists that has no file
+    # here is added, pointing at its target's image; a name that does have a
+    # file keeps that file but takes its canonical name from here, because
+    # tzdata.zi states the link and a symlink only implies it.
+    for link, target in read_links(tzdir).items():
+        if target not in names:
+            continue  # a link to something this tree does not carry
+        if link in names:
+            names[link] = (names[link][0], target)
+        else:
+            names[link] = (names[target][0], target)
 
     return names, blobs
 

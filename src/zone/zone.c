@@ -362,14 +362,6 @@ GCHRON_Result gchron_zone_id_from_windows(const char * windows_name,
   if (windows_name == NULL || out == NULL) {
     return GCHRON_ERR_INVALID;
   }
-  if (gchron_windows_zones_count() == 0) {
-    /*
-     * No table was built in. Distinct from "this table does not carry that
-     * name", because this one has a fix the caller can carry out:
-     * tools/tzdata/fetch-cldr.sh, then tools/tzdata/windows_zones.py.
-     */
-    return GCHRON_ERR_UNSUPPORTED;
-  }
   id = gchron_windows_zones_lookup(windows_name);
   if (id == NULL) {
     return GCHRON_ERR_RANGE;
@@ -384,4 +376,20 @@ const char * gchron_zone_windows_mapping_version(void) {
 
 size_t gchron_zone_windows_mapping_count(void) {
   return gchron_windows_zones_count();
+}
+
+GCHRON_Result gchron_zone_windows_mapping_at(size_t index,
+    const char ** out_windows_name, const char ** out_id) {
+  const GCHRON_WindowsZone * row = gchron_windows_zones_at(index);
+
+  if (row == NULL) {
+    return GCHRON_ERR_RANGE;
+  }
+  if (out_windows_name != NULL) {
+    *out_windows_name = row->windows_name;
+  }
+  if (out_id != NULL) {
+    *out_id = row->iana_id;
+  }
+  return GCHRON_OK;
 }

@@ -537,18 +537,15 @@ GCHRON_API void gchron_zone_dump(const GCHRON_Zone * zone, FILE * stream);
  * the display name is localised, and on a French machine reads "Heure du
  * Pacifique".
  *
- * **The table may not be present.** It is generated from CLDR data that the
- * build does not fetch - see `tools/tzdata/fetch-cldr.sh`. When it is absent
- * this reports GCHRON_ERR_UNSUPPORTED, which is deliberately a different
- * answer from the GCHRON_ERR_RANGE given for a name a present table does not
- * carry: the first has a fix the caller can carry out and the second does
- * not.
+ * The table is generated from a fixed CLDR release, which
+ * gchron_zone_windows_mapping_version() names - so a name it does not carry
+ * is a zone Windows added after that release, and the version is what makes
+ * that diagnosable rather than mysterious.
  *
  * @param windows_name The Windows zone key name.
  * @param out Receives a borrowed, static identifier; never freed. Untouched
  *   on failure.
- * @return GCHRON_OK; GCHRON_ERR_UNSUPPORTED when no mapping table was built
- *   into this library; GCHRON_ERR_RANGE when the table does not carry that
+ * @return GCHRON_OK; GCHRON_ERR_RANGE when the table does not carry that
  *   name; GCHRON_ERR_INVALID.
  */
 GCHRON_API GCHRON_Result gchron_zone_id_from_windows(const char * windows_name,
@@ -557,19 +554,32 @@ GCHRON_API GCHRON_Result gchron_zone_id_from_windows(const char * windows_name,
 /**
  * @brief The CLDR release the Windows mapping came from.
  *
- * @return The version, e.g. `"48"`, or NULL when no mapping was built in.
+ * @return The version, e.g. `"release-48 (tzdata 2021a)"`. Never NULL.
  */
 GCHRON_API const char * gchron_zone_windows_mapping_version(void);
 
 /**
  * @brief How many Windows names the mapping carries.
  *
- * Zero means no table was built in, which gchron_zone_id_from_windows()
- * reports as GCHRON_ERR_UNSUPPORTED.
- *
  * @return The count.
  */
 GCHRON_API size_t gchron_zone_windows_mapping_count(void);
+
+/**
+ * @brief One row of the Windows mapping, by position.
+ *
+ * For a caller building a picker, or checking the whole table against a zone
+ * database. Sorted by the Windows name.
+ *
+ * @param index 0 .. gchron_zone_windows_mapping_count() - 1.
+ * @param out_windows_name Receives the Windows key name; borrowed and static.
+ *   May be NULL.
+ * @param out_id Receives the IANA identifier; borrowed and static. May be
+ *   NULL.
+ * @return GCHRON_OK, or GCHRON_ERR_RANGE when @p index is past the end.
+ */
+GCHRON_API GCHRON_Result gchron_zone_windows_mapping_at(size_t index,
+    const char ** out_windows_name, const char ** out_id);
 
 #ifdef __cplusplus
 }

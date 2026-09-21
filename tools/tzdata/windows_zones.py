@@ -41,13 +41,28 @@ def parse(path):
     tree = ElementTree.parse(path)
     root = tree.getroot()
 
-    version = None
-    node = root.find("./version")
-    if node is not None:
-        version = node.get("_cldrVersion") or node.get("cldrVersion")
-    if version is None:
-        # Older files carry it on the root, newer ones in a <version> element.
-        version = root.get("_cldrVersion")
+    # CLDR records two versions on <mapTimezones>, and neither is the CLDR
+    # release: `typeVersion` is the tzdata release the IANA identifiers were
+    # taken from, and `otherVersion` is Microsoft's own. The <version> element
+    # holds an unexpanded "$Revision$" and says nothing.
+    #
+    # What matters for auditing is which release of *this file* was used, so
+    # the CLDR tag is read from tools/tzdata/CLDR_TAG - the same tag
+    # fetch-cldr.sh downloaded by - and the tzdata version is carried beside
+    # it, because a mapping generated against a years-old tzdata may name
+    # zones the tzdb has since renamed.
+    node = root.find(".//mapTimezones")
+    type_version = node.get("typeVersion") if node is not None else None
+
+    tag = None
+    tag_file = pathlib.Path(__file__).resolve().parent / "CLDR_TAG"
+    if tag_file.exists():
+        tag = tag_file.read_text().strip() or None
+
+    if tag and type_version:
+        version = "%s (tzdata %s)" % (tag, type_version)
+    else:
+        version = tag or type_version
 
     rows = []
     for zone in root.findall(".//mapZone"):
@@ -188,12 +203,19 @@ def main():
             % ", ".join(DEFAULT_PATHS))
 
     rows, version = parse(source)
+    if version is None:
+        raise SystemExit(
+            "%s carries no version, and tools/tzdata/CLDR_TAG is missing or "
+            "empty.\nThe mapping must be able to say which release it came "
+            "from - gchron_zone_windows_mapping_version() reports it, and a "
+            "name this table does not carry is only explicable against a "
+            "release." % source)
     output = pathlib.Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(render(rows, version, source))
 
     print("%s: CLDR %s, %d Windows zone names"
-          % (args.output, version or "unknown",
+          % (args.output, version,
              len({other for other, t, _ in rows if t == "001"})))
     return 0
 

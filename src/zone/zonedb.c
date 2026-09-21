@@ -59,6 +59,23 @@ struct GCHRON_ZoneDb {
   char ** ids;             /**< Lazily built by gchron_zonedb_list(). */
   size_t id_count;
   bool ids_built;
+
+  /*
+   * The tzdb's own link table, from `<directory>/tzdata.zi`, built on first
+   * use. `link_text` owns the bytes; the two arrays point into it.
+   *
+   * A directory does not necessarily contain a file for every zone name the
+   * tzdb defines. Debian splits the backward-compatibility names into a
+   * `tzdata-legacy` package that is not installed by default, so on a stock
+   * Debian there is no `Asia/Calcutta`, no `Europe/Kiev` and no `US/Eastern`
+   * on disk - while `tzdata.zi`, which ships with base tzdata and which this
+   * database already reads for its version, lists every one of them.
+   */
+  char * link_text;
+  const char ** link_names;   /**< Sorted, for a binary search. */
+  const char ** link_targets;
+  size_t link_count;
+  bool links_built;
 };
 
 /** Duplicate a string through an allocator. */
@@ -312,6 +329,9 @@ void gchron_zonedb_destroy(GCHRON_ZoneDb * db) {
   gcu_allocator_free(allocator, db->ids);
   gcu_allocator_free(allocator, db->directory);
   gcu_allocator_free(allocator, db->version);
+  gcu_allocator_free(allocator, db->link_text);
+  gcu_allocator_free(allocator, (void *)db->link_names);
+  gcu_allocator_free(allocator, (void *)db->link_targets);
   if (db->lock_ready) {
     GCU_MUTEX_DESTROY(db->lock);
   }
@@ -568,6 +588,163 @@ GCHRON_Result gchron_zonedb_memory(const void * blob, size_t len,
  *--------------------------------------------------------------------------*/
 
 /** Load a zone from the database's directory. The caller holds the lock. */
+
+/** Order two link names, for qsort and bsearch over parallel arrays. */
+static int compare_link(const void * a, const void * b) {
+  return strcmp(*(const char * const *)a, *(const char * const *)b);
+}
+
+/**
+ * Parse `<directory>/tzdata.zi` into the link table. The caller holds the
+ * lock. Failure is not an error: a directory with no `tzdata.zi` simply has
+ * no links, and every lookup then behaves as it did before.
+ */
+static void build_links(GCHRON_ZoneDb * db) {
+  char * path;
+  void * data = NULL;
+  size_t len = 0;
+  size_t count = 0;
+  size_t index = 0;
+  char * cursor;
+  char * end;
+
+  db->links_built = true;
+  if (db->directory == NULL) {
+    return;
+  }
+  path = join_path(db->allocator, db->directory, "tzdata.zi");
+  if (path == NULL) {
+    return;
+  }
+  if (gchron_zone_read_file(path, 4 * 1024 * 1024, db->allocator, &data, &len)
+      != GCHRON_OK) {
+    gcu_allocator_free(db->allocator, path);
+    return;
+  }
+  gcu_allocator_free(db->allocator, path);
+
+  /* Count first, so the arrays are allocated once. */
+  cursor = (char *)data;
+  end = cursor + len;
+  while (cursor < end) {
+    if ((cursor == (char *)data || cursor[-1] == '\n')
+        && (cursor[0] == 'L' || cursor[0] == 'l')
+        && cursor + 1 < end && (cursor[1] == ' ' || cursor[1] == '\t')) {
+      count += 1;
+    }
+    cursor += 1;
+  }
+  if (count == 0) {
+    gcu_allocator_free(db->allocator, data);
+    return;
+  }
+
+  db->link_names = (const char **)gcu_allocator_malloc(db->allocator,
+      count * sizeof(char *));
+  db->link_targets = (const char **)gcu_allocator_malloc(db->allocator,
+      count * sizeof(char *));
+  if (db->link_names == NULL || db->link_targets == NULL) {
+    gcu_allocator_free(db->allocator, (void *)db->link_names);
+    gcu_allocator_free(db->allocator, (void *)db->link_targets);
+    db->link_names = NULL;
+    db->link_targets = NULL;
+    gcu_allocator_free(db->allocator, data);
+    return;
+  }
+
+  /*
+   * Rewrite the text in place into NUL-terminated fields. The buffer is kept
+   * as `link_text`, so every name and target is a pointer into it and there
+   * is one allocation rather than two per link.
+   */
+  cursor = (char *)data;
+  while (cursor < end && index < count) {
+    char * line = cursor;
+    char * stop = line;
+    char * target;
+    char * name;
+
+    while (stop < end && *stop != '\n') {
+      stop += 1;
+    }
+    cursor = (stop < end) ? stop + 1 : end;
+    if (*line != 'L' && *line != 'l') {
+      continue;
+    }
+    *stop = '\0';
+
+    /* `L <target> <link name>`, whitespace-separated. */
+    target = line + 1;
+    while (*target == ' ' || *target == '\t') { target += 1; }
+    name = target;
+    while (*name != '\0' && *name != ' ' && *name != '\t') { name += 1; }
+    if (*name == '\0') {
+      continue;
+    }
+    *name = '\0';
+    name += 1;
+    while (*name == ' ' || *name == '\t') { name += 1; }
+    {
+      char * tail = name;
+      while (*tail != '\0' && *tail != ' ' && *tail != '\t'
+          && *tail != '\r') {
+        tail += 1;
+      }
+      *tail = '\0';
+    }
+    if (*name == '\0' || *target == '\0') {
+      continue;
+    }
+    db->link_names[index] = name;
+    db->link_targets[index] = target;
+    index += 1;
+  }
+  db->link_count = index;
+  db->link_text = (char *)data;
+
+  /*
+   * Sorted by name so a lookup is a binary search. The two arrays are kept
+   * parallel by sorting an index-free copy: qsort on `link_names` alone would
+   * leave `link_targets` behind, so they are sorted together by hand.
+   */
+  {
+    size_t i;
+    size_t j;
+    for (i = 1; i < db->link_count; ++i) {
+      const char * name = db->link_names[i];
+      const char * target = db->link_targets[i];
+      j = i;
+      while (j > 0 && strcmp(db->link_names[j - 1], name) > 0) {
+        db->link_names[j] = db->link_names[j - 1];
+        db->link_targets[j] = db->link_targets[j - 1];
+        j -= 1;
+      }
+      db->link_names[j] = name;
+      db->link_targets[j] = target;
+    }
+  }
+}
+
+/**
+ * What the tzdb says @p id is a link to, or NULL. The caller holds the lock.
+ */
+static const char * link_target(GCHRON_ZoneDb * db, const char * id) {
+  const char ** found;
+
+  if (!db->links_built) {
+    build_links(db);
+  }
+  if (db->link_count == 0) {
+    return NULL;
+  }
+  found = (const char **)bsearch(&id, db->link_names, db->link_count,
+      sizeof(char *), compare_link);
+  if (found == NULL) {
+    return NULL;
+  }
+  return db->link_targets[found - db->link_names];
+}
+
 static GCHRON_Result load_zone(GCHRON_ZoneDb * db, const char * id,
     GCHRON_Zone ** out) {
   char * path;
@@ -600,11 +777,35 @@ static GCHRON_Result load_zone(GCHRON_ZoneDb * db, const char * id,
       db->allocator, &data, &len);
   gcu_allocator_free(db->allocator, path);
   if (result == GCHRON_ERR_IO) {
-    /* No such file. The zone is not in this database, which is a different
-     * thing from the file being unreadable - but the C library does not tell
-     * the two apart through fopen alone, and UNSUPPORTED is the answer a
-     * caller acts on. */
-    return GCHRON_ERR_UNSUPPORTED;
+    /*
+     * No file of that name. Before giving up, ask the tzdb's own link table:
+     * a directory need not contain a file for every name the tzdb defines,
+     * and Debian's default install has none of the backward-compatibility
+     * names - no `Asia/Calcutta`, no `Europe/Kiev`, no `US/Eastern` - while
+     * `tzdata.zi` beside them lists every one.
+     *
+     * Without this, a caller on a stock Debian could not open names that
+     * CLDR, Java and a great deal of existing configuration still use, and
+     * the embedded database could while the system one could not.
+     */
+    const char * target = link_target(db, id);
+    if (target != NULL && strcmp(target, id) != 0) {
+      char * link_path = join_path(db->allocator, db->directory, target);
+      if (link_path != NULL) {
+        result = gchron_zone_read_file(link_path, db->limits.max_tzif_bytes,
+            db->allocator, &data, &len);
+        gcu_allocator_free(db->allocator, link_path);
+      }
+    }
+    if (result != GCHRON_OK) {
+      /*
+       * The zone is not in this database, which is a different thing from
+       * the file being unreadable - but the C library does not tell the two
+       * apart through fopen alone, and UNSUPPORTED is the answer a caller
+       * acts on.
+       */
+      return GCHRON_ERR_UNSUPPORTED;
+    }
   }
   if (result != GCHRON_OK) {
     return result;
@@ -660,10 +861,20 @@ GCHRON_Result gchron_zonedb_zone(GCHRON_ZoneDb * db, const char * id,
    * available to each, rather than an invention by either.
    */
   zone->canonical_id = zone->id;
-  if (db->source == GCHRON_ZONE_SOURCE_EMBEDDED) {
-    const GCHRON_EmbeddedZone * entry = gchron_tzdata_embedded_find(id);
-    if (entry != NULL && entry->canonical != NULL) {
-      char * canonical = dup_string(db->allocator, entry->canonical);
+  {
+    const char * canonical_name = NULL;
+    if (db->source == GCHRON_ZONE_SOURCE_EMBEDDED) {
+      const GCHRON_EmbeddedZone * entry = gchron_tzdata_embedded_find(id);
+      canonical_name = (entry != NULL) ? entry->canonical : NULL;
+    }
+    else if (db->directory != NULL) {
+      /* The same `tzdata.zi` that made the lookup work also says what the
+       * name resolved to, so a directory-backed database can now answer
+       * gchron_zone_canonical_id() as truthfully as the embedded one. */
+      canonical_name = link_target(db, id);
+    }
+    if (canonical_name != NULL && strcmp(canonical_name, id) != 0) {
+      char * canonical = dup_string(db->allocator, canonical_name);
       if (canonical == NULL) {
         gchron_zone_free(zone);
         db_unlock(db);
@@ -917,6 +1128,31 @@ GCHRON_Result gchron_zonedb_ids_of(GCHRON_ZoneDb * db,
       return GCHRON_ERR_UNSUPPORTED;
     }
     result = gchron_zonedb_walk_directory(db, db->directory, collect_one);
+    if (result == GCHRON_OK) {
+      /*
+       * Then the link names the tzdb defines but this directory has no file
+       * for. A lookup resolves them, so a listing that left them out would
+       * mean `list` and `zone` disagreed about what the database contains -
+       * and the listing is what a caller enumerates to build a picker.
+       */
+      size_t i;
+      if (!db->links_built) {
+        build_links(db);
+      }
+      for (i = 0; i < db->link_count && result == GCHRON_OK; ++i) {
+        size_t j;
+        bool already = false;
+        for (j = 0; j < db->id_count; ++j) {
+          if (strcmp(db->ids[j], db->link_names[i]) == 0) {
+            already = true;
+            break;
+          }
+        }
+        if (!already) {
+          result = collect_one(db, db->link_names[i]);
+        }
+      }
+    }
     if (result == GCHRON_OK) {
       /* Sorted, so that a listing is stable across filesystems: readdir
        * returns entries in whatever order the directory happens to hold, and

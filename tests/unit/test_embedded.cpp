@@ -199,36 +199,174 @@ TEST(ZoneDbDefault, ItPrefersWhicheverDatabaseIsNewerAndSaysWhichItChose) {
   gchron_zonedb_destroy(db);
 }
 
-TEST(WindowsZones, TheMappingIsAbsentRatherThanEmptyWhenNotGenerated) {
+TEST(WindowsZones, EveryNameItCarriesResolvesInTheEmbeddedDatabase) {
   /*
-   * The build never reaches the network, so on most machines the CLDR table
-   * has not been generated and src/zone/windows_zones_absent.c stands in for
-   * it. The distinction it keeps is the point: "there is no table" has a fix
-   * the caller can carry out - run tools/tzdata/fetch-cldr.sh - and "this
-   * table does not know that name" does not.
+   * This is the property the whole mapping exists for: on Windows,
+   * gchron_zonedb_local() takes what GetDynamicTimeZoneInformation() reports,
+   * looks it up here, and hands the result to gchron_zonedb_zone(). If any
+   * step disagrees the zone is simply unavailable, and this is the test that
+   * would say so.
    *
-   * This runs on every platform because the table is platform-independent
-   * data; only the code that consults it is Windows-only.
+   * It caught a real gap. CLDR names `Asia/Calcutta`, `Europe/Kiev` and five
+   * more backward-compatibility identifiers, and Debian ships those as a
+   * separate `tzdata-legacy` package that is not installed - so an embedded
+   * table built from the files present lacked exactly the names Windows would
+   * hand it. The generator now folds in `tzdata.zi`'s own link table, which
+   * ships with base tzdata and lists every one.
    */
   size_t count = gchron_zone_windows_mapping_count();
-  const char * id = nullptr;
-  if (count == 0) {
-    EXPECT_EQ(nullptr, gchron_zone_windows_mapping_version());
-    EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
-        gchron_zone_id_from_windows("Pacific Standard Time", &id));
-    return;
-  }
+  ASSERT_GT(count, 100u) << "the Windows mapping is missing or truncated";
+  ASSERT_NE(nullptr, gchron_zone_windows_mapping_version());
 
-  // Generated: then it must answer the case WINDOWS-TODO.md 6b names as done.
+  GCHRON_ZoneDb * db = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_embedded(nullptr, nullptr, &db));
+
+  // The case WINDOWS-TODO.md 6b names as done.
+  const char * id = nullptr;
   ASSERT_EQ(GCHRON_OK,
       gchron_zone_id_from_windows("Pacific Standard Time", &id));
   EXPECT_STREQ("America/Los_Angeles", id);
-  EXPECT_NE(nullptr, gchron_zone_windows_mapping_version());
 
-  // A name a present table does not carry is RANGE, not UNSUPPORTED: there
-  // is a table, it simply predates that Windows release.
+  // Every row, not a sample: the seven that were missing were exactly the
+  // ones a spot check would not have named.
+  size_t checked = 0;
+  for (size_t i = 0; i < count; ++i) {
+    const char * name = nullptr;
+    const char * mapped = nullptr;
+    ASSERT_EQ(GCHRON_OK,
+        gchron_zone_windows_mapping_at(i, &name, &mapped));
+    ASSERT_NE(nullptr, name);
+    ASSERT_NE(nullptr, mapped);
+
+    // Sorted, because the lookup binary-searches it.
+    if (i > 0) {
+      const char * previous = nullptr;
+      ASSERT_EQ(GCHRON_OK,
+          gchron_zone_windows_mapping_at(i - 1, &previous, nullptr));
+      ASSERT_LT(std::strcmp(previous, name), 0);
+    }
+
+    // Reachable through the lookup a caller would use...
+    const char * looked_up = nullptr;
+    ASSERT_EQ(GCHRON_OK, gchron_zone_id_from_windows(name, &looked_up))
+        << name;
+    EXPECT_STREQ(mapped, looked_up);
+
+    // ...and openable by the database Windows will actually be using.
+    const GCHRON_Zone * zone = nullptr;
+    EXPECT_EQ(GCHRON_OK, gchron_zonedb_zone(db, mapped, &zone))
+        << name << " maps to " << mapped
+        << ", which the embedded database cannot open";
+    ++checked;
+  }
+  EXPECT_EQ(count, checked);
+  EXPECT_EQ(GCHRON_ERR_RANGE,
+      gchron_zone_windows_mapping_at(count, nullptr, nullptr));
+
+  // A name no CLDR release carries is RANGE - there is a table, it simply
+  // predates that Windows release.
   EXPECT_EQ(GCHRON_ERR_RANGE,
       gchron_zone_id_from_windows("No Such Standard Time", &id));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_zone_id_from_windows(nullptr, &id));
+
+  gchron_zonedb_destroy(db);
+}
+
+
+TEST(ZoneDbLinks, ADirectoryDatabaseResolvesTheTzdbsLinksToo) {
+  /*
+   * A zoneinfo directory need not contain a file for every name the tzdb
+   * defines. Debian splits the backward-compatibility names into a
+   * `tzdata-legacy` package that is not installed by default, so on a stock
+   * Debian there is no `Asia/Calcutta`, no `Europe/Kiev` and no `US/Eastern`
+   * on disk - while `tzdata.zi`, which ships with base tzdata and which the
+   * database already reads for its version, lists every one.
+   *
+   * Before this, the embedded database could open those names and the system
+   * one could not, so gchron_zonedb_default() answered differently depending
+   * on which it had chosen. They are names CLDR's Windows mapping uses, and
+   * that Java and a great deal of existing configuration still use.
+   */
+  GCHRON_ZoneDb * system_db = nullptr;
+  if (gchron_zonedb_system(nullptr, nullptr, &system_db) != GCHRON_OK) {
+    GTEST_SKIP() << "no system zone database on this machine";
+  }
+  GCHRON_ZoneDb * embedded_db = nullptr;
+  ASSERT_EQ(GCHRON_OK,
+      gchron_zonedb_embedded(nullptr, nullptr, &embedded_db));
+
+  static const struct {
+    const char * link;
+    const char * canonical;
+  } kLinks[] = {
+    { "Asia/Calcutta", "Asia/Kolkata" },
+    { "Europe/Kiev", "Europe/Kyiv" },
+    { "America/Godthab", "America/Nuuk" },
+    { "Asia/Rangoon", "Asia/Yangon" },
+    { "US/Eastern", "America/New_York" },
+    { "GMT", nullptr },  // a link whose target varies by release
+  };
+
+  for (const auto & row : kLinks) {
+    const GCHRON_Zone * from_system = nullptr;
+    const GCHRON_Zone * from_embedded = nullptr;
+    ASSERT_EQ(GCHRON_OK,
+        gchron_zonedb_zone(system_db, row.link, &from_system)) << row.link;
+    ASSERT_EQ(GCHRON_OK,
+        gchron_zonedb_zone(embedded_db, row.link, &from_embedded))
+        << row.link;
+
+    // Both sources must agree on what it resolved to...
+    const char * a = gchron_zone_canonical_id(from_system);
+    const char * b = gchron_zone_canonical_id(from_embedded);
+    ASSERT_NE(nullptr, a);
+    ASSERT_NE(nullptr, b);
+    EXPECT_STREQ(b, a) << row.link;
+    if (row.canonical != nullptr) {
+      EXPECT_STREQ(row.canonical, a) << row.link;
+    }
+
+    // ...and on what it means.
+    GCHRON_Instant when{ 1789918200, 0 };
+    GCHRON_ZoneInfo x{};
+    GCHRON_ZoneInfo y{};
+    ASSERT_EQ(GCHRON_OK, gchron_zone_offset_at(from_system, when, &x));
+    ASSERT_EQ(GCHRON_OK, gchron_zone_offset_at(from_embedded, when, &y));
+    EXPECT_EQ(y.offset_sec, x.offset_sec) << row.link;
+    EXPECT_STREQ(y.abbreviation, x.abbreviation) << row.link;
+  }
+
+  gchron_zonedb_destroy(embedded_db);
+  gchron_zonedb_destroy(system_db);
+}
+
+TEST(ZoneDbLinks, WhatTheDatabaseListsIsWhatItCanOpen) {
+  /*
+   * The listing and the lookup must agree about what the database contains.
+   * They are built by different code - one walks a directory and then folds
+   * in the link table, the other tries a file and then falls back to it - so
+   * this is a real check and not a restatement.
+   */
+  GCHRON_ZoneDb * db = nullptr;
+  if (gchron_zonedb_system(nullptr, nullptr, &db) != GCHRON_OK) {
+    GTEST_SKIP() << "no system zone database on this machine";
+  }
+  const char * const * ids = nullptr;
+  size_t count = 0;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_list(db, &ids, &count));
+  ASSERT_GT(count, 400u);
+
+  // Every tenth, so the test stays quick while still covering the links,
+  // which sort throughout the list rather than clustering at the end.
+  size_t checked = 0;
+  for (size_t i = 0; i < count; i += 10) {
+    const GCHRON_Zone * zone = nullptr;
+    ASSERT_EQ(GCHRON_OK, gchron_zonedb_zone(db, ids[i], &zone))
+        << ids[i] << " is listed but cannot be opened";
+    ++checked;
+  }
+  EXPECT_GT(checked, 40u);
+  gchron_zonedb_destroy(db);
 }
 
 } // namespace

@@ -205,22 +205,15 @@ GCHRON_Result gchron_zonedb_local(GCHRON_ZoneDb * db,
    * Standard Time returns America/Los_Angeles.
    *
    * Windows reports a zone by a name of its own - "Pacific Standard Time" -
-   * and CLDR publishes what those mean in IANA terms. Two things can be
-   * missing here and they are different problems: the mapping table may never
-   * have been generated (the build does not fetch CLDR), or it may be present
-   * and not know a name Windows has added since. Only the first is worth a
-   * distinct report, because only the first has a fix the caller can carry
-   * out.
+   * and CLDR publishes what those mean in IANA terms. A name the table does
+   * not carry is a zone Windows added after the CLDR release it was built
+   * from, which gchron_zone_windows_mapping_version() names.
    */
   {
     DYNAMIC_TIME_ZONE_INFORMATION info;
     char name[128];
     const char * id;
 
-    if (gchron_windows_zones_count() == 0) {
-      /* No table was ever generated; tools/tzdata/fetch-cldr.sh is the fix. */
-      return GCHRON_ERR_UNSUPPORTED;
-    }
     if (GetDynamicTimeZoneInformation(&info) == TIME_ZONE_ID_INVALID) {
       return GCHRON_ERR_IO;
     }
