@@ -10,9 +10,19 @@
  * ICU is the authority on the question; chron is the implementation being
  * measured.
  *
- * Reads `<pattern> <TAB> <zone> <TAB> <unix millis>` on standard input and
- * writes `<pattern> <TAB> <zone> <TAB> <millis> <TAB> <formatted>` on
- * standard output, or `ERR` where ICU itself refused. One line in, one line
+ * Two modes, chosen by the single argument.
+ *
+ * Without one, it *writes*: reads `<pattern> <TAB> <zone> <TAB> <unix millis>`
+ * and writes `<pattern> <TAB> <zone> <TAB> <millis> <TAB> <formatted>`.
+ *
+ * With `parse`, it *reads back*: takes that four-field line and replaces the
+ * last field with the millis ICU recovers from its own text. That is what
+ * makes the parse differential a fair comparison - both sides are handed the
+ * same bytes, so a pattern that cannot carry a millisecond or the seconds of
+ * a sub-minute offset loses them on both sides and the two still agree
+ * (design.md section 8.7).
+ *
+ * Either way `ERR` marks a line ICU itself refused. One line in, one line
  * out, so a diff names the exact input that disagreed.
  *
  * Built by `make tools` only when `pkg-config icu-i18n` succeeds.
@@ -31,7 +41,8 @@
 #include <iostream>
 #include <string>
 
-int main() {
+int main(int argc, char ** argv) {
+  const bool parsing = (argc > 1 && std::string(argv[1]) == "parse");
   std::string line;
 
   while (std::getline(std::cin, line)) {
@@ -63,9 +74,35 @@ int main() {
     format.setTimeZone(*tz);
     delete tz;
 
+    std::string utf8;
+    if (parsing) {
+      // The text ICU wrote, on the fourth field, read back by ICU.
+      size_t third = line.find('\t', second + 1);
+      std::string text =
+          (third == std::string::npos) ? std::string() : line.substr(third + 1);
+      if (text == "ERR" || text.empty()) {
+        std::printf("%s\t%s\t%.0f\tERR\n", pattern.c_str(), zone.c_str(),
+            millis);
+        continue;
+      }
+      // Lenient off: the mode being measured is the strict one, and ICU's
+      // default would take `2026-9-8` for `yyyy-MM-dd`.
+      format.setLenient(false);
+      UErrorCode parse_status = U_ZERO_ERROR;
+      UDate back = format.parse(
+          icu::UnicodeString::fromUTF8(icu::StringPiece(text)), parse_status);
+      if (U_FAILURE(parse_status)) {
+        std::printf("%s\t%s\t%.0f\tERR\n", pattern.c_str(), zone.c_str(),
+            millis);
+        continue;
+      }
+      std::printf("%s\t%s\t%.0f\t%.0f\n", pattern.c_str(), zone.c_str(),
+          millis, back);
+      continue;
+    }
+
     icu::UnicodeString out;
     format.format((UDate)millis, out);
-    std::string utf8;
     out.toUTF8String(utf8);
 
     // Tabs and newlines would break the line protocol, and no date format

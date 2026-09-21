@@ -148,6 +148,16 @@ typedef enum {
   GCHRON_DIAG_PATTERN_LETTER_RUN,      ///< More of one letter than any field uses.
   GCHRON_DIAG_WEEK_YEAR_WITHOUT_WEEK,  ///< `YYYY` with no week letter beside it.
 
+  /* Reading text back through a pattern (format.h, design.md section 8.7). */
+  GCHRON_DIAG_PATTERN_LITERAL,         ///< The text lacks a literal the pattern requires.
+  GCHRON_DIAG_PATTERN_DIGITS,          ///< A numeric field had no digits, or too few.
+  GCHRON_DIAG_PATTERN_NAME,            ///< No name the provider gives matches here.
+  GCHRON_DIAG_PATTERN_TRAILING,        ///< The pattern ran out before the text did.
+  GCHRON_DIAG_PATTERN_NOT_INVERTIBLE,  ///< `z`, `v` or `O`: reading one needs CLDR.
+  GCHRON_DIAG_PATTERN_NEEDS_CLOCK,     ///< A two-digit year, and no clock to place it.
+  GCHRON_DIAG_PATTERN_FIELD_MISSING,   ///< Resolution wanted a field the text had not.
+  GCHRON_DIAG_PATTERN_FIELD_CONFLICT,  ///< Two fields describe the same thing, differently.
+
   /* Leap seconds (leap.h). */
   GCHRON_DIAG_LEAP_TABLE_MALFORMED,    ///< A `leap-seconds.list` line did not parse.
   GCHRON_DIAG_LEAP_TABLE_ORDER,        ///< Its entries are not in time order.

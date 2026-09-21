@@ -37,6 +37,8 @@ typedef struct Builder {
   size_t literal_bytes;
   size_t literal_capacity;
   size_t max_items;
+  /** Where in the pattern the item being pushed came from. */
+  size_t pattern_at;
 } Builder;
 
 /** Append an item, growing the list. */
@@ -63,6 +65,7 @@ static GCHRON_Result push_item(Builder * b, GCHRON_ItemKind kind, int count) {
   b->items[b->item_count].count = (uint16_t)count;
   b->items[b->item_count].literal_at = 0;
   b->items[b->item_count].literal_len = 0;
+  b->items[b->item_count].pattern_at = (uint32_t)b->pattern_at;
   b->item_count += 1;
   return GCHRON_OK;
 }
@@ -231,6 +234,7 @@ static GCHRON_Result compile_ldml(Builder * b, const char * pattern,
         return gchron_fail(err, GCHRON_ERR_FORMAT,
             GCHRON_DIAG_PATTERN_LETTER_RUN, start, i - start);
       }
+      b->pattern_at = start;
       kind = ldml_kind(c);
       if (kind < 0) {
         /*
@@ -425,6 +429,7 @@ static GCHRON_Result compile_strftime(Builder * b, const char * pattern,
         specifier = pattern[i + 2];
         consumed = 3;
       }
+      b->pattern_at = at;
       {
         GCHRON_Result result = lower_strftime(b, specifier, at, err);
         if (result != GCHRON_OK) {

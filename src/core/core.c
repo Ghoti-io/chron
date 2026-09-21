@@ -82,6 +82,22 @@ static const char * const DIAG_STRINGS[GCHRON_DIAG_COUNT] = {
       "more of one pattern letter than any field uses",
   [GCHRON_DIAG_WEEK_YEAR_WITHOUT_WEEK] =
       "a week-based year with no week letter beside it",
+  [GCHRON_DIAG_PATTERN_LITERAL] =
+      "the text does not carry a literal the pattern requires",
+  [GCHRON_DIAG_PATTERN_DIGITS] =
+      "a numeric field had no digits, or fewer than the pattern requires",
+  [GCHRON_DIAG_PATTERN_NAME] =
+      "no name this names provider gives matches the text here",
+  [GCHRON_DIAG_PATTERN_TRAILING] =
+      "the pattern was satisfied before the text ran out",
+  [GCHRON_DIAG_PATTERN_NOT_INVERTIBLE] =
+      "this pattern letter names a zone loosely and cannot be read back",
+  [GCHRON_DIAG_PATTERN_NEEDS_CLOCK] =
+      "a two-digit year needs a clock to say which century it is in",
+  [GCHRON_DIAG_PATTERN_FIELD_MISSING] =
+      "the text did not supply a field this value needs",
+  [GCHRON_DIAG_PATTERN_FIELD_CONFLICT] =
+      "two fields describe the same thing and disagree",
   [GCHRON_DIAG_LEAP_TABLE_MALFORMED] =
       "a leap-seconds.list line that does not parse",
   [GCHRON_DIAG_LEAP_TABLE_ORDER] =

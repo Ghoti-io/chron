@@ -846,6 +846,115 @@ unspecified. There is no allocating variant; the longest output of any named
 format is bounded and small, and a compiled custom format reports its own
 maximum through `gchron_format_max_length()`.
 
+### 8.7 The same pattern, read backwards
+
+A compiled `GCHRON_Format` also **parses**. `gchron_format_parse()` walks the
+same item list `gchron_format_emit()` walks, consuming text where the emitter
+would have produced it.
+
+This exists because `strptime` is POSIX and **is not in the Windows C
+runtime at all**, so every cross-platform program that reads a timestamp out
+of a log line, a CSV column or a config file either writes the scanner again
+or carries a `#ifdef`. It is also nearly free here: the pattern compiler, the
+item list, the names provider and the calendar plumbing were all built for
+§8.3, and the parser is their inverse rather than a second subsystem.
+
+**Parsing yields fields, not a value.** `%H:%M` names no date; `yyyy-MM` names
+no day. A function returning a `GCHRON_DateTime` would have to invent the
+missing parts, and inventing them is how `strptime` earns its reputation:
+glibc's writes into a `struct tm` the caller supplied and leaves untouched
+whatever the caller failed to initialise, so the bug is silent and the value
+is plausible. `gchron_format_parse()` fills a `GCHRON_ParsedFields`, which
+carries a **`present` bitmask** saying which fields the text actually
+supplied. Nothing is defaulted, because §3.7 says a zeroed struct refuses
+rather than guesses.
+
+Turning fields into a value is a second, explicit call -
+`gchron_parsed_to_date()`, `_to_datetime()`, `_to_offset()`, `_to_zoned()` -
+and each says exactly which field it was missing when it cannot. A caller who
+wants "midnight when no time was given" writes that line themselves, where a
+reader can see it.
+
+**Strict is the zero value.** `GCHRON_PATTERN_STRICT` is 0: literals match
+byte for byte and a name must match a name the provider gives. ICU's own
+default is far looser - it will take `2026-9-8` for `yyyy-MM-dd` - and a
+lenient mode is a later addition that must be asked for by name.
+
+**The letter count is a minimum, until another number follows.** This is
+TR35's *adjacent numeric value parsing*, and the reader has to share it with
+the emitter, which pads to the count as a minimum rather than a width: `uuu`
+on the year 2026 writes four digits. A reader that demanded exactly three
+took `202` and then failed on the `6` - so `uuu-MM-dd`, a pattern somebody
+might really type, could not read what the same pattern had just written.
+The count becomes an exact width only where nothing else could find the
+boundary: a numeric field immediately followed by another numeric field, as
+in `uuuuMMdd`.
+
+That leaves patterns which are genuinely ambiguous - `DHu` writes `264152026`
+and no rule recovers the three numbers from it - and there the reader answers
+what the widths say, which is what ICU answers too. Where the text cannot be
+read at all, this library refuses. ICU does not always: asked to read back its
+own output for `g6` it returns a year around 62000 rather than an error, and a
+silently wrong date is the worse of the two answers.
+
+**A field read twice must agree with itself.** The same rule as the
+cross-field check below, applied to a pattern naming one field more than
+once: `DHDu` carries two day-of-year fields, and a later one silently
+replacing an earlier one would accept text that contradicts itself. The hour
+is compared within its cycle rather than across it, since `h` reads 3 where
+`H` reads 15 for the same moment.
+
+**Range is checked where the digits are read**, not only where they are
+resolved. `uuuu-MM-d.'T'hH:mm` writes `2026-09-21.T315:30`; without the check
+the `h` took `31`, the `H` after it took the leftover `5`, the second hour
+overwrote the first, and the impossible value disappeared into a plausible
+wrong time. A field never records a value it cannot hold.
+
+**Some letters do not invert, and say so.** `z` is the zone abbreviation, and
+`EST` is three different zones in two hemispheres; `v` and `O` are worse.
+Reading them requires a locale database and a policy for choosing between the
+candidates, which is ICU's job and §14's non-goal. They return
+`GCHRON_ERR_UNSUPPORTED` at *compile* time when a format is compiled for
+parsing, so the refusal arrives with a pattern offset rather than on the
+first line of a log file. `VV` - the zone identifier - inverts exactly and is
+supported.
+
+**A two-digit year needs to know what year it is**, and takes a
+`GCHRON_Clock` to find out, exactly as §8.1's RFC 850 parser does. Without
+one, `yy` is `GCHRON_ERR_INVALID`: there is no safe default, and the
+sliding-window constant that ICU and Java hide in a static is the kind of
+global §3.8 refuses.
+
+**Redundant fields are checked, not ignored.** A pattern carrying both `E`
+and `dd` gives the parser two answers about the same day. `gchron_parsed_to_*`
+reports `GCHRON_ERR_FORMAT` with `GCHRON_DIAG_FIELD_CONFLICT` when they
+disagree, rather than preferring one. This is deliberately stricter than the
+HTTP-date parser, which ignores the weekday because RFC 9110 tells it to.
+
+ICU is the oracle here too: `tools/oracle/icu_format.cpp` grew a parse mode,
+and the meaning of a pattern applied to text is defined as what
+`icu::SimpleDateFormat::parse()` does with it in the root locale - with the
+lenience turned off, since that is the mode being measured.
+
+The differential is deliberately shaped so that both sides read *ICU's own
+bytes*: ICU formats an instant, and then ICU and this library are each asked
+which instant that text names. Comparing against the instant that went in
+instead would report a hundred failures that are nothing but the pattern
+doing its job - `HH:mm:ss` has nowhere to put a millisecond, and `XXX`
+truncates Europe/Paris's 1900 offset of +00:09:21 to +00:09. Both sides lose
+the same information from the same bytes, so they still agree.
+`make check-oracle-ldml-parse`: 576 of 576.
+
+The round trip is a unit test rather than a fuzz property, and that is a
+decision rather than an omission. `parse(format(x)) == x` is only a theorem
+for patterns whose numeric fields have boundaries; over patterns a mutator
+invents it is false, and three successively weaker statements of it were
+false too. `tests/fuzz/fuzz_scan.cpp` asserts what holds for every input -
+the read is memory-safe, it consumes what it claims, and the field set it
+produces is internally consistent and in range - and
+`tests/unit/test_format_parse.cpp` asserts the identity over patterns chosen
+to be unambiguous.
+
 ---
 
 ## 9. Clocks

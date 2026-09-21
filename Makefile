@@ -537,7 +537,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar
-.PHONY: tools check-oracle-zoneinfo check-oracle-ldml
+.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -781,6 +781,13 @@ check-oracle-ldml: $(APP_DIR)/tools/gchron_format$(EXE_EXTENSION) \
 		$(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
 	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/oracle/ldml_diff.py \
 		--chron $(APP_DIR)/tools/gchron_format$(EXE_EXTENSION) \
+		--icu $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
+
+check-oracle-ldml-parse: ## Check the LDML parser against ICU (needs libicu-dev)
+check-oracle-ldml-parse: $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
+		$(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/oracle/ldml_parse_diff.py \
+		--chron $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
 		--icu $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
 
 check-oracle-zoneinfo: ## Check every zone against Python's zoneinfo (needs python3)
@@ -1120,10 +1127,11 @@ $(eval $(call fuzz-rule,fuzz_posix_tz,posix_tz))
 $(eval $(call fuzz-rule,fuzz_duration,duration))
 $(eval $(call fuzz-rule,fuzz_format,format))
 $(eval $(call fuzz-rule,fuzz_leap,leap))
+$(eval $(call fuzz-rule,fuzz_scan,scan))
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: fuzz-run-parse fuzz-run-arith fuzz-run-tzif fuzz-run-posix_tz \
-	fuzz-run-duration fuzz-run-format fuzz-run-leap
+	fuzz-run-duration fuzz-run-format fuzz-run-leap fuzz-run-scan
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 	-@rm -rf $(FUZZ_DIR)

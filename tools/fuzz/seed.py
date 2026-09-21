@@ -231,6 +231,83 @@ def seed_leap():
         write(out, case)
     return out
 
+def seed_scan():
+    out = reset("scan")
+    # One options byte, then `<pattern> NUL <text>`. Both halves are untrusted
+    # in the real thing - the pattern comes out of a `ctang` template and the
+    # text out of a log file - so the seeds pair each pattern with text that
+    # fits it, text that nearly fits it, and text that does not fit at all.
+    # A corpus of only matching pairs would never reach the rejection paths.
+    pairs = [
+        (b"uuuu-MM-dd'T'HH:mm:ssXXX", b"2026-09-21T15:30:45Z"),
+        (b"uuuu-MM-dd'T'HH:mm:ssXXX", b"2026-09-21T15:30:45+05:45"),
+        (b"uuuu-MM-dd'T'HH:mm:ssXXX", b"2026-09-21T15:30:45-00:00"),
+        (b"uuuuMMddHHmmss", b"20260921153045"),
+        (b"uuuu-MM-dd", b"2026-09-21"),
+        (b"uuuu-MM-dd", b"2026-9-21"),        # a width strict mode refuses
+        (b"uuuu-MM-dd", b"2026-09-21xyz"),    # trailing junk
+        (b"uuuu-MM-dd", b"2026-09-"),         # truncated
+        (b"uuuu-M-d", b"2026-9-8"),
+        (b"yy-MM-dd", b"26-09-21"),           # needs a clock
+        (b"YYYY-'W'ww-e", b"2026-W39-1"),
+        (b"EEE, dd MMM uuuu HH:mm:ss Z", b"Mon, 21 Sep 2026 15:30:45 +0000"),
+        (b"EEE uuuu-MM-dd", b"Tue 2026-09-21"),   # a weekday that disagrees
+        (b"hh:mm a", b"12:00 AM"),
+        (b"hh:mm a", b"12:00 PM"),
+        (b"hh:mm", b"03:30"),                 # twelve-hour, no meridiem
+        (b"KK:mm a", b"00:30 PM"),
+        (b"kk:mm", b"24:00"),
+        (b"HH:mm:ss.SSSSSSSSS", b"15:30:45.123456789"),
+        (b"HH:mm:ss.SSS", b"15:30:45.1"),     # too few fractional digits
+        (b"VV", b"America/Argentina/Buenos_Aires"),
+        (b"VV", b"../../etc/passwd"),
+        (b"VV", b"A" * 200),                  # past GCHRON_ZONE_ID_MAX
+        (b"z", b"EST"),                       # refused: cannot be inverted
+        (b"OOOO", b"GMT+05:45"),
+        (b"g", b"61304"),
+        (b"uuuu-DDD", b"2026-264"),
+        (b"uuuu-DDD", b"2026-367"),           # no such day of the year
+        (b"QQQ uuuu", b"Q3 2026"),
+        (b"GGGG uuuu-MM-dd", b"BCE 0044-03-15"),
+        (b"%Y-%m-%d %H:%M:%S", b"2026-09-21 15:30:45"),
+        (b"%d/%b/%Y:%H:%M:%S", b"21/Sep/2026:15:30:45"),
+        (b"%e %k", b" 1  9"),                 # space padding, both sides
+        (b"%s", b"1789000000"),
+        (b"%C%y", b"2026"),
+        (b"", b""),
+        (b"uuuu", b""),
+        (b"", b"2026"),
+        # The six fuzz_scan found, kept as named seeds rather than as the
+        # opaque hashes libFuzzer gives its artifacts.
+        #   1. The emitter pads the letter count as a *minimum*, so `uuu`
+        #      writes four digits; a reader demanding exactly three could not
+        #      read its own output. TR35's adjacency rule fixed it.
+        (b"uuu-MM-dd", b"2026-09-21"),
+        #   2. Two adjacent variable-width numbers, where the count is the
+        #      only boundary there is.
+        (b"uuAg", b"20265584512361304"),
+        #   3. A twelve-hour field that read `31` because nothing checked the
+        #      range where the digits were taken.
+        (b"uuuu-MM-d.'T'hH:mm", b"2026-09-21.T315:30"),
+        #   4. The same field twice, where the second silently overwrote the
+        #      first instead of contradicting it.
+        (b"DHDu", b"264152642026"),
+        #   5. A fraction past the nine digits a nanosecond field holds,
+        #      which overflowed the field it was about to be stored in.
+        (b"HH:mm:ss.SSSSSSSSSS", b"15:30:45.1234567890"),
+        #   6. Nineteen digits, the edge of an int64, reached from text.
+        (b"%s", b"99999999999999999999"),
+        #   ...and the two that are ambiguous rather than wrong, kept so that
+        #   a change in how they are handled is visible.
+        (b"g6", b"613046"),
+        (b"kug", b"15202661304"),
+    ]
+    for options in (0x00, 0x02, 0x03):
+        for pattern, text in pairs:
+            write(out, bytes([options]) + pattern + b"\x00" + text)
+    return out
+
+
 def main():
     parse = seed_parse()
     arith = seed_arith()
@@ -238,7 +315,8 @@ def main():
     duration = seed_duration()
     fmt = seed_format()
     leap = seed_leap()
-    for path in (parse, arith, tzif, posix, duration, fmt, leap):
+    scan = seed_scan()
+    for path in (parse, arith, tzif, posix, duration, fmt, leap, scan):
         count = len([p for p in path.iterdir() if p.is_file()
                      and p.name != ".gitignore"])
         print("%-34s %5d seeds" % (path.relative_to(ROOT), count))

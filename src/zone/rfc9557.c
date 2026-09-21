@@ -38,7 +38,7 @@
 #include "zone_internal.h"
 
 /** The longest zone name an annotation may carry. */
-#define ANNOTATION_MAX 128
+#define ANNOTATION_MAX ((size_t)GCHRON_ZONE_ID_MAX)
 
 /** Whether a byte may begin an RFC 9557 `time-zone-part`. */
 static bool is_zone_initial(char c) {

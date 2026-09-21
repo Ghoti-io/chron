@@ -82,6 +82,15 @@ typedef struct GCHRON_FormatItem {
   uint16_t count;        /**< How many pattern letters; 1 for a literal. */
   uint32_t literal_at;   /**< Offset into the literal pool. */
   uint32_t literal_len;  /**< Bytes of literal. */
+  /**
+   * Byte offset into the pattern this item was compiled from.
+   *
+   * So that a complaint about an item can point at the text a person wrote.
+   * gchron_format_is_invertible() reported the item *index* before this
+   * existed, in a GCHRON_Error::offset documented as a byte offset - which
+   * `fuzz_scan` noticed when the number exceeded the length of the input.
+   */
+  uint32_t pattern_at;
 } GCHRON_FormatItem;
 
 /** A compiled pattern. */

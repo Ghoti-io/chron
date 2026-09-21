@@ -440,6 +440,15 @@ GCHRON_API void gchron_zonedb_dump(const GCHRON_ZoneDb * db, FILE * stream);
  * @param zone The zone.
  * @return A borrowed string, or NULL.
  */
+/**
+ * @brief The longest zone identifier this library will carry, without its NUL.
+ *
+ * The longest the tzdb ships is `America/Argentina/ComodRivadavia` at 32
+ * bytes; 128 leaves room for a name it has not invented yet while keeping
+ * every buffer that holds one a stack allocation.
+ */
+#define GCHRON_ZONE_ID_MAX ((size_t)128)
+
 GCHRON_API const char * gchron_zone_id(const GCHRON_Zone * zone);
 
 /**

@@ -36,6 +36,7 @@
 #include <ghoti.io/chron/zoned.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -344,6 +345,289 @@ GCHRON_API GCHRON_Result gchron_format_offset(const GCHRON_Format * format,
 GCHRON_API GCHRON_Result gchron_format_zoned(const GCHRON_Format * format,
     const GCHRON_ZonedDateTime * zoned, const GCHRON_FormatContext * context,
     char * buf, size_t buf_len, size_t * out_len);
+
+/*--------------------------------------------------------------------------*
+ * Reading text back through a pattern
+ *--------------------------------------------------------------------------*/
+
+/**
+ * @brief Which fields a parse found, as bits in GCHRON_ParsedFields::present.
+ *
+ * A pattern need not name a whole date-time - `HH:mm` names no date at all -
+ * so what a parse produces is the set of fields the text actually supplied,
+ * and this says which those were. Nothing is defaulted (design.md 3.7).
+ */
+typedef enum {
+  GCHRON_FIELD_ERA              = 1u << 0,  ///< `G`
+  GCHRON_FIELD_YEAR             = 1u << 1,  ///< `y`, `u`, `%Y`
+  GCHRON_FIELD_WEEK_YEAR        = 1u << 2,  ///< `Y`, `%G`
+  GCHRON_FIELD_QUARTER          = 1u << 3,  ///< `Q`, `q`
+  GCHRON_FIELD_MONTH            = 1u << 4,  ///< `M`, `L`, `%m`, `%b`
+  GCHRON_FIELD_WEEK_OF_YEAR     = 1u << 5,  ///< `w`
+  GCHRON_FIELD_WEEK_OF_MONTH    = 1u << 6,  ///< `W`
+  GCHRON_FIELD_DAY              = 1u << 7,  ///< `d`, `%d`, `%e`
+  GCHRON_FIELD_DAY_OF_YEAR      = 1u << 8,  ///< `D`, `%j`
+  GCHRON_FIELD_WEEKDAY          = 1u << 9,  ///< `E`, `e`, `c`, `%a`, `%u`
+  GCHRON_FIELD_WEEKDAY_IN_MONTH = 1u << 10, ///< `F`
+  GCHRON_FIELD_MODIFIED_JULIAN  = 1u << 11, ///< `g`
+  GCHRON_FIELD_DAY_PERIOD       = 1u << 12, ///< `a`, `%p`
+  GCHRON_FIELD_HOUR             = 1u << 13, ///< `H`, `h`, `K`, `k`
+  GCHRON_FIELD_MINUTE           = 1u << 14, ///< `m`, `%M`
+  GCHRON_FIELD_SECOND           = 1u << 15, ///< `s`, `%S`
+  GCHRON_FIELD_FRACTION         = 1u << 16, ///< `S`
+  GCHRON_FIELD_MILLIS_OF_DAY    = 1u << 17, ///< `A`
+  GCHRON_FIELD_OFFSET           = 1u << 18, ///< `X`, `x`, `Z`, `%z`
+  GCHRON_FIELD_ZONE_ID          = 1u << 19, ///< `VV`
+  GCHRON_FIELD_EPOCH_SECONDS    = 1u << 20, ///< `%s`
+  GCHRON_FIELD_CENTURY          = 1u << 21  ///< `%C`
+} GCHRON_Field;
+
+/**
+ * @brief Which of the four hour cycles GCHRON_ParsedFields::hour is written in.
+ *
+ * The number 11 means four different times of day depending on the letter
+ * that read it, and two of those four are only half an answer until a day
+ * period arrives. Keeping the cycle rather than normalising at parse time is
+ * what lets `gchron_parsed_to_time()` say *which* field was missing.
+ */
+typedef enum {
+  GCHRON_HOUR_0_23 = 0, ///< `H`, `%H`. Complete on its own.
+  GCHRON_HOUR_1_24,     ///< `k`. Complete on its own; 24 is midnight.
+  GCHRON_HOUR_1_12,     ///< `h`, `%I`. Needs a day period.
+  GCHRON_HOUR_0_11      ///< `K`. Needs a day period.
+} GCHRON_HourCycle;
+
+/**
+ * @brief Everything a parse read out of the text.
+ *
+ * Every field is meaningful only when its bit is set in @ref present; the
+ * rest are zero and mean nothing. This is the whole reason the struct exists
+ * rather than a `GCHRON_DateTime`: `strptime` writes into a `struct tm` the
+ * caller supplied and leaves untouched whatever the caller did not
+ * initialise, so a missing field is invisible and the value is plausible.
+ */
+typedef struct GCHRON_ParsedFields {
+  /** Bits from ::GCHRON_Field. Zero means the text supplied nothing. */
+  uint32_t present;
+
+  /** Bytes of @p text the pattern consumed. */
+  size_t consumed;
+
+  int32_t era;                ///< 0 BCE, 1 CE.
+  int64_t year;               ///< Proleptic and sign-bearing, as `u` writes it.
+  int64_t week_year;          ///< The week-based year; pairs with @ref week_of_year.
+  int32_t century;            ///< `%C`, without its year.
+  int32_t quarter;            ///< 1..4.
+  int32_t month;              ///< 1..12, or further in a calendar with more.
+  int32_t week_of_year;       ///< 1..53.
+  int32_t week_of_month;      ///< 0..5.
+  int32_t day;                ///< 1..31.
+  int32_t day_of_year;        ///< 1..366.
+  int32_t weekday;            ///< ISO: 1 Monday .. 7 Sunday.
+  int32_t weekday_in_month;   ///< `F`: the nth such weekday of the month.
+  int64_t modified_julian;    ///< `g`.
+  int32_t day_period;         ///< 0 AM, 1 PM.
+  int32_t hour;               ///< As written; see @ref hour_cycle.
+  GCHRON_HourCycle hour_cycle;///< Which cycle @ref hour is in.
+  int32_t minute;             ///< 0..59.
+  int32_t second;             ///< 0..60; 60 is a leap second the text claimed.
+  int32_t nsec;               ///< 0..999999999, from `S`.
+  int64_t millis_of_day;      ///< `A`.
+  int32_t offset_sec;         ///< Seconds ahead of UTC.
+  bool offset_unknown;        ///< The offset was RFC 3339 4.3's `-00:00`.
+  int64_t epoch_seconds;      ///< `%s`.
+
+  /**
+   * The `VV` zone identifier, NUL-terminated, or empty.
+   *
+   * **Copied, not borrowed**, for the reason GCHRON_ParseInfo::calendar gives:
+   * a pointer into the caller's text dangles the first time somebody parses
+   * out of a temporary.
+   */
+  char zone_id[GCHRON_ZONE_ID_MAX + 1];
+} GCHRON_ParsedFields;
+
+/**
+ * @brief How closely the text must match the pattern.
+ */
+typedef enum {
+  /**
+   * Literals match byte for byte, a field of *n* letters reads at most *n*
+   * digits, and a name must be one the provider gives.
+   *
+   * Zero, because §3.7 says the zero value is the strict one. ICU's own
+   * default is far looser - it takes `2026-9-8` for `yyyy-MM-dd` - and a
+   * caller who wants that has to say so.
+   */
+  GCHRON_PATTERN_STRICT = 0
+} GCHRON_PatternLenience;
+
+/**
+ * @brief Everything a parse needs beyond the text and the pattern.
+ *
+ * A zero-initialised struct means the English names, the Gregorian calendar,
+ * strict matching and no clock - which is everything a four-digit-year
+ * pattern needs.
+ */
+typedef struct GCHRON_PatternContext {
+  /** Month, day, era and day-period names. NULL means gchron_names_english(). */
+  const GCHRON_Names * names;
+
+  /** The calendar the text is written in. NULL means Gregorian. */
+  const GCHRON_Calendar * calendar;
+
+  /**
+   * Where "what year is it now" comes from, for a two-digit year.
+   *
+   * `yy` reads `26` and has to decide whether that is 2026 or 1926. The
+   * answer depends on the current year, so it is asked for rather than
+   * assumed: with no clock here, a two-digit year is GCHRON_ERR_INVALID with
+   * ::GCHRON_DIAG_PATTERN_NEEDS_CLOCK. The sliding window ICU and Java keep
+   * in a static is the kind of global §3.8 refuses, and gchron_parse_http_date()
+   * already takes a clock for the same question.
+   */
+  const GCHRON_Clock * clock;
+
+  /** How closely the text must match. Zero is strict. */
+  GCHRON_PatternLenience lenience;
+} GCHRON_PatternContext;
+
+/**
+ * @brief Read text through a compiled pattern.
+ *
+ * Walks the same item list gchron_format_datetime() walks, consuming text
+ * where the emitter would have produced it. `strptime` is POSIX and is not
+ * in the Windows C runtime at all, which is most of why this is here.
+ *
+ * The whole of @p text must be consumed: text left over when the pattern is
+ * satisfied is ::GCHRON_DIAG_PATTERN_TRAILING, because a parser that stops
+ * early turns `2026-09-20xyz` into a valid date. A caller scanning a longer
+ * string reads GCHRON_ParsedFields::consumed from a pattern that ends where
+ * the value does.
+ *
+ * Three pattern letters cannot be read back: `z`, `v` and `O` name a zone
+ * loosely - `EST` is three different zones in two hemispheres - and choosing
+ * between the candidates needs CLDR, which §14 declines to ship. A format
+ * containing one is refused here with ::GCHRON_DIAG_PATTERN_NOT_INVERTIBLE
+ * rather than guessing. `VV` inverts exactly and is supported.
+ *
+ * @param format A compiled pattern.
+ * @param text The text to read. Not assumed to be NUL-terminated.
+ * @param len Bytes of text.
+ * @param context Names, calendar, clock and lenience. NULL means the defaults.
+ * @param out Receives the fields. **Cleared first**, so a caller cannot
+ *   inherit a stale field from a previous parse; untouched on failure only in
+ *   the sense that what it holds then is that cleared state.
+ * @param err Receives the failure and the offset into @p text that caused it.
+ *   May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_FORMAT when the text does not match;
+ *   GCHRON_ERR_UNSUPPORTED for a letter that cannot be read back;
+ *   GCHRON_ERR_INVALID; GCHRON_ERR_RANGE.
+ */
+GCHRON_API GCHRON_Result gchron_format_parse(const GCHRON_Format * format,
+    const char * text, size_t len, const GCHRON_PatternContext * context,
+    GCHRON_ParsedFields * out, GCHRON_Error * err);
+
+/**
+ * @brief Whether a compiled pattern can be read back at all.
+ *
+ * Every letter of it inverts. Worth asking once, when a pattern arrives from
+ * a template or a configuration file, rather than on the first line of input.
+ *
+ * @param format A compiled pattern.
+ * @param err Receives the offending letter's offset into the pattern. May be
+ *   NULL.
+ * @return GCHRON_OK, GCHRON_ERR_UNSUPPORTED or GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_format_is_invertible(
+    const GCHRON_Format * format, GCHRON_Error * err);
+
+/**
+ * @brief Resolve parsed fields into a date.
+ *
+ * Accepts any of the four ways a date can be written - year with month and
+ * day, year with day-of-year, week-year with week and weekday, or a modified
+ * Julian day - and reports ::GCHRON_DIAG_PATTERN_FIELD_MISSING naming what it
+ * wanted when none of them is complete.
+ *
+ * **Redundant fields are checked rather than ignored.** A pattern carrying
+ * both `E` and `dd` gives two answers about the same day; when they disagree
+ * this is ::GCHRON_DIAG_PATTERN_FIELD_CONFLICT, not a preference. That is
+ * deliberately stricter than gchron_parse_http_date(), which ignores the
+ * weekday because RFC 9110 tells it to.
+ *
+ * @param fields What a parse produced.
+ * @param context The calendar and names. NULL means the defaults.
+ * @param out Receives the date on success; untouched on failure.
+ * @param err Receives the failure. May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_FORMAT; GCHRON_ERR_RANGE; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_parsed_to_date(
+    const GCHRON_ParsedFields * fields, const GCHRON_PatternContext * context,
+    GCHRON_Date * out, GCHRON_Error * err);
+
+/**
+ * @brief Resolve parsed fields into a time of day.
+ *
+ * An `h` or `K` hour with no day period beside it is
+ * ::GCHRON_DIAG_PATTERN_FIELD_MISSING: twelve-hour time is half an answer,
+ * and the half that is missing is the one that matters.
+ *
+ * A minute or second the text did not carry is zero *here* - a time is a
+ * complete value and `15:30` means `15:30:00` in every notation this library
+ * reads. An hour it did not carry is not defaulted, because that would make
+ * an empty parse into midnight.
+ *
+ * @param fields What a parse produced.
+ * @param context Unused today; taken for symmetry and for what comes later.
+ * @param out Receives the time on success; untouched on failure.
+ * @param err Receives the failure. May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_FORMAT; GCHRON_ERR_RANGE; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_parsed_to_time(
+    const GCHRON_ParsedFields * fields, const GCHRON_PatternContext * context,
+    GCHRON_Time * out, GCHRON_Error * err);
+
+/**
+ * @brief Resolve parsed fields into a civil date-time.
+ *
+ * Both halves must be present: a pattern that named no time does not become
+ * midnight, because a caller who wants that can say so in a line a reader can
+ * see, and a caller who did not want it would never find out.
+ *
+ * @param fields What a parse produced.
+ * @param context The calendar and names. NULL means the defaults.
+ * @param out Receives the date-time on success; untouched on failure.
+ * @param err Receives the failure. May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_FORMAT; GCHRON_ERR_RANGE; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_parsed_to_datetime(
+    const GCHRON_ParsedFields * fields, const GCHRON_PatternContext * context,
+    GCHRON_DateTime * out, GCHRON_Error * err);
+
+/**
+ * @brief Resolve parsed fields into an offset date-time.
+ *
+ * As gchron_parsed_to_datetime(), and the text must also have carried an
+ * offset. It is not defaulted to UTC: a timestamp with no zone information is
+ * a civil date-time, and calling it UTC is how a log line from Adelaide
+ * becomes wrong by nine and a half hours.
+ *
+ * There is deliberately no `_to_zoned()`. `VV` gives
+ * GCHRON_ParsedFields::zone_id, and turning a name and a civil time into a
+ * GCHRON_ZonedDateTime needs a database and a policy for the hour that
+ * repeats and the hour that does not exist - which is gchron_zoned_from_civil()'s
+ * question and already has an options struct of its own (section 6.4).
+ *
+ * @param fields What a parse produced.
+ * @param context The calendar and names. NULL means the defaults.
+ * @param out Receives the value on success; untouched on failure.
+ * @param err Receives the failure. May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_FORMAT; GCHRON_ERR_RANGE; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_parsed_to_offset(
+    const GCHRON_ParsedFields * fields, const GCHRON_PatternContext * context,
+    GCHRON_OffsetDateTime * out, GCHRON_Error * err);
 
 /*--------------------------------------------------------------------------*
  * HTTP-date and RFC 5322
