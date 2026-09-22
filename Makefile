@@ -323,7 +323,8 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # type, because a gate wired to a target nobody types is one that does not
 # run. It costs about a second and reports rather than fails when the input
 # a generator needs is not on the machine.
-TEST_GATES ?= check-symbols check-layering check-generated check-docs
+TEST_GATES ?= check-symbols check-layering check-generated check-docs \
+	check-license
 
 ####################################################################
 # How wide the exhaustive civil sweep runs
@@ -634,7 +635,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar
-.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs
+.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1403,6 +1404,66 @@ docs: ## Generate the documentation in the ./docs subdirectory
 # real Doxyfile with the overrides appended, so the gate cannot drift away
 # from the manual it is checking.
 #
+#
+# CONVENTIONS.md section 8 says a new file under src/ or include/ carries the
+# SPDX identifier and the LGPLv3 notice. Nothing enforced it, and a per-file
+# notice whose whole job is to travel with code somebody copied out is worth
+# very little if it is only there when whoever added the file remembered.
+#
+# The second half exists because of what the relicensing actually missed. The
+# COPYING files, the per-file headers and the README were all changed; the
+# prose that asserted MIT in passing was not, and was found weeks later by
+# grepping. This library's own README still said "MIT licensed" at the
+# bottom until 2026-09-21. A gate on src/ alone would not have seen it.
+#
+# LICENSE_ALLOWLIST is for a *legitimate* mention of another project's terms
+# - a third-party attribution, a comparison table. It is empty here because
+# nothing in the tracked set needs it yet; the pattern is a space-separated
+# list of paths.
+#
+LICENSE_ID := LGPL-3.0-only
+LICENSE_FOREIGN := MIT|Apache|BSD|ISC|MPL|AGPL|GPL-2\\.0|Unlicense|proprietary
+LICENSE_ALLOWLIST :=
+
+check-license: ## Fail if a source file has no SPDX header or a document claims another license
+	@missing=""; \
+	count=0; \
+	for f in $$(find src include -type f \( -name '*.c' -o -name '*.h' \) | sort); do \
+		count=$$((count + 1)); \
+		grep -q "SPDX-License-Identifier: $(LICENSE_ID)" "$$f" \
+			|| missing="$$missing\n  $$f"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		printf "\033[0;31mcheck-license: no SPDX header:\033[0m$$missing\n"; \
+		exit 1; \
+	fi; \
+	printf "check-license: %d sources carry $(LICENSE_ID).\n" "$$count"; \
+	if ! command -v git >/dev/null 2>&1 || ! git rev-parse --git-dir >/dev/null 2>&1; then \
+		printf "check-license: skipped the prose half (not a git checkout)\n"; \
+		exit 0; \
+	fi; \
+	skip="$(LICENSE_ALLOWLIST) COPYING COPYING.LESSER"; \
+	claims=$$(git ls-files -z \
+		| xargs -0 grep -HInIE "(SPDX-License-Identifier:|[Ll]icen[sc]ed under|[Ll]icense:)" 2>/dev/null \
+		| grep -E "$(LICENSE_FOREIGN)" | grep -v "$(LICENSE_ID)"); \
+	for f in $$skip; do \
+		claims=$$(printf "%s\n" "$$claims" | grep -v "^$$f:" || true); \
+	done; \
+	sections=$$(git ls-files -z | xargs -0 grep -lIE "^#+ +License" 2>/dev/null); \
+	bad_sections=""; \
+	for f in $$sections; do \
+		case " $$skip " in *" $$f "*) continue;; esac; \
+		grep -A3 -IE "^#+ +License" "$$f" | grep -q "$(LICENSE_ID)" \
+			|| bad_sections="$$bad_sections $$f"; \
+	done; \
+	if [ -n "$$claims" ] || [ -n "$$bad_sections" ]; then \
+		printf "\033[0;31mcheck-license: another license is asserted\033[0m\n"; \
+		[ -n "$$claims" ] && printf "%s\n" "$$claims"; \
+		[ -n "$$bad_sections" ] && printf "  a License section that does not say $(LICENSE_ID):$$bad_sections\n"; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32mcheck-license: nothing claims a license other than $(LICENSE_ID).\033[0m\n"
+
 check-docs: ## Fail on a documentation fault in the headers or the manual
 	@if ! command -v doxygen >/dev/null 2>&1; then \
 		printf "check-docs: skipped (no doxygen)\n"; \
