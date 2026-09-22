@@ -180,8 +180,15 @@ GCHRON_Result gchron_zone_read_file(const char * path, size_t max_bytes,
       return GCHRON_ERR_OOM;
     case GCU_FILE_ERR_INVALID:
       return GCHRON_ERR_INVALID;
-    case GCU_FILE_ERR_IO:
-    case GCU_FILE_RESULT_COUNT:
+    /*
+     * A default rather than the remaining names spelled out. Enumerating them
+     * turns the next value cutil adds into a build failure here, and - worse
+     * - invites answering it with GCHRON_ERR_INTERNAL, which would report a
+     * bug in this library to a caller whose file was simply deleted. Every
+     * way a read can fail that this function has no better word for is an I/O
+     * failure, which is what the caller needs to know.
+     */
+    default:
       break;
   }
   return GCHRON_ERR_IO;

@@ -415,9 +415,10 @@ GCHRON_Result gchron_leap_table_file(const char * path,
           0, 0);
     case GCU_FILE_ERR_OOM:
       return gchron_fail(err, GCHRON_ERR_OOM, GCHRON_DIAG_NONE, 0, 0);
-    case GCU_FILE_ERR_INVALID:
-    case GCU_FILE_ERR_IO:
-    case GCU_FILE_RESULT_COUNT:
+    /* A default for the reason zonedb.c's says: a value cutil adds later
+     * is still a read that failed, and spelling out the list would make it a
+     * build failure or an invented internal error instead. */
+    default:
       return gchron_fail(err, GCHRON_ERR_IO, GCHRON_DIAG_NONE, 0, 0);
   }
 
