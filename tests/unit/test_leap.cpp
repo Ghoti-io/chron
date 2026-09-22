@@ -688,35 +688,105 @@ TEST_F(LeapFile, ATzdirCopyTooLargeToReadIsAnAnswerRatherThanAFallback) {
 }
 
 /*
- * A `$TZDIR` too long for the filesystem to accept **stops the search** and
- * is reported, rather than falling through to the system table.
+ * A `$TZDIR` too long for the filesystem to accept is a miss like any other.
  *
- * This is the edge of the rule rather than an instance of it, and it is the
- * one that changed when cutil grew a vocabulary. `ENAMETOOLONG` used to be
- * reported as the same "could not open" value as an absent file, so it fell
- * through and the caller got the system table and never learned that the
- * directory it configured was unusable. cutil now spells it separately, and
- * Corey chose to let a location that can never work be surfaced rather than
- * worked around: an unusable $TZDIR is a misconfiguration, and silently
- * answering from somewhere else is how it survives.
+ * The library already treats a `$TZDIR` naming a directory that is not there,
+ * or a plain file, or a loop of symbolic links as an ordinary miss - the test
+ * above says so. A path too long is the fourth spelling of the same
+ * misconfiguration, and stopping the search for only that one would be a rule
+ * with nothing behind it: `GCHRON_ERR_IO` does not tell the caller their
+ * `$TZDIR` was too long either, so refusing loses a working answer and
+ * surfaces nothing.
  *
- * The neighbouring cases stay as they were - see the tests above - so what
- * this pins is the boundary between "this location yielded nothing, try the
- * next" and "this location cannot work, say so".
+ * It reads as the odd one out because cutil reports it as ERR_INVALID rather
+ * than ERR_NOT_FOUND, on the reasoning that only the caller can change its
+ * argument. That is right at cutil's boundary and says nothing about whether
+ * a *search path* should keep looking. src/zone/zonedb.c treats the same
+ * errno as an environment fact for the same reason.
  */
-TEST_F(LeapFile, ATzdirTooLongForTheFilesystemIsReportedNotWorkedAround) {
+TEST_F(LeapFile, ATzdirTooLongForTheFilesystemIsAMissLikeAnyOther) {
   if (::access("/usr/share/zoneinfo/leap-seconds.list", R_OK) != 0) {
     GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
   }
+  GCHRON_LeapTable * from_system = nullptr;
+  ::unsetenv("TZDIR");
+  ASSERT_EQ(GCHRON_OK,
+      gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr));
+  const size_t expected = gchron_leap_table_count(from_system);
+  gchron_leap_table_destroy(from_system);
+
   std::string dir(5000, 'a');
   dir[0] = '/';
   ::setenv("TZDIR", dir.c_str(), 1);
 
   GCHRON_LeapTable * table = nullptr;
-  EXPECT_EQ(GCHRON_ERR_IO,
+  ASSERT_EQ(GCHRON_OK,
       gchron_leap_table_file(nullptr, nullptr, &table, nullptr))
-      << "an unusable $TZDIR was quietly answered from the system table";
+      << "an over-long $TZDIR stopped the search instead of missing";
+  EXPECT_EQ(expected, gchron_leap_table_count(table));
+  gchron_leap_table_destroy(table);
+}
+
+/*
+ * Running out of memory **stops the search**. It is the one failure in this
+ * function that is not a fact about the filesystem at all: nothing was learned
+ * about what is at either location, because we never got to ask.
+ *
+ * Going on would mean allocating more under memory pressure and then handing
+ * back a table the caller did not ask for, with no way for it to learn that
+ * the copy it named was never read.
+ *
+ * The allocator here refuses exactly its first request - the one that builds
+ * the `$TZDIR` path - and grants everything after it. That is what separates
+ * the two answers: if out-of-memory joined the fall-through set, the system
+ * copy would then be read successfully and this would return a table.
+ */
+TEST_F(LeapFile, RunningOutOfMemoryStopsTheSearchRatherThanMovingOn) {
+  if (::access("/usr/share/zoneinfo/leap-seconds.list", R_OK) != 0) {
+    GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
+  }
+
+  struct RefuseFirst {
+    GCHRON_Allocator allocator{};
+    bool refused = false;
+    RefuseFirst() {
+      allocator.ctx = this;
+      allocator.malloc_fn = [](void * ctx, size_t size) -> void * {
+        RefuseFirst * self = static_cast<RefuseFirst *>(ctx);
+        if (!self->refused) {
+          self->refused = true;
+          return nullptr;
+        }
+        return std::malloc(size);
+      };
+      allocator.calloc_fn = [](void * ctx, size_t n, size_t size) -> void * {
+        RefuseFirst * self = static_cast<RefuseFirst *>(ctx);
+        if (!self->refused) {
+          self->refused = true;
+          return nullptr;
+        }
+        return std::calloc(n, size);
+      };
+      allocator.realloc_fn = [](void * ctx, void * p, size_t size) -> void * {
+        RefuseFirst * self = static_cast<RefuseFirst *>(ctx);
+        if (!self->refused) {
+          self->refused = true;
+          return nullptr;
+        }
+        return std::realloc(p, size);
+      };
+      allocator.free_fn = [](void *, void * p) { std::free(p); };
+    }
+  } refuse_first;
+
+  ::setenv("TZDIR", "/usr/share/zoneinfo", 1);
+  GCHRON_LeapTable * table = nullptr;
+  EXPECT_EQ(GCHRON_ERR_OOM,
+      gchron_leap_table_file(nullptr, &refuse_first.allocator, &table,
+          nullptr))
+      << "an allocation failure was answered from the system table";
   EXPECT_EQ(nullptr, table);
+  EXPECT_TRUE(refuse_first.refused);
 }
 
 /*

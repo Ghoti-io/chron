@@ -419,27 +419,37 @@ GCHRON_Result gchron_leap_table_file(const char * path,
       }
     }
     /*
-     * Only a file we never got *open* sends us on to the usual place. A copy
-     * under $TZDIR that is too large, or unreadable part way through, is an
-     * answer - and quietly reading a different file instead would hide it.
+     * **Failing to obtain the file sends the search on. A failure about the
+     * file's contents, or about us, is the answer.**
      *
-     * Both spellings, and the pair is the whole of the rule. cutil reports
-     * "nothing was there" and "there and not readable by this process"
-     * separately, and a search path has no use for the distinction: each
-     * means this location did not yield a file, and the next one is where to
-     * look. Narrowing this to NOT_FOUND alone would turn a root-only copy
-     * under $TZDIR from a fallback into a refusal, which is a change of
-     * behaviour and not a translation - tests/unit/test_leap.cpp pins both.
+     * Three spellings of the first: nothing was there, it was there and this
+     * process could not open it, and the path cannot name anything on this
+     * filesystem. cutil distinguishes them and a search path has no use for
+     * the distinction - each means this location did not yield a file and the
+     * next one is where to look. The library already treats `$TZDIR` naming a
+     * directory that does not exist, or a plain file, or a loop of symbolic
+     * links as an ordinary miss; a path too long is the fourth spelling of
+     * the same misconfiguration, and refusing only that one would be a rule
+     * with nothing behind it. zonedb.c calls the same errno an environment
+     * fact rather than a caller's error for the same reason.
      *
-     * Two spellings are deliberately *outside* the pair, and both used to be
-     * inside it when every open failure was one value. A path too long for
-     * the filesystem is GCU_FILE_ERR_INVALID and an open that failed for
-     * memory is GCU_FILE_ERR_OOM; neither says "look somewhere else", and
-     * both used to be answered from the system table with nothing said. A
-     * $TZDIR that can never work is a misconfiguration worth surfacing, and
-     * running out of memory is not a fact about the filesystem at all.
+     * GCU_FILE_ERR_OOM is deliberately outside the set, and is the one that
+     * looks like it belongs. Running out of memory is not a fact about the
+     * filesystem at all - we never got to ask - and going on to the next
+     * location means allocating more under memory pressure and then handing
+     * back a table the caller did not ask for, with no way to learn that the
+     * copy it named was never read. It is the same judgement the sentinel
+     * above makes about a path that could not be built.
+     *
+     * GCU_FILE_ERR_LIMIT and a plain GCU_FILE_ERR_IO are answers too: the
+     * file was obtained and is too large, or the device failed part way
+     * through. Note that this is the first cutil that can tell those from an
+     * absent file - the comment here has described this rule since before the
+     * vocabulary existed to express it, and every failure to open used to
+     * arrive as GCU_FILE_ERR_IO and fall through.
      */
-    if (read == GCU_FILE_ERR_NOT_FOUND || read == GCU_FILE_ERR_ACCESS) {
+    if (read == GCU_FILE_ERR_NOT_FOUND || read == GCU_FILE_ERR_ACCESS
+        || read == GCU_FILE_ERR_INVALID) {
       read = gcu_file_read(GCHRON_LEAP_SECONDS_PATH, GCHRON_LEAP_SECONDS_MAX,
           allocator, &data, &len);
     }
