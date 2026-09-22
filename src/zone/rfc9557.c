@@ -39,7 +39,8 @@
  * altogether, which is the property the tier rule exists to protect - a
  * consumer that only parses timestamps never sees a zone type.
  *
- * Reference: RFC 9557 (2024), sections 4.1 and 4.2.
+ * Reference: RFC 9557 (2024). Section 4.1 is the ABNF; sections 3.3,
+ * 3.4 and 5 are the rules a reader has to follow.
  */
 
 #include <ghoti.io/chron/civil.h>
@@ -332,9 +333,49 @@ GCHRON_Result gchron_parse_rfc9557(const char * text, size_t len,
       continue;
     }
 
-    /* A keyed suffix. `u-ca` is the one with a meaning here. */
-    if (annotation.key_length == 4
-        && memcmp(annotation.key, "u-ca", 4) == 0) {
+    /*
+     * A keyed suffix. Two keys name the calendar, and they are not
+     * interchangeable.
+     *
+     * `u-ca` is the one RFC 9557 section 5 allocates, and its values are
+     * "the set of values defined for the Unicode Calendar Identifier" in
+     * UTS #35. The Julian calendar this library implements is not among
+     * them - Unicode registers no identifier for it - so `[u-ca=julian]`
+     * says something the key cannot say, and is refused rather than passed
+     * on to the caller as though it were registered. V8's Temporal refuses
+     * it too, and names the reason: "Invalid calendar specified: julian".
+     *
+     * `x-cal` is where that calendar is spelled instead. The private space
+     * the RFC does give - a key beginning `_` - is the wrong tool for it:
+     * such keys "MUST NOT be used for interchange and MUST be rejected by
+     * implementations not specifically configured to take part in such an
+     * experiment", so a reader meeting one would throw the whole timestamp
+     * out (section 3.2). An unregistered key is merely unrecognised, and
+     * section 3.3 leaves a recipient "free to ignore any suffix tag", which
+     * is what `[x-cal=julian]` should be to every reader but this one.
+     */
+    if ((annotation.key_length == 4
+            && memcmp(annotation.key, "u-ca", 4) == 0)
+        || (annotation.key_length == 5
+            && memcmp(annotation.key, "x-cal", 5) == 0)) {
+      if (have_calendar) {
+        /*
+         * Section 3.3: an application that meets a duplicate key in elective
+         * suffixes and will not reconcile the two "MUST choose the first
+         * suffix that has that key". The same rule settles the two calendar
+         * keys against each other - whichever named the calendar first is
+         * the one that named it - and it is why nothing below this point is
+         * checked: a suffix that is being ignored cannot make the timestamp
+         * erroneous.
+         */
+        continue;
+      }
+      if (annotation.key_length == 4 && annotation.value_length == 6
+          && memcmp(annotation.value, "julian", 6) == 0) {
+        return gchron_fail(err, GCHRON_ERR_UNSUPPORTED,
+            GCHRON_DIAG_ANNOTATION_VALUE, annotation.at,
+            annotation.value_length);
+      }
       if (annotation.value_length > GCHRON_CALENDAR_ID_MAX) {
         /* No registered calendar identifier is anywhere near this long, so a
          * value that does not fit names nothing this library could act on. */
@@ -342,13 +383,11 @@ GCHRON_Result gchron_parse_rfc9557(const char * text, size_t len,
             GCHRON_DIAG_ANNOTATION_VALUE, annotation.at,
             annotation.value_length);
       }
-      if (info != NULL) {
-        /* Copied, not borrowed: the annotation points into the caller's
-         * input, and a GCHRON_ParseInfo outlives the call that filled it. */
-        memcpy(calendar, annotation.value, annotation.value_length);
-        calendar[annotation.value_length] = '\0';
-        have_calendar = true;
-      }
+      /* Copied, not borrowed: the annotation points into the caller's input,
+       * and a GCHRON_ParseInfo outlives the call that filled it. */
+      memcpy(calendar, annotation.value, annotation.value_length);
+      calendar[annotation.value_length] = '\0';
+      have_calendar = true;
       continue;
     }
 
@@ -356,7 +395,7 @@ GCHRON_Result gchron_parse_rfc9557(const char * text, size_t len,
       /*
        * The whole point of the `!` flag: the writer is saying that ignoring
        * this annotation would change what the timestamp means. RFC 9557
-       * section 4.1 requires a reader that does not understand it to reject
+       * section 3.3 requires a reader that does not understand it to reject
        * the timestamp rather than proceed.
        */
       return gchron_fail(err, GCHRON_ERR_UNSUPPORTED,
@@ -396,7 +435,7 @@ GCHRON_Result gchron_parse_rfc9557(const char * text, size_t len,
       /*
        * The two halves contradict each other. Something upstream is wrong -
        * a stale zone table, or a clock - and which half to believe is the
-       * application's decision, not this parser's (RFC 9557 section 4.1).
+       * application's decision, not this parser's (RFC 9557 section 3.4).
        *
        * `Z` is exempt, and the exemption is the RFC's, not a convenience.
        * Section 3.4 gives two figures for the same instant: with `+00:00`

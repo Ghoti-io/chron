@@ -196,6 +196,7 @@ RFC 9557 is RFC 3339 plus annotations in square brackets:
 ```
 2026-09-20T17:30:00+02:00[Europe/Paris]
 2026-09-20T17:30:00+02:00[Europe/Paris][u-ca=iso8601]
+2026-09-20T17:30:00+02:00[Europe/Paris][x-cal=julian]
 2026-09-20T15:30:00Z[!Etc/UTC]
 ```
 
@@ -239,8 +240,37 @@ whole.
 - **The annotation may be an offset rather than a name** - `[-05:00]`, `[Z]` -
   and then the zone is a fixed-offset one.
 
+### Naming the calendar
+
 `[u-ca=...]` is copied into `GCHRON_ParseInfo::calendar`; acting on it is
 phase 2's, and carrying it rather than dropping it is phase 1's.
+
+**The Julian calendar is not spelled `[u-ca=julian]`.** §5 gives `u-ca` "the
+set of values defined for the Unicode Calendar Identifier", and Unicode
+registers no identifier for the Julian calendar - so that string claims a
+registration that does not exist, and `GCHRON_ERR_UNSUPPORTED` is what it
+gets. V8's Temporal refuses it too, and says why: *Invalid calendar
+specified: julian*.
+
+`[x-cal=julian]` is the spelling instead. An unregistered key is merely one a
+reader does not recognise, and §3.3 leaves that reader "free to ignore any
+suffix tag" - so the annotation says something to this library and nothing to
+anybody else, which is exactly what a private calendar tag should do. The
+private space the RFC does define, a key beginning `_`, is the wrong tool:
+§3.2 says such keys "MUST NOT be used for interchange and MUST be rejected by
+implementations not specifically configured to take part in such an
+experiment", so a reader meeting one would throw the timestamp away rather
+than skip past the tag.
+
+Both keys fill the same field, and a timestamp carrying more than one of them
+is settled by §3.3: an application that meets a duplicate key in elective
+suffixes and "does not want to perform additional processing on this
+inconsistency MUST choose the first suffix that has that key". This library
+reports the calendar rather than acting on it, so it has nothing to
+reconcile and takes the first - of a repeated key, and of the two keys
+against each other. V8 treats the repeat as an error, which the same sentence
+leaves open to a reader that does want to process it; the differential counts
+those strings rather than comparing them.
 
 A zone annotation is matched **exactly**. §3.1: "Keys are lowercase only.
 Values are case-sensitive unless otherwise specified", and the name is a

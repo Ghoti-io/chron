@@ -147,7 +147,7 @@ typedef enum {
  *
  * `2026-03-08T01:30-05:00[America/New_York]` is consistent;
  * `2026-03-08T01:30-08:00[America/New_York]` is not, and something has to
- * give. RFC 9557 section 4.1 leaves the choice to the application, which is
+ * give. RFC 9557 section 3.4 leaves the choice to the application, which is
  * exactly what a policy is for (design.md, mistake M13).
  *
  * The function that takes this lives in zoned.h, because resolving a zone
@@ -346,8 +346,10 @@ typedef struct GCHRON_ParseInfo {
   bool offset_disagreed_with_zone;
 
   /**
-   * The `[u-ca=...]` calendar annotation, NUL-terminated, or empty when the
-   * text carried none.
+   * The calendar named by an RFC 9557 `[u-ca=...]` or `[x-cal=...]`
+   * annotation, NUL-terminated, or empty when the text carried none. If both
+   * appear, or either appears twice, this is the one that appeared first -
+   * RFC 9557 section 3.3's rule for a reader with nothing to reconcile.
    *
    * **Copied, not borrowed.** An earlier version of this field was a pointer
    * into the caller's own input, which is the arrangement that costs nothing
@@ -358,8 +360,14 @@ typedef struct GCHRON_ParseInfo {
    * than a lifetime rule nobody can see.
    *
    * The longest calendar identifier Unicode registers is
-   * `ethiopic-amete-alem`, at nineteen characters; a `u-ca` value too long to
-   * fit here names no calendar that exists and is GCHRON_ERR_UNSUPPORTED.
+   * `ethiopic-amete-alem`, at nineteen characters; a value too long to fit
+   * here names no calendar that exists and is GCHRON_ERR_UNSUPPORTED.
+   *
+   * Unicode registers nothing for the Julian calendar, which this library
+   * implements, so `julian` arrives here through `x-cal` and never through
+   * `u-ca` - RFC 9557 section 5 limits that key to the registered set, and
+   * `[u-ca=julian]` is GCHRON_ERR_UNSUPPORTED rather than a value passed on
+   * as though Unicode had blessed it.
    */
   char calendar[GCHRON_CALENDAR_ID_MAX + 1];
 } GCHRON_ParseInfo;

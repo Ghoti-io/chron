@@ -55,20 +55,20 @@ if (driver === null) {
 const ORACLE_GAPS = [
   {
     name: "critical flag",
-    rule: "RFC 9557 §4.1 allows `!` on any annotation; V8 rejects the string",
+    rule: "RFC 9557 §3.3 allows `!` on any annotation; V8 rejects the string",
     matches: (s) => s.includes("[!"),
   },
   {
     name: "unknown annotation",
-    rule: "RFC 9557 §4.1 says ignore an unrecognised annotation that is not " +
-          "critical; V8 rejects the string",
+    rule: "RFC 9557 §3.3 leaves a recipient \"free to ignore any suffix " +
+          "tag\" that is not critical; V8 rejects the string. `x-cal=julian` " +
+          "is here for that reason and not because the two sides disagree " +
+          "about the calendar - §5 gives `u-ca` the Unicode Calendar " +
+          "Identifiers, which have no name for the Julian calendar, so " +
+          "this " +
+          "library spells it with an unregistered key that a conforming " +
+          "reader may ignore",
     matches: (s) => /\[[a-z0-9-]+=/.test(s) && !/\[u-ca=/.test(s),
-  },
-  {
-    name: "u-ca=julian",
-    rule: "not a registered BCP 47 calendar, so V8 refuses it; this library " +
-          "implements the Julian calendar and names it that way",
-    matches: (s) => s.includes("u-ca=julian"),
   },
 ];
 
@@ -95,6 +95,18 @@ const TEMPORAL_EXTRA = [
  * Differences that are this library's own decision rather than V8's gap.
  */
 const DESIGNED = [
+  {
+    name: "duplicate calendar key",
+    rule: "RFC 9557 §3.3: an application that meets a duplicate key in " +
+          "elective suffixes and \"does not want to perform additional " +
+          "processing on this inconsistency MUST choose the first suffix " +
+          "that has that key\". This library has no reconciling to do - it " +
+          "reports the calendar rather than acting on it - so it takes the " +
+          "first. V8 treats the repeat as an error instead, which the same " +
+          "sentence leaves open to an application that does want to process " +
+          "it. Neither side is wrong",
+    matches: (s) => /\[u-ca=[^\]]*\]\[u-ca=/.test(s),
+  },
   {
     name: "no zone annotation",
     rule: "Temporal.ZonedDateTime.from requires one; this library reads the " +
@@ -135,6 +147,8 @@ function corpus() {
         out.push(`${stem}[Europe/Paris][u-ca=iso8601]`);
         out.push(`${stem}[Europe/Paris][u-ca=gregory]`);
         out.push(`${stem}[Europe/Paris][u-ca=julian]`);
+        out.push(`${stem}[Europe/Paris][x-cal=julian]`);
+        out.push(`${stem}[Europe/Paris][u-ca=chinese][u-ca=japanese]`);
         out.push(`${stem}[Europe/Paris][x-vendor=1]`);
         out.push(`${stem}[!Europe/Paris]`);
         out.push(`${stem}[europe/paris]`);

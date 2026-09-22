@@ -258,7 +258,8 @@ GCHRON_API bool gchron_zoned_identical(const GCHRON_ZonedDateTime * a,
  *
  * `2026-09-20T17:30:00+02:00[Europe/Paris]`. RFC 3339 plus annotations in
  * square brackets: a zone name, and any number of `key=value` tags of which
- * `[u-ca=julian]` is the one with a meaning here.
+ * two have a meaning here: `[u-ca=...]` and `[x-cal=...]`, which both name
+ * the calendar.
  *
  * **This is the grammar that fixes mistake M13.** RFC 3339 carries an offset
  * and not a zone, so `2026-03-08T01:30-05:00` cannot say it meant New York -
@@ -285,6 +286,14 @@ GCHRON_API bool gchron_zoned_identical(const GCHRON_ZonedDateTime * a,
  *   spelling the text used.
  * - **The annotation may be an offset rather than a name** (`[-05:00]`), and
  *   then the zone is a fixed-offset zone.
+ *
+ * The calendar annotation is reported in GCHRON_ParseInfo::calendar and not
+ * acted on. Section 5 gives `u-ca` the Unicode Calendar Identifiers, which
+ * have no name for the Julian calendar, so this library spells that one
+ * `[x-cal=julian]` - an unregistered key a conforming reader may ignore -
+ * and refuses `[u-ca=julian]`, which claims a registration that does not
+ * exist. A key that names the calendar twice, or both keys at once, is
+ * settled by section 3.3's rule: the first one wins.
  *
  * @param text The input. Not assumed to be NUL-terminated.
  * @param len Bytes of input.

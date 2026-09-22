@@ -157,13 +157,72 @@ TEST_F(Ixdtf, TheCalendarAnnotationIsReportedRatherThanActedOn) {
   GCHRON_ZonedDateTime zoned{};
   GCHRON_ParseInfo info{};
   ASSERT_EQ(GCHRON_OK,
-      parse("2026-09-20T15:30:00Z[u-ca=julian]", &zoned, nullptr, &info));
+      parse("2026-09-20T15:30:00Z[u-ca=hebrew]", &zoned, nullptr, &info));
   // Copied into the info, so it outlives the input it was parsed out of -
   // which the `parse` helper above binds to a temporary, and which an earlier
   // borrowing version of this field dangled on.
-  EXPECT_STREQ("julian", info.calendar);
+  EXPECT_STREQ("hebrew", info.calendar);
   // The other calendars are phase 2; what phase 1 owes is to carry the
   // annotation rather than silently drop it.
+}
+
+// RFC 9557 section 5 gives `u-ca` the values of UTS #35's Unicode Calendar
+// Identifier, and Unicode registers none for the Julian calendar. So the one
+// calendar this library implements that the registered key cannot name is
+// named by an unregistered key instead: `x-cal`, which a reader that does not
+// know it may ignore (section 3.3) rather than reject. The RFC's own private
+// space - a key beginning `_` - would be rejected by every reader not in on
+// the experiment, which is the opposite of what a private calendar tag wants.
+TEST_F(Ixdtf, TheJulianCalendarIsNamedByAKeyUnicodeDoesNotOwn) {
+  GCHRON_ZonedDateTime zoned{};
+  GCHRON_ParseInfo info{};
+  GCHRON_Error err{};
+
+  ASSERT_EQ(GCHRON_OK,
+      parse("2026-09-20T15:30:00Z[x-cal=julian]", &zoned, nullptr, &info));
+  EXPECT_STREQ("julian", info.calendar);
+
+  // The key is understood, so the critical flag on it is satisfied rather
+  // than fatal - which is the difference between a key we own and one we do
+  // not.
+  EXPECT_EQ(GCHRON_OK, parse("2026-09-20T15:30:00Z[!x-cal=julian]", &zoned));
+
+  // And the spelling that claims Unicode registers it does not parse. V8's
+  // Temporal refuses the same string, and says why: "Invalid calendar
+  // specified: julian".
+  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
+      parse("2026-09-20T15:30:00Z[u-ca=julian]", &zoned, nullptr, nullptr,
+          &err));
+  EXPECT_EQ(GCHRON_DIAG_ANNOTATION_VALUE, err.diag);
+}
+
+// RFC 9557 section 3.3: an application that meets a duplicate key in elective
+// suffixes and will not reconcile the two "MUST choose the first suffix that
+// has that key" - the example in the RFC is this one. Taking the last is what
+// a loop that simply overwrites does, and is what this did before.
+TEST_F(Ixdtf, TheFirstOfTwoAnnotationsNamingTheCalendarIsTheOneThatCounts) {
+  GCHRON_ZonedDateTime zoned{};
+  GCHRON_ParseInfo info{};
+  ASSERT_EQ(GCHRON_OK,
+      parse("2022-07-08T00:14:07Z[u-ca=chinese][u-ca=japanese]", &zoned,
+          nullptr, &info));
+  EXPECT_STREQ("chinese", info.calendar);
+
+  // The two keys settle against each other the same way: whichever named the
+  // calendar first is the one that named it.
+  GCHRON_ParseInfo second{};
+  ASSERT_EQ(GCHRON_OK,
+      parse("2026-09-20T15:30:00Z[u-ca=gregory][x-cal=julian]", &zoned,
+          nullptr, &second));
+  EXPECT_STREQ("gregory", second.calendar);
+
+  // A suffix that is being ignored cannot make the timestamp erroneous, so
+  // neither the length limit nor the `julian` rule is applied to one.
+  GCHRON_ParseInfo third{};
+  std::string ignored = "2026-09-20T15:30:00Z[x-cal=julian][u-ca=julian][u-ca="
+      + std::string(GCHRON_CALENDAR_ID_MAX + 1, 'a') + "]";
+  ASSERT_EQ(GCHRON_OK, parse(ignored, &zoned, nullptr, &third));
+  EXPECT_STREQ("julian", third.calendar);
 }
 
 TEST_F(Ixdtf, ACalendarIdentifierTooLongToNameACalendarIsRefused) {
@@ -193,6 +252,8 @@ TEST_F(Ixdtf, TheGrammarsEdgesAreRefusedDeliberately) {
     { "2026-09-20T15:30:00Z[U-CA=julian]", "an uppercase suffix key" },
     { "2026-09-20T15:30:00Z[=julian]", "a key that is empty" },
     { "2026-09-20T15:30:00Z[u-ca=]", "a value that is empty" },
+    { "2026-09-20T15:30:00Z[u-ca=julian]",
+      "Unicode registers no calendar identifier for the Julian calendar" },
     { "2026-09-20T17:30:00+02:00[Europe/Paris]tail", "trailing text" },
     { "2026-09-20T17:30:00+02:00[Europe/Paris]\n", "a trailing newline" },
     { "2026-09-20T15:30:00+00:00[Europe/Paris]",
@@ -212,6 +273,7 @@ TEST_F(Ixdtf, TheGrammarsEdgesAreRefusedDeliberately) {
     "2026-09-20T17:30:00+02:00[!Europe/Paris]",
     "2026-01-20T16:30:00+01:00[Europe/Paris]",
     "2026-09-20T15:30:00Z[u-ca=iso8601]",
+    "2026-09-20T15:30:00Z[x-cal=julian]",
     "2026-09-20T15:30:00Z[Etc/UTC]",
     "2026-09-20T15:30:00Z[Z]",
   };
