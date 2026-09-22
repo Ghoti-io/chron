@@ -308,6 +308,102 @@ def seed_scan():
     return out
 
 
+
+def seed_textfmt():
+    """The four text grammars, one selector byte then the text.
+
+    These need real examples more than any other harness here. A coverage
+    fuzzer will find `1994` and it will find `GMT`, but the chance of it
+    assembling `Sun, 06 Nov 1994 08:49:37 GMT` out of nothing is nil, and
+    every round-trip assertion in the harness sits *behind* a successful
+    parse. Unseeded, the harness ran three million executions without once
+    reaching the property it exists to check - a planted defect in the
+    HTTP-date writer survived it. Seeded, the same defect dies in seconds.
+    """
+    out = reset("textfmt")
+
+    rfc9557 = [
+        b"2022-07-08T00:14:07Z[Europe/London]",
+        b"2022-07-08T00:14:07+01:00[Europe/London]",
+        b"2022-07-08T00:14:07+01:00[!Europe/London]",
+        b"2026-01-01T00:00:00Z[UTC][u-ca=iso8601]",
+        b"2026-03-08T02:30:00-05:00[America/New_York]",
+        b"1970-01-01T00:00:00Z[Etc/GMT+12]",
+    ]
+    http = [
+        b"Sun, 06 Nov 1994 08:49:37 GMT",       # IMF-fixdate
+        b"Sunday, 06-Nov-94 08:49:37 GMT",      # RFC 850, two-digit year
+        b"Sun Nov  6 08:49:37 1994",            # asctime
+        b"Mon, 29 Feb 2016 12:00:00 GMT",       # a leap day
+        b"Tue, 31 Dec 2049 23:59:59 GMT",       # the RFC 850 pivot's far side
+    ]
+    rfc5322 = [
+        b"Fri, 21 Nov 1997 09:55:06 -0600",
+        b"Tue, 1 Jul 2003 10:52:37 +0200",
+        b"Thu, 13 Feb 1969 23:32:54 -0330",
+        b"Mon, 24 Nov 1997 14:22:01 -0000",     # the unknown-offset spelling
+        b"21 Nov 97 09:55:06 GMT",              # obsolete: no weekday, 2-digit
+        b"Fri, 21 Nov 1997 09:55:06 EST",       # obsolete zone name
+    ]
+    yaml = [
+        b"2001-12-14t21:59:43.10-05:00",
+        b"2001-12-14 21:59:43.10 -5",
+        b"2002-12-14",
+        b"2001-12-15T02:59:43.1Z",
+        b"2001-12-14 21:59:43.10",              # no zone: a local timestamp
+    ]
+
+    for selector, texts in enumerate((rfc9557, http, rfc5322, yaml)):
+        for text in texts:
+            write(out, bytes([selector]) + text)
+    return out
+
+
+def seed_zonedir():
+    """`tzdata.zi` link tables: one options byte, then the file.
+
+    Both spellings of a link line are seeded on purpose. `zishrink.awk` emits
+    only the abbreviated `L`, so a corpus drawn from the machine's own file
+    would never contain `Link` - and the two passes over this file disagreeing
+    about which of them counts as a link was a real defect (see
+    src/zone/zonedb.c). A corpus that only holds what the normal generator
+    produces cannot ask about the input the normal generator never makes.
+    """
+    out = reset("zonedir")
+
+    bodies = [
+        b"",                                        # empty: nothing to link
+        b"L RealZone AliasZone\n",                  # the abbreviated form
+        b"Link RealZone AliasZone\n",               # the long form
+        b"Link RealZone LongFormAlias\nL RealZone AliasZone\n",
+        b"l RealZone AliasZone\n",                  # lowercase
+        b"L\tRealZone\tAliasZone\n",                # tab-separated
+        b"L RealZone AliasZone",                    # no trailing newline
+        b"L RealZone AliasZone\r\n",                # CRLF
+        b"L  RealZone   AliasZone  \n",             # runs of whitespace
+        b"L RealZone\n",                            # a name and no target
+        b"L\n",                                     # neither
+        b"# version 2026c\nL RealZone AliasZone\n",  # a version header
+        b"Z RealZone 0 - UTC\nL RealZone AliasZone\n",
+        b"L AliasZone AliasZone\n",                 # a link to itself
+        b"L Missing AliasZone\n",                   # target that is absent
+        b"L RealZone A\n" * 64,                     # many links, one target
+    ]
+
+    # A real one, if this machine has it: the shape the parser meets in life.
+    system = pathlib.Path("/usr/share/zoneinfo/tzdata.zi")
+    if system.is_file():
+        links = [line for line in system.read_bytes().splitlines()
+                 if line[:2] in (b"L ", b"L\t")]
+        if links:
+            bodies.append(b"\n".join(links[:200]) + b"\n")
+
+    for options in (0x00, 0x01, 0x02):
+        for body in bodies:
+            write(out, bytes([options]) + body)
+    return out
+
+
 def main():
     parse = seed_parse()
     arith = seed_arith()
@@ -316,7 +412,10 @@ def main():
     fmt = seed_format()
     leap = seed_leap()
     scan = seed_scan()
-    for path in (parse, arith, tzif, posix, duration, fmt, leap, scan):
+    textfmt = seed_textfmt()
+    zonedir = seed_zonedir()
+    for path in (parse, arith, tzif, posix, duration, fmt, leap, scan,
+                 textfmt, zonedir):
         count = len([p for p in path.iterdir() if p.is_file()
                      and p.name != ".gitignore"])
         print("%-34s %5d seeds" % (path.relative_to(ROOT), count))

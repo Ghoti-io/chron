@@ -1365,10 +1365,13 @@ $(eval $(call fuzz-rule,fuzz_duration,duration))
 $(eval $(call fuzz-rule,fuzz_format,format))
 $(eval $(call fuzz-rule,fuzz_leap,leap))
 $(eval $(call fuzz-rule,fuzz_scan,scan))
+$(eval $(call fuzz-rule,fuzz_zonedir,zonedir))
+$(eval $(call fuzz-rule,fuzz_textfmt,textfmt))
 
 fuzz: ## Build and run every fuzzer for $(FUZZ_TIME) seconds each
 fuzz: fuzz-run-parse fuzz-run-arith fuzz-run-tzif fuzz-run-posix_tz \
-	fuzz-run-duration fuzz-run-format fuzz-run-leap fuzz-run-scan
+	fuzz-run-duration fuzz-run-format fuzz-run-leap fuzz-run-scan \
+	fuzz-run-zonedir fuzz-run-textfmt
 
 fuzz-clean: ## Remove the fuzz build (keeps the corpus)
 	-@rm -rf $(FUZZ_DIR)
