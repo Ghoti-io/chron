@@ -265,8 +265,26 @@ typedef enum {
 /**
  * @brief A pre-compiled named format.
  *
- * Every one has a matching parser, so `parse(write(x))` is an identity for
- * all of them - `tests/unit/test_roundtrip.cpp` says so.
+ * Every one has a matching parser, and `tests/unit/test_format.cpp` puts all
+ * of them through `parse(write(x))`. What comes back is the instant, in every
+ * case. What else comes back depends on what the format can hold, and
+ * design.md section 12.1 property 3 asks for the loss to be the documented
+ * one rather than a discovered one:
+ *
+ * - ::GCHRON_NAMED_ISO_WEEK and ::GCHRON_NAMED_ISO_ORDINAL write a date and
+ *   no time of day, so they read back through gchron_parsed_to_date() and
+ *   gchron_parsed_to_datetime() refuses them.
+ * - ::GCHRON_NAMED_HTTP is GMT and says nothing about where the sender was,
+ *   so a value at `+02:00` reads back as the same instant at `+00:00`.
+ * - The other five lose nothing.
+ *
+ * ::GCHRON_NAMED_RFC9557 needs gchron_format_zoned(): `VV` names a zone, and
+ * an offset is not one. For a zone that has no name it is
+ * ::GCHRON_ERR_UNSUPPORTED, per GCHRON_FormatContext::zone - where
+ * gchron_write_rfc9557() writes plain RFC 3339 instead, which is valid RFC
+ * 9557 and loses nothing because there was no name to lose. Reach for the
+ * writer when the zone may be a fixed offset or a `TZ` rule, and for this
+ * when a missing identifier should be an error.
  *
  * @param named Which one.
  * @return A borrowed, immutable format, or NULL for a value outside the enum.

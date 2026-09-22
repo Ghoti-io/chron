@@ -328,7 +328,16 @@ GCHRON_API GCHRON_Result gchron_parse_rfc9557(const char * text, size_t len,
  * An anonymous zone - one built from a `TZ` rule, or read from a
  * `/etc/localtime` that is a plain file - has no name to annotate, so the
  * output is plain RFC 3339. That is the honest answer rather than an invented
- * name, and gchron_zone_id() is how a caller checks in advance.
+ * name, and gchron_zone_id() is how a caller checks in advance. A
+ * fixed-offset zone goes the same way, and for the same reason: it has no
+ * identifier, and a name for it would say nothing its offset does not.
+ *
+ * `GCHRON_NAMED_RFC9557` is the other way to write this format, and it
+ * answers differently here: its pattern contains `VV`, which is a caller
+ * asking for the identifier, so a zone without one is
+ * `GCHRON_ERR_UNSUPPORTED` rather than a quieter string. Use that one when a
+ * missing name should stop the write, and this one when RFC 3339 is an
+ * acceptable answer.
  *
  * @param zoned A valid zoned date-time.
  * @param opts Options. NULL means gchron_write_options_default().

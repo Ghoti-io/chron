@@ -572,6 +572,23 @@ GCHRON_Result gchron_format_parse(const GCHRON_Format * format,
     return result;
   }
 
+  if (format->in_utc) {
+    /*
+     * The format states its own zone, and the reader has to hear it. An
+     * HTTP-date's `GMT` is a literal, so the loop below matches it as text
+     * and sets no offset - which left `parse(write(x))` unable to rebuild an
+     * offset date-time from a format that had just asserted one. RFC 9110
+     * section 5.6.7 makes GMT the only zone an HTTP-date has, which is the
+     * same thing gchron_parse_http_date() already tells its callers.
+     *
+     * Set before the loop rather than after, so that a pattern which also
+     * carries a real offset letter would meet the conflict check at the
+     * point every other repeated field meets it.
+     */
+    out->offset_sec = 0;
+    out->present |= (uint32_t)GCHRON_FIELD_OFFSET;
+  }
+
   c.text = text;
   c.len = len;
   c.pos = 0;

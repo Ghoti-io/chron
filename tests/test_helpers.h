@@ -81,6 +81,30 @@ inline GCHRON_DateTime datetime(int32_t year, int month, int day, int hour,
 }
 
 /**
+ * The system zone database, released when it goes out of scope.
+ *
+ * A test that needs a zone for one assertion should not have to carry a
+ * fixture for it. Construction asserts rather than skipping: a machine with
+ * no zoneinfo cannot answer these questions, and a green run that never asked
+ * them is the thing design.md section 12 exists to prevent.
+ */
+class ZoneDb {
+public:
+  ZoneDb() {
+    EXPECT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db_))
+        << "no system zoneinfo directory";
+  }
+  ~ZoneDb() { gchron_zonedb_destroy(db_); }
+  ZoneDb(const ZoneDb &) = delete;
+  ZoneDb & operator=(const ZoneDb &) = delete;
+
+  GCHRON_ZoneDb * get() const { return db_; }
+
+private:
+  GCHRON_ZoneDb * db_ = nullptr;
+};
+
+/**
  * An allocator that grants a fixed number of allocations and then fails every
  * one after them.
  *

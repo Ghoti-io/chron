@@ -293,10 +293,191 @@ TEST(Format, EveryNamedFormatCompilesAndProducesItsDocumentedShape) {
     EXPECT_EQ(GCHRON_OK, result);
   }
 
+  // GCHRON_NAMED_RFC9557 is the one that cannot be written from an offset
+  // date-time, because `VV` needs a zone rather than an offset. It was left
+  // out of the list above for years on that account, which is how the two
+  // ways of writing RFC 9557 came to disagree without anybody noticing.
+  gchrontest::ZoneDb db;
+  const GCHRON_Zone * paris = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_zone(db.get(), "Europe/Paris", &paris));
+  GCHRON_Instant when = { 1789918200, 0 };  // 2026-09-20T15:30:00Z
+  GCHRON_ZonedDateTime zoned{};
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_from_instant(when, paris, &zoned));
+
+  char buffer[128];
+  size_t length = 0;
+  ASSERT_EQ(GCHRON_OK,
+      gchron_format_zoned(gchron_format_named(GCHRON_NAMED_RFC9557), &zoned,
+          nullptr, buffer, sizeof(buffer), &length));
+  EXPECT_EQ("2026-09-20T17:30:00+02:00[Europe/Paris]",
+      std::string(buffer, length));
+
   // Out of the enum is NULL rather than a wild read.
   EXPECT_EQ(nullptr, gchron_format_named(GCHRON_NAMED_COUNT));
   EXPECT_EQ(nullptr,
       gchron_format_named(static_cast<GCHRON_NamedFormat>(-1)));
+}
+
+/*
+ * `parse(write(x))` for every named format, which format.h claims and nothing
+ * checked. The claim was attributed to tests/unit/test_roundtrip.cpp, which
+ * is entirely about gchron_write_rfc3339_date_time() and has never called
+ * gchron_format_named().
+ *
+ * It is not one property, because two of the eight write a date and no time
+ * of day. design.md section 12.1 property 3 is "identical for every value the
+ * format can represent losslessly, and where the format is lossy the loss is
+ * exactly the documented one" - so each format says which it is, and the loss
+ * is written down here rather than discovered.
+ */
+TEST(Format, ParseOfWriteIsIdenticalForEveryNamedFormat) {
+  gchrontest::ZoneDb db;
+  const GCHRON_Zone * paris = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_zone(db.get(), "Europe/Paris", &paris));
+  GCHRON_Instant when = { 1789918200, 0 };  // 2026-09-20T15:30:00Z
+  GCHRON_ZonedDateTime zoned{};
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_from_instant(when, paris, &zoned));
+
+  GCHRON_DateTime civil = gchrontest::datetime(2026, 9, 20, 17, 30, 0);
+  GCHRON_OffsetDateTime odt{};
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 2 * 3600, false, &odt));
+
+  enum Loss {
+    NOTHING,      // the whole offset date-time comes back
+    TIME_OF_DAY,  // a date-only format; the date comes back
+    THE_OFFSET,   // an HTTP-date is GMT, so the local reading is not in it
+  };
+  struct Case {
+    GCHRON_NamedFormat named;
+    const char * written;
+    Loss loss;
+  };
+  const Case cases[] = {
+    { GCHRON_NAMED_RFC3339, "2026-09-20T17:30:00+02:00", NOTHING },
+    { GCHRON_NAMED_RFC3339_NANOS, "2026-09-20T17:30:00.000000000+02:00",
+      NOTHING },
+    { GCHRON_NAMED_RFC9557, "2026-09-20T17:30:00+02:00[Europe/Paris]",
+      NOTHING },
+    { GCHRON_NAMED_ISO8601_BASIC, "20260920T173000+0200", NOTHING },
+    { GCHRON_NAMED_ISO_WEEK, "2026-W38-7", TIME_OF_DAY },
+    { GCHRON_NAMED_ISO_ORDINAL, "2026-263", TIME_OF_DAY },
+    { GCHRON_NAMED_HTTP, "Sun, 20 Sep 2026 15:30:00 GMT", THE_OFFSET },
+    { GCHRON_NAMED_RFC5322, "Sun, 20 Sep 2026 17:30:00 +0200", NOTHING },
+  };
+  ASSERT_EQ(static_cast<size_t>(GCHRON_NAMED_COUNT),
+      sizeof(cases) / sizeof(cases[0]))
+      << "a named format was added without saying what it loses";
+
+  for (const Case & c : cases) {
+    const GCHRON_Format * format = gchron_format_named(c.named);
+    ASSERT_NE(nullptr, format) << c.written;
+
+    // Every one of them claims to be readable; that is what the claim rests
+    // on, so ask before relying on it.
+    EXPECT_EQ(GCHRON_OK, gchron_format_is_invertible(format, nullptr))
+        << c.written;
+
+    char buffer[128];
+    size_t length = 0;
+    ASSERT_EQ(GCHRON_OK,
+        gchron_format_zoned(format, &zoned, nullptr, buffer, sizeof(buffer),
+            &length)) << c.written;
+    EXPECT_EQ(std::string(c.written), std::string(buffer, length));
+
+    GCHRON_ParsedFields fields{};
+    ASSERT_EQ(GCHRON_OK,
+        gchron_format_parse(format, buffer, length, nullptr, &fields, nullptr))
+        << c.written;
+
+    if (c.loss == TIME_OF_DAY) {
+      GCHRON_Date back{};
+      ASSERT_EQ(GCHRON_OK,
+          gchron_parsed_to_date(&fields, nullptr, &back, nullptr))
+          << c.written;
+      EXPECT_EQ(2026, back.year) << c.written;
+      EXPECT_EQ(9, back.month) << c.written;
+      EXPECT_EQ(20, back.day) << c.written;
+      // And there is no time of day in it to ask for.
+      GCHRON_DateTime whole{};
+      EXPECT_NE(GCHRON_OK,
+          gchron_parsed_to_datetime(&fields, nullptr, &whole, nullptr))
+          << c.written;
+      continue;
+    }
+
+    GCHRON_OffsetDateTime back{};
+    ASSERT_EQ(GCHRON_OK,
+        gchron_parsed_to_offset(&fields, nullptr, &back, nullptr))
+        << c.written;
+    // The instant survives every one of them; that is the property that
+    // matters, and it is the one an HTTP-date keeps while losing the local
+    // reading.
+    GCHRON_Instant again{};
+    ASSERT_EQ(GCHRON_OK, gchron_offset_to_instant(&back, &again));
+    EXPECT_EQ(when.sec, again.sec) << c.written;
+    EXPECT_EQ(when.nsec, again.nsec) << c.written;
+
+    if (c.loss == NOTHING) {
+      EXPECT_EQ(2 * 3600, back.offset_sec) << c.written;
+      EXPECT_EQ(17, back.civil.time.hour) << c.written;
+    }
+    else {
+      // The documented loss: an HTTP-date is GMT and says nothing about
+      // where the sender was, so it reads back as the UTC civil time.
+      EXPECT_EQ(0, back.offset_sec) << c.written;
+      EXPECT_EQ(15, back.civil.time.hour) << c.written;
+    }
+  }
+}
+
+/*
+ * Two ways to write RFC 9557, and they answer differently for a zone with no
+ * name - which is every fixed-offset zone and every zone built from a `TZ`
+ * rule or a plain-file `/etc/localtime`.
+ *
+ * Both answers are right for their layer, and the pairing is the thing worth
+ * pinning. A pattern containing `VV` is a caller asking for the identifier,
+ * and GCHRON_FormatContext::zone already promises that a zone without one is
+ * GCHRON_ERR_UNSUPPORTED "rather than inventing a name". gchron_write_rfc9557
+ * is not asking for the identifier, it is writing the format, and RFC 3339 is
+ * valid RFC 9557 - so it degrades, which loses nothing, because there was no
+ * name to lose.
+ *
+ * What was wrong before is that neither said so, and nothing tested it.
+ */
+TEST(Format, TheTwoWaysToWriteRfc9557PartCompanyOverANamelessZone) {
+  gchrontest::ZoneDb db;
+  const GCHRON_Zone * fixed = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_fixed(db.get(), 5 * 3600 + 1800,
+      &fixed));
+  ASSERT_EQ(nullptr, gchron_zone_id(fixed));
+
+  GCHRON_Instant when = { 1789918200, 0 };  // 2026-09-20T15:30:00Z
+  GCHRON_ZonedDateTime zoned{};
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_from_instant(when, fixed, &zoned));
+
+  char buffer[128];
+  size_t length = 0;
+  ASSERT_EQ(GCHRON_OK,
+      gchron_write_rfc9557(&zoned, nullptr, buffer, sizeof(buffer), &length));
+  EXPECT_EQ("2026-09-20T21:00:00+05:30", std::string(buffer, length));
+
+  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
+      gchron_format_zoned(gchron_format_named(GCHRON_NAMED_RFC9557), &zoned,
+          nullptr, buffer, sizeof(buffer), &length));
+
+  // They agree wherever there is a name to agree about.
+  const GCHRON_Zone * paris = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_zone(db.get(), "Europe/Paris", &paris));
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_from_instant(when, paris, &zoned));
+  char direct[128];
+  size_t direct_length = 0;
+  ASSERT_EQ(GCHRON_OK, gchron_write_rfc9557(&zoned, nullptr, direct,
+      sizeof(direct), &direct_length));
+  ASSERT_EQ(GCHRON_OK,
+      gchron_format_zoned(gchron_format_named(GCHRON_NAMED_RFC9557), &zoned,
+          nullptr, buffer, sizeof(buffer), &length));
+  EXPECT_EQ(std::string(direct, direct_length), std::string(buffer, length));
 }
 
 /*

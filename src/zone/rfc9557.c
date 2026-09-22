@@ -522,6 +522,11 @@ GCHRON_Result gchron_write_rfc9557(const GCHRON_ZonedDateTime * zoned,
      * `/etc/localtime` that is a plain file - has no name to annotate, and a
      * fixed-offset zone's name would say nothing the offset does not. Plain
      * RFC 3339 is the honest output in both cases; inventing a name is not.
+     *
+     * gchron_zonedb_fixed() gives its zones no identifier today, so the
+     * second test changes nothing on its own. It is here for the day one of
+     * them acquires a name, because the argument above is about what the
+     * annotation would be worth and not about whether there is one.
      */
     size_t id_length = strlen(id);
     if (length + id_length + 3 > sizeof(scratch)) {
