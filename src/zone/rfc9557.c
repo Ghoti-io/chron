@@ -237,6 +237,16 @@ GCHRON_Result gchron_parse_rfc9557(const char * text, size_t len,
   }
   pos = base_info.consumed;
 
+  /*
+   * scan_annotation fills every field before it returns GCHRON_OK, so this is
+   * not covering a live defect - but the struct is read field-by-field by the
+   * code below, and at -O2 GCC inlines is_offset_annotation far enough to see
+   * that it cannot prove the initialisation from the call site. Zero it, on
+   * the same reasoning as everywhere else in this library: a partially filled
+   * struct should read as empty rather than as whatever was on the stack.
+   */
+  memset(&annotation, 0, sizeof(annotation));
+
   while (pos < len) {
     result = scan_annotation(text, len, &pos, &annotation, err);
     if (result == GCHRON_ERR_UNSUPPORTED) {

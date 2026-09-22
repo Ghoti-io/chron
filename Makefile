@@ -167,10 +167,25 @@ endif
 PKG_CONFIG_LOOKUP_PATH := $(if $(PKG_CONFIG_PATH_ENV),$(PKG_CONFIG_PATH_ENV):)$(PKG_CONFIG_PATH)
 
 
+# The optimization level is the one thing that distinguishes the two builds'
+# compile flags. `release` is what gets installed and what anything linking
+# against this library actually runs, so it is compiled for speed; `debug` is
+# compiled for stepping through. -g stays in both, because a release build
+# that cannot be read in a debugger is a release build nobody can diagnose,
+# and the symbols cost only file size.
+#
+# The sanitizer build puts its own -O1 after this one (see ASAN_UBSAN_FLAGS)
+# and `make coverage` its own -O0, both by appending, since the last -O wins.
+ifeq ($(BUILD),debug)
+OPT_CFLAGS := -O0
+else
+OPT_CFLAGS := -O2
+endif
+
 CXX := g++
 CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g $(EXTRA_CXXFLAGS)
 CC := cc
-CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 -O0 -g $(EXTRA_CFLAGS)
+CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GCHRON_BUILD enables DLL export on Windows (checked by GCHRON_API macro)
 # GCHRON_TEST_BUILD enables export of internal functions for testing (checked by GCHRON_INTERNAL_API macro)
@@ -1093,7 +1108,7 @@ endif
 # that runs on every change.
 #
 ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined \
-	-fno-omit-frame-pointer -g
+	-fno-omit-frame-pointer -g -O1
 ASAN_BUILD_DIR := ./build/$(BUILD)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
 ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
