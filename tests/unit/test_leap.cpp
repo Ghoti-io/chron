@@ -8,7 +8,10 @@
 
 #include <ghoti.io/chron/chron.h>
 #include <gtest/gtest.h>
+#include <cstdlib>
 #include <string>
+
+#include "test_helpers.h"
 
 namespace {
 
@@ -550,6 +553,163 @@ TEST(Leap, TheSecondANegativeLeapRemovesIsAGapNotAnInstant) {
     EXPECT_EQ(before.sec, back.sec);
   }
 
+  gchron_leap_table_destroy(table);
+}
+
+/**
+ * Where `gchron_leap_table_file(NULL, ...)` looks, and in what order.
+ *
+ * `$TZDIR` first, then the platform's usual place - and *only* a file that
+ * could not be opened sends it on to the second. A copy under `$TZDIR` that
+ * is too large, or unreadable part way through, is an answer; quietly reading
+ * a different file instead would hide it.
+ *
+ * Nothing covered this until 2026-09-21, and the shape it protects is one
+ * that fails silently rather than loudly: a `$TZDIR` set to a tree with no
+ * `leap-seconds.list` in it - a fetched tzdb, an unpacked archive, a
+ * container - has to reach the system copy. If that fallback stops firing,
+ * the caller gets "no table" where it used to get the right answer, and
+ * nothing says so.
+ */
+class LeapFile : public ::testing::Test {
+protected:
+  void SetUp() override {
+    const char * tzdir = std::getenv("TZDIR");
+    had_ = tzdir != nullptr;
+    if (had_) {
+      saved_ = tzdir;
+    }
+  }
+  void TearDown() override {
+    if (had_) {
+      ::setenv("TZDIR", saved_.c_str(), 1);
+    }
+    else {
+      ::unsetenv("TZDIR");
+    }
+  }
+
+private:
+  bool had_ = false;
+  std::string saved_;
+};
+
+TEST_F(LeapFile, ATzdirWithNoLeapSecondsListFallsThroughToTheSystemCopy) {
+  GCHRON_LeapTable * from_system = nullptr;
+  ::unsetenv("TZDIR");
+  const GCHRON_Result without =
+      gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr);
+  if (without != GCHRON_OK) {
+    GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
+  }
+  const size_t expected = gchron_leap_table_count(from_system);
+  gchron_leap_table_destroy(from_system);
+
+  // A directory that exists and holds no leap-seconds.list: the shape a
+  // fetched tzdb or a container has.
+  ::setenv("TZDIR", GCHRON_TEST_DATA, 1);
+  GCHRON_LeapTable * table = nullptr;
+  GCHRON_Error err{};
+  ASSERT_EQ(GCHRON_OK,
+      gchron_leap_table_file(nullptr, nullptr, &table, &err))
+      << "the $TZDIR miss did not fall through to the system copy";
+  EXPECT_EQ(expected, gchron_leap_table_count(table));
+  gchron_leap_table_destroy(table);
+
+  // A $TZDIR that is not a directory at all, and one whose path cannot be
+  // walked, are the same question spelled differently - each names nothing,
+  // and each has to fall through rather than become "no table".
+  for (const char * dir : { GCHRON_TEST_DATA "/vectors/leap/leapseconds.vec",
+      GCHRON_TEST_DATA "/no-such-directory" }) {
+    ::setenv("TZDIR", dir, 1);
+    GCHRON_LeapTable * one = nullptr;
+    ASSERT_EQ(GCHRON_OK, gchron_leap_table_file(nullptr, nullptr, &one,
+        nullptr)) << dir;
+    EXPECT_EQ(expected, gchron_leap_table_count(one)) << dir;
+    gchron_leap_table_destroy(one);
+  }
+}
+
+/*
+ * The other half of the same rule: a `$TZDIR` copy that *is* there is the
+ * answer, and a malformed one is an error rather than a silent promotion of
+ * the system copy.
+ */
+TEST_F(LeapFile, ATzdirCopyThatIsThereIsTheAnswerEvenWhenItIsWrong) {
+  gchrontest::TempDir dir;
+  dir.write("leap-seconds.list", "not a leap second list at all\n");
+  ::setenv("TZDIR", dir.path().c_str(), 1);
+
+  GCHRON_LeapTable * table = nullptr;
+  GCHRON_Error err{};
+  EXPECT_EQ(GCHRON_ERR_FORMAT,
+      gchron_leap_table_file(nullptr, nullptr, &table, &err))
+      << "a bad copy under $TZDIR was passed over for the system one";
+  EXPECT_EQ(nullptr, table);
+}
+
+/*
+ * The case the comment beside that condition is actually about: a `$TZDIR`
+ * copy that is there and is *too large* to read. It comes back
+ * `GCU_FILE_ERR_LIMIT`, which is an answer - the file exists and says it is
+ * bigger than this library will hold - so the fallback must not fire and
+ * quietly read a different file instead.
+ *
+ * This is the assertion that makes the condition a condition. Widening it to
+ * "anything that is not OK" leaves every other test here passing.
+ */
+TEST_F(LeapFile, ATzdirCopyTooLargeToReadIsAnAnswerRatherThanAFallback) {
+  gchrontest::TempDir dir;
+  // One byte past the megabyte the loader will hold.
+  dir.write("leap-seconds.list", std::string(1024 * 1024 + 1, '#'));
+  ::setenv("TZDIR", dir.path().c_str(), 1);
+
+  GCHRON_LeapTable * table = nullptr;
+  GCHRON_Error err{};
+  EXPECT_EQ(GCHRON_ERR_LIMIT,
+      gchron_leap_table_file(nullptr, nullptr, &table, &err))
+      << "an oversized copy under $TZDIR was passed over for the system one";
+  EXPECT_EQ(nullptr, table);
+}
+
+/*
+ * The case in between, and the one the condition in leap.c actually turns on:
+ * a `$TZDIR` copy that is there and cannot be *opened*.
+ *
+ * Today it falls through to the system table, because the underlying read
+ * reports one error for every way an open can fail and the condition tests
+ * for that one. The distinction is not a detail: "nothing was there" and "we
+ * never got it open" are different sentences, and a reader that narrows the
+ * condition to the first changes this case from an answer to a refusal
+ * without touching the line that says what the rule is.
+ *
+ * Pinned so that the change is loud. Which behaviour is *right* is a separate
+ * question and this test does not settle it - it records what the answer is
+ * today, so that moving it has to be deliberate.
+ */
+TEST_F(LeapFile, ATzdirCopyThatCannotBeOpenedFallsThroughAsAMissingOneDoes) {
+  if (::geteuid() == 0) {
+    GTEST_SKIP() << "root can read a mode-000 file, so this machine cannot "
+                    "pose the question";
+  }
+  GCHRON_LeapTable * from_system = nullptr;
+  ::unsetenv("TZDIR");
+  if (gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr)
+      != GCHRON_OK) {
+    GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
+  }
+  const size_t expected = gchron_leap_table_count(from_system);
+  gchron_leap_table_destroy(from_system);
+
+  gchrontest::TempDir dir;
+  dir.write("leap-seconds.list", "#$\t3960100800\n", 0);
+  ::setenv("TZDIR", dir.path().c_str(), 1);
+
+  GCHRON_LeapTable * table = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_leap_table_file(nullptr, nullptr, &table,
+      nullptr))
+      << "an unreadable copy under $TZDIR stopped the fallback";
+  EXPECT_EQ(expected, gchron_leap_table_count(table));
   gchron_leap_table_destroy(table);
 }
 

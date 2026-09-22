@@ -9,8 +9,13 @@
 #ifndef GHOTI_IO_GCHRON_TEST_HELPERS_H
 #define GHOTI_IO_GCHRON_TEST_HELPERS_H
 
+#include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <vector>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
@@ -79,6 +84,63 @@ inline GCHRON_DateTime datetime(int32_t year, int month, int day, int hour,
   dt.time = timeofday(hour, minute, second, nsec);
   return dt;
 }
+
+/**
+ * A directory of its own, removed when it goes out of scope.
+ *
+ * For the tests that have to ask what happens when a file is *there* and
+ * cannot be used - malformed, or unreadable - which no fixture checked into
+ * the repository can be, because git does not carry a mode that would make
+ * one unreadable and a checkout would fix it if it did.
+ */
+class TempDir {
+public:
+  TempDir() {
+    char pattern[] = "/tmp/gchrontestXXXXXX";
+    const char * made = ::mkdtemp(pattern);
+    EXPECT_NE(nullptr, made) << "could not make a temporary directory";
+    if (made != nullptr) {
+      path_ = made;
+    }
+  }
+  ~TempDir() {
+    if (path_.empty()) {
+      return;
+    }
+    // Whatever mode a test left a file in, it has to be removable.
+    for (const std::string & f : files_) {
+      ::chmod(f.c_str(), 0600);
+      ::unlink(f.c_str());
+    }
+    ::rmdir(path_.c_str());
+  }
+  TempDir(const TempDir &) = delete;
+  TempDir & operator=(const TempDir &) = delete;
+
+  const std::string & path() const { return path_; }
+
+  /** Write a file into it, and remember it for the cleanup. */
+  std::string write(const char * name, const std::string & content,
+      int mode = 0600) {
+    std::string full = path_ + "/" + name;
+    files_.push_back(full);
+    std::FILE * f = std::fopen(full.c_str(), "wb");
+    EXPECT_NE(nullptr, f) << full;
+    if (f != nullptr) {
+      if (!content.empty()) {
+        EXPECT_EQ(content.size(),
+            std::fwrite(content.data(), 1, content.size(), f));
+      }
+      std::fclose(f);
+      EXPECT_EQ(0, ::chmod(full.c_str(), static_cast<mode_t>(mode))) << full;
+    }
+    return full;
+  }
+
+private:
+  std::string path_;
+  std::vector<std::string> files_;
+};
 
 /**
  * The system zone database, released when it goes out of scope.
