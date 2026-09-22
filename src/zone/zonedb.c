@@ -1229,7 +1229,18 @@ GCHRON_Result gchron_zonedb_ids_of(GCHRON_ZoneDb * db,
        * returns entries in whatever order the directory happens to hold, and
        * a test that compared two listings would otherwise fail on a
        * different machine for no reason. */
-      qsort(db->ids, db->id_count, sizeof(char *), compare_ids);
+      /*
+       * Guarded, because a directory holding no zones never allocates the
+       * array at all and `db->ids` is still null here. `qsort` declares its
+       * base `__nonnull`, so the call is undefined whatever the count says -
+       * glibc returns immediately on a count of zero and nothing misbehaves,
+       * which is why this survived until a fuzzer with UBSan asked. The
+       * sibling `bsearch` over `link_names` has carried the same guard since
+       * it was written; this one was simply missed.
+       */
+      if (db->id_count > 0) {
+        qsort(db->ids, db->id_count, sizeof(char *), compare_ids);
+      }
       db->ids_built = true;
     }
   }

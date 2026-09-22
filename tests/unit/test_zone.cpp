@@ -774,3 +774,44 @@ TEST(ZoneDb, ALineOnlyOnePassCallsALinkDoesNotCostARealLinkItsSlot) {
       << "`L RealZone AliasZone` (largest allocation was " << recorder.largest()
       << ", floor before the lookup " << before << ")";
 }
+
+/*
+ * A directory that is a directory and holds no zones.
+ *
+ * Found by tests/fuzz/fuzz_zonedir.cpp on its second execution, which is
+ * about as shallow as a finding gets - the input was a single newline. No
+ * test had ever built a directory database over a directory with nothing in
+ * it to collect, so the identifier array was never allocated and
+ * gchron_zonedb_list() handed `qsort` a null base. glibc's `qsort` returns
+ * immediately when the count is zero, so nothing misbehaved and nothing ever
+ * would; but `qsort`'s first parameter is declared `__nonnull`, which makes
+ * the call undefined regardless of the count, and UBSan says so.
+ *
+ * A caller reaches it by naming a path that exists and holds no zone files -
+ * a mistyped configuration value, or a directory whose zones have not been
+ * installed yet.
+ *
+ * This is a regression test for a diagnostic, so it fails only under
+ * `make test-asan`. Under a plain `make test` it passes either way, and that
+ * is not a reason to leave it out: the sanitiser build is a gate this suite
+ * runs, and the next person to break this will break it there.
+ */
+TEST(ZoneDb, ADirectoryWithNoZonesListsNothingWithoutUndefinedBehaviour) {
+  gchrontest::TempDir dir;
+  dir.write("not-a-zone.txt", "nothing here is a TZif image\n");
+
+  GCHRON_ZoneDb * db = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_directory(dir.path().c_str(), nullptr,
+      nullptr, &db));
+
+  const char * const * ids = nullptr;
+  size_t count = 0;
+  EXPECT_EQ(GCHRON_OK, gchron_zonedb_list(db, &ids, &count));
+  EXPECT_EQ(0u, count);
+
+  // Asking twice takes the cached path, which must also not sort a null base.
+  EXPECT_EQ(GCHRON_OK, gchron_zonedb_list(db, &ids, &count));
+  EXPECT_EQ(0u, count);
+
+  gchron_zonedb_destroy(db);
+}
