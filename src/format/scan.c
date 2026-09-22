@@ -187,17 +187,6 @@ static bool take_exact(Cursor * c, const char * want, size_t want_len) {
  * Names
  *--------------------------------------------------------------------------*/
 
-/** Which name width a letter count asks for; emit.c's width_for, shared. */
-static GCHRON_NameWidth width_for(int count) {
-  if (count >= 6) {
-    return GCHRON_NAME_SHORT;
-  }
-  if (count == 5) {
-    return GCHRON_NAME_NARROW;
-  }
-  return (count == 4) ? GCHRON_NAME_WIDE : GCHRON_NAME_ABBREVIATED;
-}
-
 /** What kind of name a lookup is asking the provider for. */
 typedef enum {
   NAME_MONTH,
