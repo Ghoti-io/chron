@@ -598,6 +598,19 @@ TEST(ZoneDb, AnOversizedZoneFileIsNotReadJustToBeRejected) {
     EXPECT_EQ(GCHRON_ERR_LIMIT, gchron_zonedb_zone(db, "Oversized", &zone));
 
     gchron_zonedb_destroy(db);
+
+    /*
+     * One bound beside the invariance, because invariance alone would also
+     * hold for a reader that allocated a huge constant whatever the input:
+     * nothing varies with the file size, so nothing moves, and the equality
+     * below passes. This rules that out and is still not a number anybody
+     * chose - it is the claim a caller setting max_tzif_bytes actually has,
+     * which is that refusing a file does not cost holding it.
+     */
+    EXPECT_LT(recorder.largest(), file_size)
+        << "refusing a " << file_size << "-byte file allocated "
+        << recorder.largest() << " bytes in a single call";
+
     return recorder.largest();
   };
 
