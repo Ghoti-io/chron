@@ -1186,7 +1186,25 @@ endif
 # The flag was added to the fuzz build and not to this one, which is the build
 # that runs on every change.
 #
-ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+# float-cast-overflow is named because GCC does not put it in `undefined`,
+# though Clang does - so the sanitizer build, which uses $(CC), was not
+# checking it while the fuzz build, which uses clang, was.  `(int64_t)d` for a
+# `d` too large for the type is undefined, and this library converts Excel,
+# Cocoa and MJD serials from `double`.  Naming it in one variable used by both
+# lists is the point: the check has to appear in -fsanitize *and* in
+# -fno-sanitize-recover, and spelling them separately is how they drift - with
+# the check enabled and the recover left at `undefined`, UBSan prints the
+# finding and exits 0, so the gate describes the bug and passes.
+#
+# Measured on gcc 14.2 rather than assumed: bounds-strict and
+# pointer-overflow already report under plain `undefined`, and
+# unsigned-integer-overflow does not exist there.  float-divide-by-zero is
+# deliberately absent - IEEE 754 defines it, and it would fire on correct code
+# that records an infinity.
+UBSAN_CHECKS := undefined,float-cast-overflow
+
+ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) \
+	-fno-sanitize-recover=$(UBSAN_CHECKS) \
 	-fno-omit-frame-pointer -g -O1
 ASAN_BUILD_DIR := ./build/$(BUILD)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
@@ -1278,7 +1296,12 @@ FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
 # the fuzzer runs on happily past the defect it just found. ASan aborts either
 # way; UBSan does not. `regex` had this flag and this library did not.
 #
-FUZZ_SAN := -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+# $(UBSAN_CHECKS) rather than `undefined` so this list and the sanitizer
+# build's cannot drift apart.  Clang already has float-cast-overflow in its
+# `undefined` group, so naming it changes nothing here today; it is named so
+# that the two builds are checking the same thing whoever reads them.
+FUZZ_SAN := -fsanitize=address,$(UBSAN_CHECKS) \
+	-fno-sanitize-recover=$(UBSAN_CHECKS) \
 	-fno-omit-frame-pointer -g -O1
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer

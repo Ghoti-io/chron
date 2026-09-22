@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <limits>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -425,4 +426,59 @@ TEST(Interop, EveryConversionRoundTripsOverASpreadOfInstants) {
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+/*
+ * The four entry points that take a `double` each guard the cast that follows
+ * them, and nothing tested those guards.  They are not ordinary range checks:
+ * `(int64_t)d` for a `d` outside the type is undefined behaviour, so the guard
+ * is the only thing standing between a caller's number and UB, and the
+ * comparison form `!(v > lo && v < hi)` is written that way so NaN - which
+ * fails every comparison - is refused too.
+ *
+ * What is asserted is refusal, not a particular code, because the four refuse
+ * at two different places for two different reasons.  A negative Excel serial
+ * is GCHRON_ERR_INVALID from `!(serial >= 1.0)` - an Excel serial below 1 is a
+ * wrong argument, not an unrepresentable one - while a negative MJD reaches
+ * the finite-range test and is GCHRON_ERR_RANGE.  Both are correct and only
+ * one property is common to them: the cast never happens.  Pinning the code
+ * instead would have made this a test of which guard fires first.
+ *
+ * Worth pinning because the failure is invisible without help: GCC does not
+ * put float-cast-overflow in `-fsanitize=undefined`, so before the check was
+ * named in the Makefile the sanitizer build would have run straight past a
+ * removed guard and reported a clean suite.
+ */
+TEST(Interop, EveryDoubleEntryPointRefusesWhatItCannotCast) {
+  GCHRON_DateTime dt{};
+  GCHRON_Instant i{};
+
+  const double outside[] = {
+    1e30, -1e30,
+    std::numeric_limits<double>::infinity(),
+    -std::numeric_limits<double>::infinity(),
+    std::numeric_limits<double>::quiet_NaN(),
+  };
+
+  for (double value : outside) {
+    EXPECT_NE(GCHRON_OK, gchron_interop_from_excel_1900(value, &dt))
+        << "excel_1900 accepted " << value;
+    EXPECT_NE(GCHRON_OK, gchron_interop_from_excel_1904(value, &dt))
+        << "excel_1904 accepted " << value;
+    EXPECT_NE(GCHRON_OK, gchron_interop_from_cocoa(value, &i))
+        << "cocoa accepted " << value;
+    EXPECT_NE(GCHRON_OK, gchron_interop_from_mjd(value, &i))
+        << "mjd accepted " << value;
+  }
+
+  // The two that reach the finite-range test say so, which is the distinction
+  // GCHRON_ERR_RANGE exists to draw: the argument is not wrong, it is outside
+  // what the type can hold.
+  EXPECT_EQ(GCHRON_ERR_RANGE, gchron_interop_from_mjd(1e30, &i));
+  EXPECT_EQ(GCHRON_ERR_RANGE, gchron_interop_from_cocoa(1e30, &i));
+  EXPECT_EQ(GCHRON_ERR_RANGE, gchron_interop_from_excel_1900(1e30, &dt));
+
+  // The boundary is exclusive, and a value inside it still works.
+  EXPECT_EQ(GCHRON_ERR_RANGE, gchron_interop_from_mjd(1e12, &i));
+  EXPECT_EQ(GCHRON_OK, gchron_interop_from_mjd(0.0, &i));
 }
