@@ -627,3 +627,107 @@ TEST(ZoneDb, AnOversizedZoneFileIsNotReadJustToBeRejected) {
       << small << " bytes and refusing 1 MiB at " << large
       << ", against a " << cap << "-byte cap that did not move";
 }
+
+/*
+ * The second of max_tzif_bytes' three reads: the one taken when a name is
+ * not a file in the directory but the tzdb's link table says what it stands
+ * for.
+ *
+ * The comment above says this read was decided by no test because a
+ * directory database does not build a link table from a fixture. **That was
+ * wrong**, and wrong in the direction that keeps a gap open: the link table
+ * is built by reading `tzdata.zi` out of the database's own directory, and a
+ * TempDir can write one. Nothing exotic was needed - a two-line fixture
+ * reaches it.
+ *
+ * Refusal here is GCHRON_ERR_UNSUPPORTED rather than GCHRON_ERR_LIMIT,
+ * because the link arm turns every failure into "not in this database"
+ * (zonedb.c). That is defensible and it means the status says nothing at all
+ * about memory, which is the whole reason this asserts the peak instead.
+ */
+TEST(ZoneDb, AnOversizedLinkTargetIsNotReadJustToBeRejected) {
+  const size_t cap = 4096;
+
+  auto peak_refusing = [cap](size_t file_size) {
+    gchrontest::TempDir dir;
+    dir.write("RealZone", std::string(file_size, '\0'));
+    /* `L <target> <link name>` - the abbreviated form `tzdata.zi` uses. */
+    dir.write("tzdata.zi", "L RealZone AliasZone\n");
+
+    GCHRON_Limits limits{};
+    gchron_limits_default(&limits);
+    limits.max_tzif_bytes = cap;
+
+    gchrontest::RecordingAllocator recorder;
+    GCHRON_ZoneDb * db = nullptr;
+    EXPECT_EQ(GCHRON_OK, gchron_zonedb_directory(dir.path().c_str(),
+        recorder.get(), &limits, &db));
+
+    /*
+     * There is no file called `AliasZone`, so this only refuses at all if the
+     * link table resolved it to `RealZone` and tried that instead. A lookup
+     * that never followed the link would refuse too, for the wrong reason -
+     * which is what the companion test below pins down.
+     */
+    const GCHRON_Zone * zone = nullptr;
+    EXPECT_NE(GCHRON_OK, gchron_zonedb_zone(db, "AliasZone", &zone));
+
+    gchron_zonedb_destroy(db);
+
+    EXPECT_LT(recorder.largest(), file_size)
+        << "refusing a " << file_size << "-byte link target allocated "
+        << recorder.largest() << " bytes in a single call";
+
+    return recorder.largest();
+  };
+
+  const size_t small = peak_refusing(256 * 1024);
+  const size_t large = peak_refusing(1024 * 1024);
+
+  EXPECT_EQ(small, large)
+      << "the link target was read before it was refused: refusing 256 KiB "
+      << "peaked at " << small << " bytes and refusing 1 MiB at " << large
+      << ", against a " << cap << "-byte cap that did not move";
+}
+
+/*
+ * That the link was followed at all, which the test above assumes and cannot
+ * show on its own: an unresolved name and a resolved-then-refused one both
+ * come back GCHRON_ERR_UNSUPPORTED.
+ *
+ * `AliasZone` resolves to `RealZone`, whose contents are far too small to be
+ * a TZif image - so a lookup that followed the link gets as far as the parser
+ * and fails there, while one that did not follow it never opens a file. The
+ * two are told apart by the bytes read, not by the result.
+ */
+TEST(ZoneDb, ALinkNameIsResolvedThroughTzdataZi) {
+  gchrontest::TempDir dir;
+  /*
+   * Large on purpose. An earlier draft used 64 bytes and was **vacuous**: the
+   * database's own structures - eight size_t limits plus pointers - already
+   * allocate more than that, so "an allocation at least this big happened"
+   * was true whether or not a file was ever opened. It survived a mutant that
+   * disabled link resolution outright. The fixture has to dwarf every
+   * structural allocation before its size means anything.
+   */
+  const std::string body(128 * 1024, 'x');
+  dir.write("RealZone", body);
+  dir.write("tzdata.zi", "L RealZone AliasZone\n");
+
+  gchrontest::RecordingAllocator recorder;
+  GCHRON_ZoneDb * db = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_directory(dir.path().c_str(),
+      recorder.get(), nullptr, &db));
+
+  const size_t before = recorder.largest();
+  const GCHRON_Zone * zone = nullptr;
+  EXPECT_NE(GCHRON_OK, gchron_zonedb_zone(db, "AliasZone", &zone));
+  gchron_zonedb_destroy(db);
+
+  EXPECT_GT(recorder.largest(), before);
+  EXPECT_GE(recorder.largest(), body.size())
+      << "no allocation as large as the link target's " << body.size()
+      << " bytes was made, so `AliasZone` was refused without the link "
+      << "table ever sending it to `RealZone` (largest before the lookup was "
+      << before << ")";
+}
