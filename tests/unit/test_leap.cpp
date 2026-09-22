@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <string>
 
+#include <unistd.h>
+
 #include "test_helpers.h"
 
 namespace {
@@ -595,15 +597,28 @@ private:
 };
 
 TEST_F(LeapFile, ATzdirWithNoLeapSecondsListFallsThroughToTheSystemCopy) {
-  GCHRON_LeapTable * from_system = nullptr;
-  ::unsetenv("TZDIR");
-  const GCHRON_Result without =
-      gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr);
-  if (without != GCHRON_OK) {
+  // The skip is conditioned on the file, not on the result: a machine that
+  // has a leap-seconds.list and cannot read it through this function has a
+  // defect, and skipping on the result would call that a pass. No $TZDIR at
+  // all is the ordinary case and the first thing this has to get right.
+  if (::access("/usr/share/zoneinfo/leap-seconds.list", R_OK) != 0) {
     GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
   }
+  GCHRON_LeapTable * from_system = nullptr;
+  ::unsetenv("TZDIR");
+  ASSERT_EQ(GCHRON_OK,
+      gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr))
+      << "no $TZDIR at all did not reach the system copy";
   const size_t expected = gchron_leap_table_count(from_system);
   gchron_leap_table_destroy(from_system);
+
+  // An empty $TZDIR is not a value, and is the same as not setting it.
+  ::setenv("TZDIR", "", 1);
+  GCHRON_LeapTable * from_empty = nullptr;
+  ASSERT_EQ(GCHRON_OK,
+      gchron_leap_table_file(nullptr, nullptr, &from_empty, nullptr));
+  EXPECT_EQ(expected, gchron_leap_table_count(from_empty));
+  gchron_leap_table_destroy(from_empty);
 
   // A directory that exists and holds no leap-seconds.list: the shape a
   // fetched tzdb or a container has.
@@ -692,12 +707,13 @@ TEST_F(LeapFile, ATzdirCopyThatCannotBeOpenedFallsThroughAsAMissingOneDoes) {
     GTEST_SKIP() << "root can read a mode-000 file, so this machine cannot "
                     "pose the question";
   }
-  GCHRON_LeapTable * from_system = nullptr;
-  ::unsetenv("TZDIR");
-  if (gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr)
-      != GCHRON_OK) {
+  if (::access("/usr/share/zoneinfo/leap-seconds.list", R_OK) != 0) {
     GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
   }
+  GCHRON_LeapTable * from_system = nullptr;
+  ::unsetenv("TZDIR");
+  ASSERT_EQ(GCHRON_OK,
+      gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr));
   const size_t expected = gchron_leap_table_count(from_system);
   gchron_leap_table_destroy(from_system);
 

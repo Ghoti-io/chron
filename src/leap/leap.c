@@ -389,19 +389,49 @@ GCHRON_Result gchron_leap_table_file(const char * path,
   }
   else {
     /* $TZDIR, exactly as the zone database honours it. */
-    char * joined = leap_path_in(getenv("TZDIR"), allocator);
-    read = GCU_FILE_ERR_IO;
-    if (joined != NULL) {
-      read = gcu_file_read(joined, GCHRON_LEAP_SECONDS_MAX, allocator, &data,
-          &len);
-      gcu_allocator_free(allocator, joined);
+    const char * tzdir = getenv("TZDIR");
+
+    /*
+     * No $TZDIR is not a failure to find anything - it is not having asked,
+     * which is the ordinary case and goes straight on to the usual place.
+     */
+    read = GCU_FILE_ERR_NOT_FOUND;
+    if (tzdir != NULL && tzdir[0] != '\0') {
+      char * joined = leap_path_in(tzdir, allocator);
+      if (joined == NULL) {
+        /*
+         * $TZDIR is set and the path could not be built. Nothing was learned
+         * about what is on disk, so this deliberately does *not* match the
+         * condition below: running out of memory is reported rather than
+         * answered by reading a different file, and a caller told "here is
+         * the system table" would have no way to learn that the copy it
+         * asked for was never looked at. Allocation is the only way to get
+         * here that a running program can reach - joining a non-empty
+         * directory to a fixed file name fails otherwise only on a size
+         * overflow.
+         */
+        read = GCU_FILE_ERR_OOM;
+      }
+      else {
+        read = gcu_file_read(joined, GCHRON_LEAP_SECONDS_MAX, allocator,
+            &data, &len);
+        gcu_allocator_free(allocator, joined);
+      }
     }
     /*
-     * Only a file that could not be opened sends us on to the usual place. A
-     * copy under $TZDIR that is too large, or unreadable part way through, is
-     * an answer - and quietly reading a different file instead would hide it.
+     * Only a file we never got *open* sends us on to the usual place. A copy
+     * under $TZDIR that is too large, or unreadable part way through, is an
+     * answer - and quietly reading a different file instead would hide it.
+     *
+     * Both spellings, and the pair is the whole of the rule. cutil reports
+     * "nothing was there" and "there and not readable by this process"
+     * separately, and a search path has no use for the distinction: each
+     * means this location did not yield a file, and the next one is where to
+     * look. Narrowing this to NOT_FOUND alone would turn a root-only copy
+     * under $TZDIR from a fallback into a refusal, which is a change of
+     * behaviour and not a translation - tests/unit/test_leap.cpp pins both.
      */
-    if (read == GCU_FILE_ERR_IO) {
+    if (read == GCU_FILE_ERR_NOT_FOUND || read == GCU_FILE_ERR_ACCESS) {
       read = gcu_file_read(GCHRON_LEAP_SECONDS_PATH, GCHRON_LEAP_SECONDS_MAX,
           allocator, &data, &len);
     }
