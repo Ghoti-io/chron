@@ -324,7 +324,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # run. It costs about a second and reports rather than fails when the input
 # a generator needs is not on the machine.
 TEST_GATES ?= check-symbols check-layering check-generated check-docs \
-	check-license
+	check-license check-counts
 
 #
 # A check whose tool is missing prints a line and passes, which on one
@@ -656,7 +656,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar vectors-calendars
-.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license
+.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license check-counts
 .PHONY: check-oracle-temporal check-oracles test-full
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
@@ -1541,6 +1541,45 @@ check-license: ## Fail if a source file has no SPDX header or a document claims 
 		exit 1; \
 	fi; \
 	printf "\033[0;32mcheck-license: nothing claims a license other than $(LICENSE_ID).\033[0m\n"
+
+check-counts: ## Fail if README.md's test count no longer matches the suites
+# The README tells a reader what `make test` will print before they run it,
+# which is worth having and is worth nothing if it is wrong.  It went stale
+# the first time tests were added without touching it, and nothing noticed:
+# the number is prose, so no compiler, no test and no other gate reads it.
+# A documented fact that nothing checks becomes a wrong one, and review
+# cannot catch this sort: the reviewer has no more idea of the true number
+# than the writer did.
+#
+# Counted by asking the built binaries rather than by grepping the sources,
+# because the binaries are what `make test` runs.  A grep over tests/ agrees
+# today, and agrees by luck:  it counts macros as written, so it would keep
+# counting a suite that stopped being linked, miss anything gtest registers
+# rather than spells, and count a DISABLED_ test that never runs.  A gate
+# that can disagree with the thing it certifies is not measuring it.
+check-counts: $(TEST_EXECUTABLES)
+	@tests=0; \
+	for test_exe in $(TEST_EXECUTABLES); do \
+		n=$$(LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_list_tests 2>/dev/null \
+			| grep -cE "^  ") || n=0; \
+		tests=$$((tests + n)); \
+	done; \
+	suites=$(words $(TEST_EXECUTABLES)); \
+	claimed=$$(grep -oE "# [0-9]+ tests in [0-9]+ suites" README.md | head -1); \
+	actual="# $$tests tests in $$suites suites"; \
+	if [ -z "$$claimed" ]; then \
+		printf "\033[0;31mcheck-counts: README.md no longer states a test count\033[0m\n"; \
+		printf "  expected a line containing: %s\n" "$$actual"; \
+		exit 1; \
+	fi; \
+	if [ "$$claimed" != "$$actual" ]; then \
+		printf "\033[0;31mcheck-counts: README.md is stale\033[0m\n"; \
+		printf "  README says: %s\n" "$$claimed"; \
+		printf "  the suites are: %s\n" "$$actual"; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32mcheck-counts: README.md's %d tests in %d suites is what is there.\033[0m\n" \
+		"$$tests" "$$suites"
 
 check-docs: ## Fail on a documentation fault in the headers or the manual
 	@if ! command -v doxygen >/dev/null 2>&1; then \
