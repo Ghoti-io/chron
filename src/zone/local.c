@@ -191,10 +191,14 @@ GCHRON_Result gchron_zonedb_local(GCHRON_ZoneDb * db,
 
     if (value[0] != '\0') {
       /*
-       * An identifier is tried first, so that `TZ=EST5EDT` - which is both a
-       * real zone file and a valid rule string - resolves to the file, whose
-       * historical transitions the rule alone cannot give. Only when no such
-       * zone exists is the value read as a rule.
+       * An identifier is tried first, so that `TZ=GMT0` - which is both a
+       * real zone file and a rule string this parser accepts - resolves to
+       * the file, whose recorded transitions the rule alone cannot give.
+       * Only when no such zone exists is the value read as a rule.
+       *
+       * `EST5EDT` is the example that comes to mind and is not one: a
+       * daylight-saving abbreviation with no transition rule is refused here
+       * (posixtz.c says why), so it reaches the file either way.
        */
       if (gchron_zone_id_is_safe(value)
           && gchron_zonedb_zone(db, value, out) == GCHRON_OK) {
@@ -209,8 +213,12 @@ GCHRON_Result gchron_zonedb_local(GCHRON_ZoneDb * db,
     /*
      * POSIX: an unparsable TZ means UTC. Following that rather than failing,
      * because every other implementation does and a program whose environment
-     * is wrong should still be able to print a timestamp - but the zone it
-     * gets is UTC by name, so nothing silently pretends to be local.
+     * is wrong should still be able to print a timestamp.
+     *
+     * What it gets is gchron_zonedb_utc(), a fixed zone at offset zero with
+     * no identifier - so nothing downstream can mistake it for the machine's
+     * own zone, and writing it out gives `Z` rather than a name that would
+     * claim to know where the program is running.
      */
     return gchron_zonedb_utc(db, out);
   }
