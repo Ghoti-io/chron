@@ -247,9 +247,10 @@ database is the newer tzdata release.
 The Windows zone mapping is committed - 139 names from CLDR, refreshed with
 `tools/tzdata/fetch-cldr.sh` and `make embed-windows-zones`, which are the
 only two things here that touch the network. Nothing has been run on Windows;
-the parent `WINDOWS-TODO.md` §6b and §6c say what would make it so.
+the workspace's `notes/suite/WINDOWS-TODO.md` §6b and §6c say what would
+make it so.
 
-Version 0.0.0. MIT licensed.
+Version 0.0.0.
 
 ## License
 

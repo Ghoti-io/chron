@@ -665,7 +665,8 @@ order:
 3. On Windows, `GetDynamicTimeZoneInformation()` gives a Windows zone name,
    which the CLDR `windowsZones.xml` table maps to an IANA identifier. The
    branch is written, marked `TODO(windows):`, and listed in the parent
-   `WINDOWS-TODO.md` with "done when" being that `gchron_zonedb_local()` on
+   `notes/suite/WINDOWS-TODO.md` with "done when" being that
+   `gchron_zonedb_local()` on
    a machine set to Pacific Standard Time returns `America/Los_Angeles`.
 
 Nothing else in the library calls this. A `ZonedDateTime` never has an
@@ -1031,7 +1032,8 @@ the platform. The `Precise` variants are used because the plain ones advance
 only on the timer tick, roughly every 15 ms, which would round a frame time
 to zero or to a whole frame.
 
-None of the Windows half has been run; `WINDOWS-TODO.md` §6d says what would
+None of the Windows half has been run; the workspace's
+`notes/suite/WINDOWS-TODO.md` §6d says what would
 settle it. Neither can the suspend behaviour be tested anywhere in CI, because
 a test cannot suspend the machine it runs on: `tests/unit/test_clock.cpp`
 checks the ordering, the refusals and the tagging, and **skips with a stated
@@ -1329,7 +1331,7 @@ for one engineer who knows the suite.
 | 1 **(done)** | `zone.h`: TZif, the POSIX TZ footer, `ZoneDb`, `Resolve`, transitions, the local zone (Linux/macOS); `zoned.h`; the `zdump`, `zoneinfo` and `tzset` differentials; RFC 9557 | L | **M2: `ctang` can render a date in a zone** - reached |
 | 2 **(done)** | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** - reached |
 | 3 **(done)** | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** - reached |
-| 4 **(done)** | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** - reached for metrology; Windows needs a Windows machine, and `WINDOWS-TODO.md` 6b and 6c say what done is |
+| 4 **(done)** | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `notes/suite/WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** - reached for metrology; Windows needs a Windows machine, and `notes/suite/WINDOWS-TODO.md` 6b and 6c say what done is |
 
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz` and
 `check-symbols` clean from an empty build directory, serially and under
@@ -1438,7 +1440,8 @@ because the seven missing names were exactly the ones a spot check would not
 have thought to include.
 
 The Windows branch of `gchron_zonedb_local()` is written, marked
-`TODO(windows):`, and listed in `WINDOWS-TODO.md` as 6b and 6c. Nothing here
+`TODO(windows):`, and listed in `notes/suite/WINDOWS-TODO.md` as 6b and 6c.
+Nothing here
 has been run on Windows and, per `CONVENTIONS.md` section 11, it is not
 claimed to work: "done" is a machine set to Pacific Standard Time returning
 `America/Los_Angeles`.
@@ -1594,7 +1597,7 @@ nothing to compare versions of. `gchron_zone_canonical_id()` returns the
 identifier a zone was asked for, because TZif has nowhere to record what a
 link points at and the canonical-name table arrives with the embedded
 database. The Windows branches are written, marked `TODO(windows):` and listed
-in `WINDOWS-TODO.md`.
+in `notes/suite/WINDOWS-TODO.md`.
 
 **Where phase 1 departs from this page.** §13's layout puts every grammar in
 `parse.h`; RFC 9557 is declared in `zoned.h` instead, and implemented in

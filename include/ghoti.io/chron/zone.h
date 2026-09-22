@@ -387,7 +387,8 @@ GCHRON_API GCHRON_Result gchron_zonedb_posix(GCHRON_ZoneDb * db,
  *    Debian's `/etc/timezone` is consulted for the name.
  * 3. On Windows, `GetDynamicTimeZoneInformation()` and the CLDR
  *    `windowsZones.xml` mapping. That branch is written, marked
- *    `TODO(windows):` and listed in the parent `WINDOWS-TODO.md`.
+ *    `TODO(windows):` and listed in the workspace's
+ *    `notes/suite/WINDOWS-TODO.md`.
  *
  * Nothing else in the library calls this. A GCHRON_ZonedDateTime never has an
  * implicit zone.

@@ -219,7 +219,8 @@ GCHRON_Result gchron_zonedb_local(GCHRON_ZoneDb * db,
   /*
    * TODO(windows): written, never run. There is no machine here to run it on,
    * and CONVENTIONS.md section 11 is explicit that a platform branch is
-   * written, marked, listed, and not claimed to work. See WINDOWS-TODO.md,
+   * written, marked, listed, and not claimed to work. See the workspace's
+   * notes/suite/WINDOWS-TODO.md,
    * where "done" means gchron_zonedb_local() on a machine set to Pacific
    * Standard Time returns America/Los_Angeles.
    *
@@ -434,7 +435,7 @@ GCHRON_Result gchron_zonedb_walk_directory(GCHRON_ZoneDb * db,
     const char * root, GCHRON_Result (*visit)(GCHRON_ZoneDb *, const char *)) {
 #if defined(_WIN32)
   /* TODO(windows): there is no directory to walk; the embedded table
-   * enumerates itself. See WINDOWS-TODO.md. */
+   * enumerates itself. See the workspace's notes/suite/WINDOWS-TODO.md. */
   (void)db;
   (void)root;
   (void)visit;

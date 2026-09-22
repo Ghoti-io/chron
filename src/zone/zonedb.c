@@ -432,7 +432,8 @@ static const char * platform_zoneinfo(void) {
 #if defined(_WIN32)
   /* TODO(windows): Windows has no zoneinfo directory. gchron_zonedb_system()
    * says so rather than inventing a path; gchron_zonedb_embedded() is the
-   * route, and phase 4 builds its table. See WINDOWS-TODO.md. */
+   * route, and phase 4 builds its table. See the workspace's
+   * notes/suite/WINDOWS-TODO.md. */
   return NULL;
 #else
   return "/usr/share/zoneinfo";

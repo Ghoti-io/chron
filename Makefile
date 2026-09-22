@@ -108,7 +108,7 @@ else ifeq ($(findstring MINGW32_NT,$(UNAME_S)),MINGW32_NT)  # 32-bit Windows
 
 # TODO(windows): the Windows branches in this file were adapted from image's
 # and have never been run, nor has GCHRON_API's dllexport/dllimport switching.
-# See WINDOWS-TODO.md item 6.
+# See the workspace's notes/suite/WINDOWS-TODO.md item 6.
 else ifeq ($(findstring MINGW64_NT,$(UNAME_S)),MINGW64_NT)  # 64-bit Windows
 	OS_NAME := Windows
 	LIB_EXTENSION := dll
@@ -263,6 +263,10 @@ EMBEDDED_TZDATA := src/zone/tzdata_embedded.c
 # quietly producing a library whose Windows branch cannot work.
 #
 WINDOWS_ZONES := src/zone/windows_zones.c
+
+# Where tools/tzdata/fetch-cldr.sh leaves the mapping it downloads. Not
+# committed: it is CLDR's data, reproducible from a URL and tools/tzdata/CLDR_TAG.
+CLDR_ZONES_XML := third_party/cldr/windowsZones.xml
 #
 # Guarded on the goal, because this is evaluated when the Makefile is read and
 # an unguarded $(error) would break `make clean` and `make help` too - the two
@@ -299,7 +303,12 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # coverage target does, because --coverage links the gcov runtime, whose
 # mangle_path check-symbols is right to reject in a shipping library and
 # wrong to reject in an instrumented one. Spelled as text's TEST_GATES is.
-TEST_GATES ?= check-symbols check-layering
+#
+# check-generated is here rather than left as a target somebody remembers to
+# type, because a gate wired to a target nobody types is one that does not
+# run. It costs about a second and reports rather than fails when the input
+# a generator needs is not on the machine.
+TEST_GATES ?= check-symbols check-layering check-generated
 
 ####################################################################
 # How wide the exhaustive civil sweep runs
@@ -384,7 +393,80 @@ embed-leap:
 #
 embed-windows-zones: ## Regenerate the Windows zone mapping from fetched CLDR data
 embed-windows-zones:
-	python3 tools/tzdata/windows_zones.py
+	python3 tools/tzdata/windows_zones.py $(CLDR_ZONES_XML)
+
+#
+# A generated source and its generator can drift apart, and nothing notices:
+# the file compiles, the tests pass, and the committed bytes are simply no
+# longer what the tool would produce. CONVENTIONS.md section 8 names this as
+# the gap here - `regex` and `text` each have a check-*-tables target and this
+# library had none - and the licensing work made it sharper, because a
+# generated source now carries its SPDX block from its generator too. A header
+# edited by hand in the file rather than in the tool disappears at the next
+# regeneration.
+#
+# Only the two *committed* generated sources are checkable.
+# src/zone/tzdata_embedded.c is gitignored and rebuilt by the build itself, so
+# there are no committed bytes for it to drift from.
+#
+# Each generator needs an input the repository does not carry, so each half
+# can be checked only where that input is present. A missing input is reported
+# and counted rather than passed over, and the summary says how many of the
+# two were actually compared - "0 of 2" should not look like success.
+#
+check-generated: ## Fail if a committed generated source is not what its generator produces
+	@if ! command -v python3 >/dev/null 2>&1; then \
+		printf "check-generated: skipped entirely (no python3)\n"; \
+		exit 0; \
+	fi; \
+	tmp=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	checked=0; \
+	stale=""; \
+	leap_source="$${TZDIR:-/usr/share/zoneinfo}/leap-seconds.list"; \
+	if [ ! -f "$$leap_source" ]; then \
+		printf "  src/leap/leap_builtin.c      not checked: no $$leap_source (it ships with tzdata)\n"; \
+	else \
+		if ! python3 tools/leap/embed.py "$$leap_source" -o "$$tmp/leap_builtin.c" \
+				>/dev/null 2>"$$tmp/err"; then \
+			printf "\033[0;31m\n### tools/leap/embed.py failed ###\033[0m\n" >&2; \
+			cat "$$tmp/err" >&2; \
+			exit 1; \
+		fi; \
+		checked=$$((checked + 1)); \
+		if ! diff -u src/leap/leap_builtin.c "$$tmp/leap_builtin.c" \
+				>"$$tmp/leap.diff" 2>&1; then \
+			stale="$$stale src/leap/leap_builtin.c"; \
+			printf "\033[0;31m\n### src/leap/leap_builtin.c is not what tools/leap/embed.py produces ###\033[0m\n" >&2; \
+			head -40 "$$tmp/leap.diff" >&2; \
+		else \
+			printf "  src/leap/leap_builtin.c      matches tools/leap/embed.py\n"; \
+		fi; \
+	fi; \
+	if [ ! -f "$(CLDR_ZONES_XML)" ]; then \
+		printf "  src/zone/windows_zones.c     not checked: no $(CLDR_ZONES_XML) (run tools/tzdata/fetch-cldr.sh)\n"; \
+	else \
+		if ! python3 tools/tzdata/windows_zones.py "$(CLDR_ZONES_XML)" \
+				-o "$$tmp/windows_zones.c" >/dev/null 2>"$$tmp/err"; then \
+			printf "\033[0;31m\n### tools/tzdata/windows_zones.py failed ###\033[0m\n" >&2; \
+			cat "$$tmp/err" >&2; \
+			exit 1; \
+		fi; \
+		checked=$$((checked + 1)); \
+		if ! diff -u src/zone/windows_zones.c "$$tmp/windows_zones.c" \
+				>"$$tmp/zones.diff" 2>&1; then \
+			stale="$$stale src/zone/windows_zones.c"; \
+			printf "\033[0;31m\n### src/zone/windows_zones.c is not what tools/tzdata/windows_zones.py produces ###\033[0m\n" >&2; \
+			head -40 "$$tmp/zones.diff" >&2; \
+		else \
+			printf "  src/zone/windows_zones.c     matches tools/tzdata/windows_zones.py\n"; \
+		fi; \
+	fi; \
+	if [ -n "$$stale" ]; then \
+		printf "\033[0;31m\nStale:$$stale. Regenerate with make embed-leap / make embed-windows-zones.\033[0m\n" >&2; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32m$$checked of 2 committed generated sources match their generators.\033[0m\n"
 
 ####################################################################
 # Dependency Inclusion
@@ -537,7 +619,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar
-.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse
+.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands

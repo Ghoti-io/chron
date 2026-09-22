@@ -51,7 +51,8 @@
 /*
  * TODO(windows): none of this branch has been run. GetSystemTimePreciseAsFileTime
  * is Windows 8 and later; QueryPerformanceCounter's frequency is fixed at
- * boot. See WINDOWS-TODO.md, where "done" means gchron_clock_now() on the
+ * boot. See the workspace's notes/suite/WINDOWS-TODO.md, where "done" means
+ * gchron_clock_now() on the
  * system clock agrees with the shell's own time and gchron_tick_now() is
  * monotonic across a clock change.
  */
@@ -84,8 +85,8 @@ static GCHRON_Result system_resolution(const GCHRON_Clock * self,
 }
 
 /*
- * TODO(windows): neither counter has been read on Windows. WINDOWS-TODO.md
- * section 6d says what would settle it, and the check has to be done on real
+ * TODO(windows): neither counter has been read on Windows. The workspace's
+ * notes/suite/WINDOWS-TODO.md section 6d says what would settle it, and the check has to be done on real
  * hardware because the question is what the machine does across a real
  * suspend.
  *
