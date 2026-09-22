@@ -1110,6 +1110,14 @@ written in the header beside it (M17):
 Every conversion *to* a narrower encoding returns `GCHRON_ERR_RANGE` when the
 value does not fit, and none rounds a sub-unit fraction without being asked.
 
+**`SYSTEMTIME` is in the table above and is not implemented.** No
+`gchron_interop_to_systemtime()` or `..._from_systemtime()` exists in
+`interop.h`; the row describes an encoding this library does not convert.
+It is phase 5's, together with ASN.1 `UTCTime`/`GeneralizedTime` - what
+X.509 and LDAP carry - and `struct timeval`. The row is left standing rather
+than deleted because the gap it records is real; a table of encodings is not
+evidence that any of them are reachable, and this one was read that way.
+
 ---
 
 ## 11. The consumers, and what each one needs
@@ -1337,6 +1345,10 @@ other shared state.
 - **Locale-dependent behaviour of any kind.** Nothing reads `LC_*`.
 - **Smearing.** The library reports the instants the OS gives it; a smeared
   clock is the OS's decision and is invisible here.
+- **Waiting.** Nothing here sleeps, and no function blocks. Phase 5 makes
+  deadlines expressible - `gchron_tick_add()`, and the milliseconds `poll()`
+  wants - because that is arithmetic. Performing the wait is not; see §15
+  decision 8.
 
 ---
 
@@ -1366,6 +1378,20 @@ someone objects.
    `strftime`, which cannot express a zone identifier or an era.
 7. **Nine-digit years** (§3.2) rather than the full `int32_t` range. The
    guard band is what makes the overflow proofs trivial.
+8. **The library does not sleep.** Recommended, not yet put to the author.
+   `gchron_sleep_until(tick)` is a reasonable thing to want - it is
+   cross-platform work with real edges (`EINTR` retry against an absolute
+   deadline so a restarted wait does not extend it, `clock_nanosleep` with
+   `TIMER_ABSTIME` where it exists, and Windows having no absolute wait at
+   all) and every consumer that needs it will write it worse. Against that:
+   §3.8 has no globals and §9 has no ambient clock precisely so that a test
+   can pin time, and a function that genuinely blocks is the one thing in the
+   library a test cannot make instant. It would also be the first call here
+   that can be interrupted by a signal, which is a different contract from
+   everything around it. The recommendation is that chron makes the wait
+   *computable* - `gchron_tick_add()` and the saturating millisecond
+   conversion, both in phase 5 - and leaves performing it to whatever already
+   owns the event loop. Revisit if two consumers ask.
 
 ---
 
@@ -1382,10 +1408,58 @@ for one engineer who knows the suite.
 | 2 **(done)** | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** - reached |
 | 3 **(done)** | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** - reached |
 | 4 **(done)** | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `notes/suite/WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** - reached for metrology; Windows needs a Windows machine, and `notes/suite/WINDOWS-TODO.md` 6b and 6c say what done is |
+| 5 | `round()` on the instant and civil types; tick deadlines and a saturating millisecond conversion; ASN.1 `UTCTime`/`GeneralizedTime`, `SYSTEMTIME` and `struct timeval`; the ISO 8601 interval grammar | S | **M6: a consumer can bucket a timestamp, expire a thing, and read a certificate** |
 
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz` and
 `check-symbols` clean from an empty build directory, serially and under
 `-j`, per `CONVENTIONS.md` §12 item 10.
+
+**What phase 5 is for.** Phases 0 to 4 built the types and the grammars. What
+phase 5 adds is the handful of operations a consumer reaches for and does not
+find - none of them a new concept, all of them currently written by the caller
+and written wrong.
+
+*Rounding a point in time.* `gchron_duration_round()` takes a `GCHRON_Unit`
+and a `GCHRON_Rounding` and has since phase 2, but nothing rounds an
+`Instant`, a `DateTime` or a `ZonedDateTime`. `gchron_zoned_start_of_day()` is
+the only truncation there is, and it is the day case of a general operation.
+So "the hour this log line belongs to", "the month this invoice covers" and
+"the fifteen-minute bucket this sample falls in" - the arithmetic every
+consumer of a time library actually performs - are expressible only by pulling
+the civil fields apart and putting them back. Which is where the caller gets
+it wrong: truncating to a day in a zone is not truncating the instant, because
+the day is 23 or 25 hours long twice a year, and the answer has to come back
+through §6.4's function that can fail. The enums, the rounding modes and the
+disambiguation policy all exist; this is entry points, not design.
+
+*Deadlines.* `GCHRON_Tick` has exactly one operation, `gchron_tick_since()`.
+A timeout, a retry backoff, a cache expiry and a rate-limit window are all the
+same shape - read the counter, add a duration, later ask how much is left -
+and the middle step has no spelling here, so a caller reaches into `.nsec` and
+the type stops protecting them at the moment it matters. `gchron_tick_add()`
+closes it. Its companion is the conversion nobody enjoys writing: what is left
+until a deadline, as the `int` milliseconds `poll()`, `epoll_wait()` and
+`WaitForSingleObject()` take, saturating at `INT_MAX` rather than wrapping and
+clamping a passed deadline to 0 rather than returning a negative that those
+three read as "block forever". That last one is the bug, and it is silent: the
+loop simply stops waking up.
+
+*Three interop encodings.* ASN.1 `UTCTime` and `GeneralizedTime` are what
+X.509 certificates, CMS and LDAP carry, and `UTCTime`'s two-digit year has a
+pivot fixed by RFC 5280 §4.1.2.5.1 - under 50 is 20xx - which is precisely the
+rule a caller guesses at. `struct timeval` belongs beside `struct timespec`
+for the `select()`-era interfaces that still take it. And `SYSTEMTIME`
+**is listed in §10's table and has never been built** - the row is there, the
+function pair is not, which is the failure §12.3 is about in documentation
+rather than in code: the table was read as a record of what exists and was
+nothing of the kind.
+
+*The ISO 8601 interval.* `GCHRON_Interval` exists, and both halves of
+`start/end`, `start/duration` and `duration/end` already parse; only the
+combined grammar and the repeating form (`R5/PT1H`) are missing. §8.1 names
+the grammars, and this is the one it names nothing for.
+
+Phase 5 deliberately does **not** sleep; §15 decision 8 says why.
 
 **What phase 4 built, and what it found.** `leap.h` - the leap-second table,
 `GCHRON_TaiInstant`, and the conversions between UTC and TAI - together with
