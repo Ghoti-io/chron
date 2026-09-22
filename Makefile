@@ -326,6 +326,20 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 TEST_GATES ?= check-symbols check-layering check-generated check-docs \
 	check-license
 
+#
+# A check whose tool is missing prints a line and passes, which on one
+# machine where everything is installed is a convenience. It stops being one
+# the moment there is a second machine: a Windows box has no `doxygen` and may
+# have no `python3`, and would report a clean run with no way to tell "passes
+# there" from "never asked there". The default stays lenient; `make test-full`
+# sets this, and a release is measured with it.
+#
+# notes/suite/SUITE-TODO.md item 17.
+#
+REQUIRE_ORACLES ?=
+SKIP_EXIT := $(if $(REQUIRE_ORACLES),1,0)
+SKIP_NOTE := $(if $(REQUIRE_ORACLES),REQUIRE_ORACLES is set - a check that cannot run is a failure.,)
+
 ####################################################################
 # How wide the exhaustive civil sweep runs
 ####################################################################
@@ -432,16 +446,18 @@ embed-windows-zones:
 #
 check-generated: ## Fail if a committed generated source is not what its generator produces
 	@if ! command -v python3 >/dev/null 2>&1; then \
-		printf "check-generated: skipped entirely (no python3)\n"; \
-		exit 0; \
+		printf "check-generated: skipped entirely (no python3). $(SKIP_NOTE)\n" >&2; \
+		exit $(SKIP_EXIT); \
 	fi; \
 	tmp=$$(mktemp -d) || exit 1; \
 	trap 'rm -rf "$$tmp"' EXIT; \
 	checked=0; \
 	stale=""; \
+	skipped=""; \
 	leap_source="$${TZDIR:-/usr/share/zoneinfo}/leap-seconds.list"; \
 	if [ ! -f "$$leap_source" ]; then \
 		printf "  src/leap/leap_builtin.c      not checked: no $$leap_source (it ships with tzdata)\n"; \
+		skipped="$$skipped src/leap/leap_builtin.c"; \
 	else \
 		if ! python3 tools/leap/embed.py "$$leap_source" -o "$$tmp/leap_builtin.c" \
 				>/dev/null 2>"$$tmp/err"; then \
@@ -461,6 +477,7 @@ check-generated: ## Fail if a committed generated source is not what its generat
 	fi; \
 	if [ ! -f "$(CLDR_ZONES_XML)" ]; then \
 		printf "  src/zone/windows_zones.c     not checked: no $(CLDR_ZONES_XML) (run tools/tzdata/fetch-cldr.sh)\n"; \
+		skipped="$$skipped src/zone/windows_zones.c"; \
 	else \
 		if ! python3 tools/tzdata/windows_zones.py "$(CLDR_ZONES_XML)" \
 				-o "$$tmp/windows_zones.c" >/dev/null 2>"$$tmp/err"; then \
@@ -480,6 +497,10 @@ check-generated: ## Fail if a committed generated source is not what its generat
 	fi; \
 	if [ -n "$$stale" ]; then \
 		printf "\033[0;31m\nStale:$$stale. Regenerate with make embed-leap / make embed-windows-zones.\033[0m\n" >&2; \
+		exit 1; \
+	fi; \
+	if [ -n "$$skipped" ] && [ "$(SKIP_EXIT)" != 0 ]; then \
+		printf "\033[0;31mcheck-generated: not checked:$$skipped. $(SKIP_NOTE)\033[0m\n" >&2; \
 		exit 1; \
 	fi; \
 	printf "\033[0;32m$$checked of 2 committed generated sources match their generators.\033[0m\n"
@@ -636,7 +657,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar vectors-calendars
 .PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license
-.PHONY: check-oracle-temporal
+.PHONY: check-oracle-temporal check-oracles test-full
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -907,6 +928,17 @@ check-oracle-temporal: $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)
 		tools/oracle/temporal_diff.js \
 		--driver $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)
 
+#
+# The four differentials in one target. They are not part of `make test` -
+# they need ICU, node and python3, and a build machine is not obliged to have
+# any of them - but until this existed they were in no aggregate target
+# either, so each ran only when somebody typed its name and a regression
+# waited for that to happen.
+#
+check-oracles: ## Run every differential against its outside oracle
+check-oracles: check-oracle-ldml check-oracle-ldml-parse check-oracle-temporal
+check-oracles: check-oracle-zoneinfo
+
 check-oracle-zoneinfo: ## Check every zone against Python's zoneinfo (needs python3)
 check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
 	@if ! command -v python3 >/dev/null 2>&1; then \
@@ -1006,6 +1038,17 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
 		exit 1; \
 	fi; \
 	printf "\033[0;32m\nAll $(words $(TEST_EXECUTABLES)) suites passed.\033[0m\n"
+
+#
+# What a release is measured with. `make test` stays lenient about a missing
+# tool, because the common case is a developer without libicu-dev who still
+# wants the suite to run; this is the run that refuses to call an unasked
+# question an answer. notes/suite/SUITE-TODO.md item 17.
+#
+test-full: ## Run the suite with every gate and every differential required
+test-full:
+	@$(MAKE) --no-print-directory test REQUIRE_ORACLES=1
+	@$(MAKE) --no-print-directory check-oracles
 
 test-quiet: ## Run tests with minimal output (one line per test suite)
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
@@ -1474,8 +1517,8 @@ check-license: ## Fail if a source file has no SPDX header or a document claims 
 	fi; \
 	printf "check-license: %d sources carry $(LICENSE_ID).\n" "$$count"; \
 	if ! command -v git >/dev/null 2>&1 || ! git rev-parse --git-dir >/dev/null 2>&1; then \
-		printf "check-license: skipped the prose half (not a git checkout)\n"; \
-		exit 0; \
+		printf "check-license: skipped the prose half (not a git checkout). $(SKIP_NOTE)\n" >&2; \
+		exit $(SKIP_EXIT); \
 	fi; \
 	skip="$(LICENSE_ALLOWLIST) COPYING COPYING.LESSER"; \
 	claims=$$(git ls-files -z \
@@ -1501,8 +1544,8 @@ check-license: ## Fail if a source file has no SPDX header or a document claims 
 
 check-docs: ## Fail on a documentation fault in the headers or the manual
 	@if ! command -v doxygen >/dev/null 2>&1; then \
-		printf "check-docs: skipped (no doxygen)\n"; \
-		exit 0; \
+		printf "check-docs: skipped (no doxygen). $(SKIP_NOTE)\n" >&2; \
+		exit $(SKIP_EXIT); \
 	fi; \
 	tmp=$$(mktemp -d) || exit 1; \
 	trap 'rm -rf "$$tmp"' EXIT; \

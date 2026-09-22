@@ -197,6 +197,13 @@ both fails on a diff - which is how an upstream corpus change is noticed
 rather than absorbed. A missing vector file **fails** rather than skips: a
 gate that turns a broken harness into a green run is not measuring anything.
 
+The differentials themselves need `libicu-dev`, `node` and `python3`, so they
+are not in `make test` - a machine is not obliged to have them. `make
+check-oracles` runs all four, and **`make test-full`** is the suite plus the
+four with `REQUIRE_ORACLES=1`, which turns every "skipped, no such tool" into
+a failure. That is what a release is measured with; the lenient default is for
+the developer who has not installed ICU and still wants the suite to run.
+
 The gates are themselves checked. `make check-layering` was verified by adding
 an include of `instant.h` to a tier-0 source and watching the build fail - it
 did not, the first time, and `design.md` §13 records why.
@@ -209,13 +216,14 @@ lookup disagreed with each other. `design.md` §16 has the detail. All three
 needed input no real database contains.
 
 ```bash
-make test                    # 210 tests, the conformance runners included
+make test                    # 365 tests in 30 suites, the conformance runners included
+make test-full               # the same, with every gate and differential required
 make test-valgrind           # the same, clean
 make test-asan               # ASan + UBSan; the UBSan half proves no signed overflow
 make fuzz                    # text, arithmetic, durations, TZif and the TZ grammar
 make check-symbols           # every exported symbol carries the version namespace
 make check-layering          # no tier includes a higher tier's header
-make check-oracle-zoneinfo   # every zone against Python's zoneinfo
+make check-oracles           # all four differentials against their oracles
 make vectors                 # regenerate the committed vectors from their oracles
 ```
 
