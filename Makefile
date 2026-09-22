@@ -323,7 +323,7 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # type, because a gate wired to a target nobody types is one that does not
 # run. It costs about a second and reports rather than fails when the input
 # a generator needs is not on the machine.
-TEST_GATES ?= check-symbols check-layering check-generated
+TEST_GATES ?= check-symbols check-layering check-generated check-docs
 
 ####################################################################
 # How wide the exhaustive civil sweep runs
@@ -634,7 +634,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar
-.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated
+.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1377,6 +1377,55 @@ test-watch-debug: ## Watch the file directory for changes and run the unit tests
 
 docs: ## Generate the documentation in the ./docs subdirectory
 	doxygen
+
+#
+# `make docs` cannot be the gate. It has to finish in order to produce the
+# manual, so its warnings are advisory, and there were 154 of them here -
+# 125 of which said an implementation detail in a .c file was undocumented,
+# because the documentation for those functions is on their declarations in
+# the *internal.h headers that EXCLUDE_PATTERNS keeps out. Nobody reads a
+# list like that, and underneath it sat seventeen unresolved @ref commands,
+# two @ref-eaten backslashes in a YAML grammar, a README link to a file the
+# manual could not see, and three doc blocks written for one entity and
+# attached by adjacency to the next one along.
+#
+# So the warnings that matter are separated from the ones that do not, and
+# only the first kind is fatal. Two passes, because doxygen's undocumented
+# warning is global and only the public headers should answer for it:
+#
+#   1. everything in INPUT, undocumented off: catches markup faults - a
+#      broken @ref, an unknown command, a code span that wrapped across a
+#      newline and left <tt> unbalanced.
+#   2. include/ only, undocumented on: catches a public declaration that
+#      shipped with no documentation at all.
+#
+# Neither generates output; the point is the exit status. The config is the
+# real Doxyfile with the overrides appended, so the gate cannot drift away
+# from the manual it is checking.
+#
+check-docs: ## Fail on a documentation fault in the headers or the manual
+	@if ! command -v doxygen >/dev/null 2>&1; then \
+		printf "check-docs: skipped (no doxygen)\n"; \
+		exit 0; \
+	fi; \
+	tmp=$$(mktemp -d) || exit 1; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	fail=0; \
+	for pass in markup undocumented; do \
+		if [ "$$pass" = markup ]; then \
+			extra="WARN_IF_UNDOCUMENTED=NO"; \
+		else \
+			extra="INPUT=include\nUSE_MDFILE_AS_MAINPAGE=\nWARN_IF_UNDOCUMENTED=YES"; \
+		fi; \
+		out=$$( { cat Doxyfile; printf "QUIET=YES\nOUTPUT_DIRECTORY=$$tmp\nGENERATE_LATEX=NO\nHAVE_DOT=NO\nWARN_AS_ERROR=FAIL_ON_WARNINGS\n$$extra\n"; } \
+			| doxygen - 2>&1 ) || fail=1; \
+		printf "%s\n" "$$out" | grep -E "warning:|error:" | sort -u || true; \
+	done; \
+	if [ $$fail -ne 0 ]; then \
+		printf "\033[0;31mcheck-docs: the documentation has faults\033[0m\n"; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32mcheck-docs: no documentation faults.\033[0m\n"
 
 docs-pdf: docs ## Generate the documentation as a pdf, at ./docs/(SUITE)-(PROJECT)(BRANCH).pdf
 	cd ./docs/latex/ && make

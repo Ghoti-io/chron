@@ -58,7 +58,7 @@ extern "C" {
  * (design.md, mistake M5). Sixty-four bits, not thirty-two, everywhere
  * including the interop conversions that read 32-bit fields (mistake M6).
  *
- * @ref nsec is always 0..999999999 and the sign lives in @ref sec, so -1ns is
+ * `nsec` is always 0..999999999 and the sign lives in `sec`, so -1ns is
  * `{-1, 999999999}`. That is `java.time`'s rule; it makes the arithmetic
  * uniform at the cost of a formatter having to think for a moment.
  */

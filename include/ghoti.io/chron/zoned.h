@@ -49,7 +49,7 @@ extern "C" {
  * @brief An instant and a zone.
  *
  * That is all it *is*. The civil reading is derived on demand, and
- * @ref offset_sec is a cache so that formatting does not re-run the
+ * `offset_sec` is a cache so that formatting does not re-run the
  * transition search - a convenience, never the authority.
  *
  * This is Temporal's model and the opposite of Joda-Time's, where the zoned

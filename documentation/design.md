@@ -113,8 +113,8 @@ pulling in a single data file.
 | 2 | named time zones, DST transitions, the local zone | TZif files or the embedded table | `ctang`, applications |
 | 3 | presentation: month and day names, LDML patterns, `strftime` | a names provider (English is built in) | `ctang` |
 
-Nothing in tier *n* includes a header from tier *n+1*, and `make
-check-layering` fails the build if it does (§13).
+Nothing in tier *n* includes a header from tier *n+1*, and
+`make check-layering` fails the build if it does (§13).
 
 ### 3.1 Value types
 
@@ -273,10 +273,10 @@ The rules that follow (M9):
 | `gchron_datetime_add(civil, duration, calendar, overflow)` | either | calendar units first, then exact units, in civil space |
 | `gchron_zoned_add(zoned, duration, resolve, overflow)` | either | calendar units in the zone's civil space, resolved by `resolve`; then exact units on the instant |
 
-That last row is the one that matters: "tomorrow at the same time" is `+1
-day`, and "in twenty-four hours" is `+24 hours`, and on the day the clocks
-change they are different instants. A library that gives the same answer to
-both has picked one meaning for the caller.
+That last row is the one that matters: "tomorrow at the same time" is `+1 day`,
+and "in twenty-four hours" is `+24 hours`, and on the day the clocks change
+they are different instants. A library that gives the same answer to both has
+picked one meaning for the caller.
 
 **Sign.** Every non-zero field has the same sign, or the duration is invalid.
 A duration of "one month minus one day" is not a duration; it is two
@@ -286,12 +286,12 @@ different things in four libraries.
 ### 4.2 Balancing is explicit
 
 `90 minutes` and `1 hour 30 minutes` are the same exact duration and the
-library never rewrites one as the other unless asked. `gchron_duration_balance(d,
-largest_unit, relative_to)` carries fields into larger units up to
-`largest_unit`, and a `largest_unit` at or above `days` requires
-`relative_to` - a zoned or civil date-time - because the length of a day is
-not otherwise known. Requesting `GCHRON_UNIT_DAY` with no `relative_to` is
-`GCHRON_ERR_INVALID`, not "assume 24 hours".
+library never rewrites one as the other unless asked.
+`gchron_duration_balance(d, largest_unit, relative_to)` carries fields into
+larger units up to `largest_unit`, and a `largest_unit` at or above `days`
+requires `relative_to` - a zoned or civil date-time - because the length of a
+day is not otherwise known. Requesting `GCHRON_UNIT_DAY` with no `relative_to`
+is `GCHRON_ERR_INVALID`, not "assume 24 hours".
 
 ### 4.3 Month-end overflow
 
@@ -304,19 +304,19 @@ two choices are adopted:
 | `GCHRON_OVERFLOW_CONSTRAIN` | Feb 28 or 29 | Feb 28 |
 
 And the consequence is stated once, here, and again in the header:
-**calendar-unit arithmetic is neither associative nor commutative.** `Jan 31
-+ P1M + P1M` is Mar 28 under `CONSTRAIN`; `Jan 31 + P2M` is Mar 31. A caller
-who needs a stable "same day next month" keeps the `MonthDay` and re-derives
-the date.
+**calendar-unit arithmetic is neither associative nor commutative.**
+`Jan 31 + P1M + P1M` is Mar 28 under `CONSTRAIN`; `Jan 31 + P2M` is Mar 31. A
+caller who needs a stable "same day next month" keeps the `MonthDay` and
+re-derives the date.
 
 ### 4.4 Differences
 
-`gchron_*_until(a, b, largest_unit, rounding)` produces the duration from
-`a` to `b` expressed with fields no larger than `largest_unit`, and for
-calendar units it walks the calendar forward from `a` - so `Jan 31 until Mar
-1` in months is `1 month 1 day`, not `1 month -2 days`, and `until(a, b)` is
-not the negation of `until(b, a)`. That asymmetry is real and is documented
-rather than hidden by symmetrising.
+`gchron_*_until(a, b, largest_unit, rounding)` produces the duration from `a`
+to `b` expressed with fields no larger than `largest_unit`, and for calendar
+units it walks the calendar forward from `a` - so `Jan 31 until Mar 1` in
+months is `1 month 1 day`, not `1 month -2 days`, and `until(a, b)` is not the
+negation of `until(b, a)`. That asymmetry is real and is documented rather than
+hidden by symmetrising.
 
 ### 4.5 Text
 
@@ -368,10 +368,9 @@ JSON-Schema-Test-Suite's optional duration vectors are the first oracle (§12).
 ### 5.1 The instant is Unix time, and that is a decision about leap seconds
 
 `GCHRON_Instant` counts seconds since 1970-01-01T00:00:00Z **with every day
-86,400 seconds long**. That is POSIX time, and it means the 27 leap seconds
-UTC has inserted since 1972 are not in the count: the instant `{1483228799,
-0}` is both 2016-12-31T23:59:59Z and the leap second 23:59:60Z that followed
-it.
+86,400 seconds long**. That is POSIX time, and it means the 27 leap seconds UTC
+has inserted since 1972 are not in the count: the instant `{1483228799, 0}` is
+both 2016-12-31T23:59:59Z and the leap second 23:59:60Z that followed it.
 
 The alternatives were considered and the reasons for rejecting them are the
 guidance the author asked for:
@@ -416,8 +415,9 @@ guidance the author asked for:
 
 ### 5.2 Calendars are a labelling of the epoch day
 
-A calendar is the function pair that turns an epoch day into `(year, month,
-day)` and back, plus the facts a formatter and an arithmetic routine need:
+A calendar is the function pair that turns an epoch day into
+`(year, month, day)` and back, plus the facts a formatter and an arithmetic
+routine need:
 
 ```c
 typedef struct GCHRON_Calendar {
@@ -1542,12 +1542,12 @@ whether a library agrees with itself.
 **Where phase 2 departs from this page.** §5.2 says every function taking a
 `GCHRON_Date` takes a calendar argument, with `NULL` meaning Gregorian. The
 calendar-taking functions are in `calendar.h` instead, and `civil.h`'s keep
-their shorter Gregorian-only signatures - `gchron_date_to_epoch_day(date,
-&day)` rather than `gchron_date_to_epoch_day(NULL, date, &day)`. `text`,
-`compress` and `image` want the Gregorian case and nothing else, and a
-parameter they would always pass `NULL` to is noise in the header they
-actually read. The rule §5.2 states still holds wherever a calendar is
-accepted.
+their shorter Gregorian-only signatures -
+`gchron_date_to_epoch_day(date, &day)` rather than
+`gchron_date_to_epoch_day(NULL, date, &day)`. `text`, `compress` and `image`
+want the Gregorian case and nothing else, and a parameter they would always
+pass `NULL` to is noise in the header they actually read. The rule §5.2 states
+still holds wherever a calendar is accepted.
 
 §5.5 sketches a `leap_years_in_cycle` field beside the leap pattern.
 `GCHRON_LeapRule` does not have one: it is a popcount of the pattern, two ways
@@ -1558,9 +1558,9 @@ scar from `regex`'s unread table flags.
 footer, the database and its cache, `Resolve`, the local zone, `zoned.h` and
 RFC 9557. Three oracles agree with it: `zdump` over 8,540 transition rows of
 twenty zones; glibc's `tzset` over 548,960 probes covering **every distinct
-footer rule in the system database**, harvested rather than typed; and
-Python's `zoneinfo` over 105,948 probes covering **every zone**, run by `make
-check-oracle-zoneinfo`.
+footer rule in the system database**, harvested rather than typed; and Python's
+`zoneinfo` over 105,948 probes covering **every zone**, run by
+`make check-oracle-zoneinfo`.
 
 The fuzzers found three defects the oracles could not, because all three need
 input no real database contains:

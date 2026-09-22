@@ -33,8 +33,11 @@
  * has to enable four things on to get the one they wanted.
  *
  * Reference: the YAML 1.1 type repository, `tag:yaml.org,2002:timestamp`,
- * whose regular expression is the definition of the type:
+ * whose regular expression is the definition of the type. Verbatim because
+ * the grammar contains `[ \t]`, and doxygen reads a backslash in a comment
+ * as the start of one of its own commands:
  *
+ * @verbatim
  *     [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]
  *    |[0-9][0-9][0-9][0-9]
  *     -[0-9][0-9]?
@@ -44,6 +47,7 @@
  *     :[0-9][0-9]
  *     (\.[0-9]*)?
  *     (([ \t]*)Z|[-+][0-9][0-9]?(:[0-9][0-9])?)?
+ * @endverbatim
  */
 
 #include <ghoti.io/chron/civil.h>

@@ -203,7 +203,7 @@ GCHRON_API const char * gchron_diag_string(GCHRON_Diag diag);
 /**
  * @brief A failure, with the position in the input that caused it.
  *
- * Nothing here is allocated: @ref message is static, and the struct is
+ * Nothing here is allocated: `message` is static, and the struct is
  * caller-owned. A caller that does not want the detail passes NULL wherever a
  * `GCHRON_Error *` is accepted.
  */

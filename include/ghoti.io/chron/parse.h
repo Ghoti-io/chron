@@ -188,14 +188,6 @@ typedef enum {
  *--------------------------------------------------------------------------*/
 
 /**
- * @brief What a parser is allowed to accept.
- *
- * A zero-initialised struct is the strict default: both policies refuse, no
- * extension is enabled, and the default limits apply. Call
- * gchron_parse_options_default() anyway - it is what will still be right when
- * a later field's safe value is not zero.
- */
-/**
  * Forward declaration of leap.h's table.
  *
  * A declaration rather than an `#include`: leap.h is optional (design.md
@@ -204,6 +196,14 @@ typedef enum {
  */
 typedef struct GCHRON_LeapTable GCHRON_LeapTable;
 
+/**
+ * @brief What a parser is allowed to accept.
+ *
+ * A zero-initialised struct is the strict default: both policies refuse, no
+ * extension is enabled, and the default limits apply. Call
+ * gchron_parse_options_default() anyway - it is what will still be right when
+ * a later field's safe value is not zero.
+ */
 typedef struct GCHRON_ParseOptions {
   /** Caps on the input. NULL means gchron_limits_default(). */
   const GCHRON_Limits * limits;

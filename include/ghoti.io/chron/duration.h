@@ -51,11 +51,11 @@ extern "C" {
  * string `P1Y2M3DT4H5M6S` is neither a `Period` nor a `Duration`, and every
  * program that reads one has to hand-combine two objects.
  *
- * - **Calendar units** - @ref years, @ref months, @ref weeks, @ref days -
+ * - **Calendar units** - `years`, `months`, `weeks`, `days` -
  *   have no fixed length. A day in a zone with a daylight-saving transition
  *   is 23 or 25 hours; a month is 28 to 31 days. Applying one needs a
  *   calendar, and in a zone, a zone.
- * - **Exact units** - @ref hours down to @ref nsec - are SI. Applying one to
+ * - **Exact units** - `hours` down to `nsec` - are SI. Applying one to
  *   an instant is addition.
  *
  * Adding a month to an instant is therefore GCHRON_ERR_INVALID and not a
@@ -66,8 +66,8 @@ extern "C" {
  * and writing it as one is how `Jan 31 + P1M-1D` came to mean four different
  * things in four libraries.
  *
- * As with GCHRON_Instant, @ref nsec is always 0..999999999 and the sign of a
- * negative sub-second duration lives in @ref seconds.
+ * As with GCHRON_Instant, `nsec` is always 0..999999999 and the sign of a
+ * negative sub-second duration lives in `seconds`.
  */
 typedef struct GCHRON_Duration {
   int64_t years;   ///< Calendar unit.

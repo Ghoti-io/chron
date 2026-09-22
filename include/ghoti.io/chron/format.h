@@ -418,7 +418,7 @@ typedef enum {
 /**
  * @brief Everything a parse read out of the text.
  *
- * Every field is meaningful only when its bit is set in @ref present; the
+ * Every field is meaningful only when its bit is set in `present`; the
  * rest are zero and mean nothing. This is the whole reason the struct exists
  * rather than a `GCHRON_DateTime`: `strptime` writes into a `struct tm` the
  * caller supplied and leaves untouched whatever the caller did not

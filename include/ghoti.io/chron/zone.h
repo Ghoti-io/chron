@@ -85,7 +85,7 @@ typedef enum {
 /**
  * @brief What a zone was doing at some instant.
  *
- * @ref abbreviation is borrowed from the zone and lives as long as it does.
+ * `abbreviation` is borrowed from the zone and lives as long as it does.
  * It is **output-only**: no parser in this library accepts an abbreviation as
  * a zone, because `CST` is China, Cuba and Central, and `IST` is India, Israel
  * and Ireland (design.md, mistake M12).
@@ -454,12 +454,6 @@ GCHRON_API void gchron_zonedb_dump(const GCHRON_ZoneDb * db, FILE * stream);
  *--------------------------------------------------------------------------*/
 
 /**
- * @brief The identifier a zone was asked for, or NULL for an anonymous one.
- *
- * @param zone The zone.
- * @return A borrowed string, or NULL.
- */
-/**
  * @brief The longest zone identifier this library will carry, without its NUL.
  *
  * The longest the tzdb ships is `America/Argentina/ComodRivadavia` at 32
@@ -468,6 +462,12 @@ GCHRON_API void gchron_zonedb_dump(const GCHRON_ZoneDb * db, FILE * stream);
  */
 #define GCHRON_ZONE_ID_MAX ((size_t)128)
 
+/**
+ * @brief The identifier a zone was asked for, or NULL for an anonymous one.
+ *
+ * @param zone The zone.
+ * @return A borrowed string, or NULL.
+ */
 GCHRON_API const char * gchron_zone_id(const GCHRON_Zone * zone);
 
 /**

@@ -88,6 +88,19 @@ extern "C" {
 #endif
 
 /**
+ * @brief The linkage specification every exported declaration carries.
+ *
+ * `extern "C"` when a C++ translation unit includes the header, and nothing
+ * at all in C. GCHRON_API is built on top of it; a declaration rarely needs
+ * it on its own.
+ */
+#ifdef __cplusplus
+#define GCHRON_EXTERN extern "C"
+#else
+#define GCHRON_EXTERN
+#endif
+
+/**
  * @brief API export macro for cross-platform library symbols
  *
  * Use this macro to mark functions that should be exported from the
@@ -99,12 +112,6 @@ extern "C" {
  * GCHRON_API void public_function(void);
  * @endcode
  */
-#ifdef __cplusplus
-#define GCHRON_EXTERN extern "C"
-#else
-#define GCHRON_EXTERN
-#endif
-
 #if defined(_WIN32) || defined(__CYGWIN__)
 #ifdef GCHRON_BUILD
 #define GCHRON_API GCHRON_EXTERN __declspec(dllexport)

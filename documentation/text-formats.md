@@ -73,13 +73,13 @@ moment; `gchron_offset_identical` says they are not the same statement.
 
 ### `:60`
 
-The grammar permits it (`time-second = 2DIGIT ; 00-58, 00-59, 00-60 based on
-leap second rules`), and the rules it defers to are a policy here:
-`GCHRON_Leap`, whose zero value refuses. Whatever the policy allows, the
-resulting `GCHRON_Time` holds `:59` of the same minute with the same fraction -
-where the Linux kernel puts the repeated second - and
-`GCHRON_ParseInfo::leap_second` is the evidence that the text said otherwise.
-That is the one documented loss in `parse(write(x))`.
+The grammar permits it
+(`time-second = 2DIGIT ; 00-58, 00-59, 00-60 based on leap second rules`), and
+the rules it defers to are a policy here: `GCHRON_Leap`, whose zero value
+refuses. Whatever the policy allows, the resulting `GCHRON_Time` holds `:59` of
+the same minute with the same fraction - where the Linux kernel puts the
+repeated second - and `GCHRON_ParseInfo::leap_second` is the evidence that the
+text said otherwise. That is the one documented loss in `parse(write(x))`.
 
 `GCHRON_LEAP_MINUTE` judges the second **after applying the offset**, because
 `01:29:60+01:30` is a leap second and `23:59:60+01:00` is not, and the digits
@@ -443,7 +443,8 @@ YAML states nothing about either, and the grammar permits both:
 `[0-9][0-9]` matches `60`, and `\.[0-9]*` has no length limit. The preset
 `gchron_parse_options_yaml()` therefore reads them rather than refusing -
 `GCHRON_LEAP_CLAMP` and `GCHRON_FRACTION_TRUNCATE` - with
-`GCHRON_ParseInfo::leap_second` and `::fraction_truncated` as the evidence.
+`GCHRON_ParseInfo::leap_second` and
+`GCHRON_ParseInfo::fraction_truncated` as the evidence.
 This is the one grammar here whose preset is looser than design §3.7's strict
 zero, and the reason is the one above: a refusal would resolve a conformant
 `!!timestamp` as a `!!str`, which reports nothing and changes the document.
@@ -472,11 +473,11 @@ itself, because that spelling is the only one that says the offset is unknown.
 ### The oracle
 
 `tools/oracle/yaml_timestamp.py` runs a corpus through **PyYAML** and commits
-the verdicts to `tests/data/vectors/parse/yaml_timestamp.vec`; `make
-vectors-yaml` regenerates it. Both of PyYAML's regular expressions are read
-out of the installed module rather than retyped - the resolver's, which says
-whether a scalar is a timestamp at all, and the constructor's named groups,
-which say what its fields are.
+the verdicts to `tests/data/vectors/parse/yaml_timestamp.vec`;
+`make vectors-yaml` regenerates it. Both of PyYAML's regular expressions are
+read out of the installed module rather than retyped - the resolver's, which
+says whether a scalar is a timestamp at all, and the constructor's named
+groups, which say what its fields are.
 
 The value comparison uses those groups rather than the `datetime` PyYAML goes
 on to build, because that object is truncated to microseconds and normalises
