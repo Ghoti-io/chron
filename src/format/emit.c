@@ -730,12 +730,22 @@ GCHRON_Result gchron_format_offset(const GCHRON_Format * format,
     const GCHRON_OffsetDateTime * odt, const GCHRON_FormatContext * context,
     char * buf, size_t buf_len, size_t * out_len) {
   GCHRON_FormatContext resolved;
+  GCHRON_OffsetDateTime utc;
   GCHRON_Instant instant;
   size_t length = 0;
   GCHRON_Result result;
 
-  if (!gchron_offset_is_valid(odt)) {
+  if (format == NULL || !gchron_offset_is_valid(odt)) {
     return GCHRON_ERR_INVALID;
+  }
+  if (format->in_utc) {
+    /* The format states its own zone, so the value moves into it rather than
+     * being printed beside a literal that contradicts it. */
+    result = gchron_offset_with_offset(odt, 0, &utc);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    odt = &utc;
   }
   default_context(context, &resolved);
   resolved.offset_sec = odt->offset_sec;
@@ -761,8 +771,31 @@ GCHRON_Result gchron_format_zoned(const GCHRON_Format * format,
   size_t length = 0;
   GCHRON_Result result;
 
-  if (zoned == NULL) {
+  if (format == NULL || zoned == NULL) {
     return GCHRON_ERR_INVALID;
+  }
+  if (format->in_utc) {
+    /*
+     * The same rule as gchron_format_offset(), from the zoned side: the zone
+     * the value carries is not the zone the format writes, so the civil
+     * reading has to be the one at UTC. The zone-naming letters are left with
+     * nothing, which is right - `VV` beside a literal `GMT` would be two
+     * answers to one question.
+     */
+    GCHRON_OffsetDateTime at_utc;
+    result = gchron_offset_from_instant(&zoned->instant, 0, false, &at_utc);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    default_context(context, &resolved);
+    resolved.offset_sec = 0;
+    resolved.offset_unknown = false;
+    result = gchron_format_emit(format, &at_utc.civil, &resolved,
+        &zoned->instant, buf, buf_len, &length);
+    if (out_len != NULL) {
+      *out_len = length;
+    }
+    return result;
   }
   result = gchron_zoned_to_civil(zoned, &civil);
   if (result != GCHRON_OK) {

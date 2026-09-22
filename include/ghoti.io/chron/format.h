@@ -243,6 +243,12 @@ GCHRON_API GCHRON_Result gchron_format_max_length(
  * Mistake M8 is `YYYY` where `yyyy` was meant - the week-based year, which is
  * right for fifty-one weeks a year and wrong over New Year. A named format is
  * a timestamp somebody has already got right.
+ *
+ * All but one print the value they are given. ::GCHRON_NAMED_HTTP moves it
+ * into UTC first, because an HTTP-date *is* UTC - RFC 9110 section 5.6.7 -
+ * and its grammar says so with a literal `GMT` that a pattern has no way to
+ * honour on its own. It is the same conversion gchron_write_http_date()
+ * performs, so the two agree for any offset.
  */
 typedef enum {
   GCHRON_NAMED_RFC3339 = 0,     ///< `2026-09-20T15:30:00Z`

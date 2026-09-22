@@ -299,6 +299,50 @@ TEST(Format, EveryNamedFormatCompilesAndProducesItsDocumentedShape) {
       gchron_format_named(static_cast<GCHRON_NamedFormat>(-1)));
 }
 
+/*
+ * RFC 9110 section 5.6.7: an HTTP-date "represents time as an instance of
+ * Coordinated Universal Time", and the grammar spells that as the literal
+ * `GMT`. A pattern cannot say it - it prints whatever civil reading it is
+ * handed - so this format used to write a value's *local* time beside that
+ * literal, and `2026-09-20T17:30:00+02:00` came out as
+ * `Sun, 20 Sep 2026 17:30:00 GMT`: two hours wrong, and labelled as though
+ * it were not. gchron_write_http_date() has always converted first and says
+ * so in its documentation; the two now give the same answer, which is the
+ * point of having the named one at all.
+ */
+TEST(Format, TheNamedHttpFormatMovesTheValueIntoGmtRatherThanLabellingIt) {
+  GCHRON_DateTime civil = gchrontest::datetime(2026, 9, 20, 17, 30, 0);
+  GCHRON_OffsetDateTime odt{};
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 2 * 3600, false, &odt));
+
+  const GCHRON_Format * format = gchron_format_named(GCHRON_NAMED_HTTP);
+  ASSERT_NE(nullptr, format);
+  GCHRON_Result result;
+  EXPECT_EQ("Sun, 20 Sep 2026 15:30:00 GMT", format_offset(format, odt,
+      &result));
+  EXPECT_EQ(GCHRON_OK, result);
+
+  char direct[GCHRON_HTTP_DATE_MAX];
+  size_t length = 0;
+  ASSERT_EQ(GCHRON_OK,
+      gchron_write_http_date(&odt, direct, sizeof(direct), &length));
+  EXPECT_EQ(std::string(direct), format_offset(format, odt, &result));
+
+  // A western offset moves the other way, and past midnight - which is the
+  // case a conversion that only adjusted the clock would get wrong.
+  GCHRON_DateTime late = gchrontest::datetime(2026, 9, 20, 23, 30, 0);
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&late, -5 * 3600, false, &odt));
+  EXPECT_EQ("Mon, 21 Sep 2026 04:30:00 GMT", format_offset(format, odt,
+      &result));
+
+  // Every other named format carries its own offset, so none of them moves.
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 2 * 3600, false, &odt));
+  EXPECT_EQ("2026-09-20T17:30:00+02:00",
+      format_offset(gchron_format_named(GCHRON_NAMED_RFC3339), odt, &result));
+  EXPECT_EQ("Sun, 20 Sep 2026 17:30:00 +0200",
+      format_offset(gchron_format_named(GCHRON_NAMED_RFC5322), odt, &result));
+}
+
 // A named format is static, and a caller holding "whichever format was
 // chosen" should not have to remember which kind it is.
 TEST(Format, DestroyingANamedFormatIsIgnored) {

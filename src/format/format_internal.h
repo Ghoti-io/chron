@@ -120,6 +120,22 @@ struct GCHRON_Format {
   size_t literal_bytes;
   size_t max_length;                  /**< Upper bound, the NUL included. */
   bool is_static;                     /**< A named format; never freed. */
+
+  /**
+   * The format states its own zone, so the value has to be moved into it.
+   *
+   * An HTTP-date is Coordinated Universal Time by definition - RFC 9110
+   * section 5.6.7 - and its grammar spells the zone as the literal `GMT`.
+   * A pattern has no way to say that: it prints whatever civil reading it is
+   * handed, so `2026-09-20T17:30:00+02:00` came out as
+   * `Sun, 20 Sep 2026 17:30:00 GMT`, two hours wrong and labelled as though
+   * it were not. gchron_write_http_date() converts first and says so in its
+   * documentation; this is how the named format does the same thing.
+   *
+   * Set by named.c and nowhere else. A pattern a caller compiles is their
+   * own, and moving their value out from under them would be the surprise.
+   */
+  bool in_utc;
 };
 
 /**

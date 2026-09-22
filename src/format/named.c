@@ -92,6 +92,14 @@ GCHRON_INIT_FUNCTION(gchron_named_formats_init) {
     /* Static: gchron_format_destroy() ignores it, so a caller holding
      * "whichever format was chosen" need not remember which kind it is. */
     FORMATS[i].is_static = true;
+    /*
+     * The one named format that states its own zone. RFC 9110 section 5.6.7
+     * makes an HTTP-date UTC, and the pattern spells that as a literal
+     * `GMT`; without this the emitter would print the value's own civil
+     * reading beside it and call the result GMT. RFC 5322's pattern ends in
+     * `Z`, which writes the real offset, so it needs nothing.
+     */
+    FORMATS[i].in_utc = (i == GCHRON_NAMED_HTTP);
   }
   BUILT = true;
 }
