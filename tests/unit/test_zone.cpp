@@ -731,3 +731,46 @@ TEST(ZoneDb, ALinkNameIsResolvedThroughTzdataZi) {
       << "table ever sending it to `RealZone` (largest before the lookup was "
       << before << ")";
 }
+
+/*
+ * A line `tzdata.zi` does not use, next to one it does.
+ *
+ * build_links() walks the file twice: once to count the link lines so the
+ * two parallel arrays can be allocated at the right size, and once to carve
+ * them up. The two passes have to agree about what a link line *is*, and a
+ * disagreement is not a miscount - the second pass stops at `index < count`,
+ * so every line it accepts that the first did not count spends a slot that
+ * belonged to a real link, and the real link is dropped off the end.
+ *
+ * `L` is the abbreviated spelling `zishrink.awk` emits and is all a stock
+ * `tzdata.zi` contains. `Link` is the spelling the tzdb's own source files
+ * use, and zic accepts, so it is what a hand-assembled or unshrunk file has
+ * in it. Neither pass is obliged to support it - but they are obliged to
+ * make the same decision about it.
+ */
+TEST(ZoneDb, ALineOnlyOnePassCallsALinkDoesNotCostARealLinkItsSlot) {
+  gchrontest::TempDir dir;
+  const std::string body(128 * 1024, 'x');
+  dir.write("RealZone", body);
+  dir.write("tzdata.zi",
+      "Link RealZone LongFormAlias\n"
+      "L RealZone AliasZone\n");
+
+  gchrontest::RecordingAllocator recorder;
+  GCHRON_ZoneDb * db = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_directory(dir.path().c_str(),
+      recorder.get(), nullptr, &db));
+
+  const size_t before = recorder.largest();
+  const GCHRON_Zone * zone = nullptr;
+  EXPECT_NE(GCHRON_OK, gchron_zonedb_zone(db, "AliasZone", &zone));
+  gchron_zonedb_destroy(db);
+
+  EXPECT_GE(recorder.largest(), body.size())
+      << "`AliasZone` stopped resolving because of a line above it that only "
+      << "one of the two passes treats as a link: the counting pass requires "
+      << "`L` and then a space, the rewriting pass requires only `L`, so "
+      << "`Link ...` took the single slot the count had reserved for "
+      << "`L RealZone AliasZone` (largest allocation was " << recorder.largest()
+      << ", floor before the lookup " << before << ")";
+}

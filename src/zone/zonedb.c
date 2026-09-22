@@ -726,7 +726,20 @@ static void build_links(GCHRON_ZoneDb * db) {
       stop += 1;
     }
     cursor = (stop < end) ? stop + 1 : end;
-    if (*line != 'L' && *line != 'l') {
+    /*
+     * The predicate the counting pass above uses, spelled the same way on
+     * purpose. It used to test only the first character here, and the two
+     * passes disagreeing is worse than either of them being wrong: this loop
+     * stops at `index < count`, so a line accepted here that was not counted
+     * there spends a slot reserved for a real link, and the real link falls
+     * off the end and stops resolving. `Link ...` - the tzdb's own source
+     * spelling, which `zishrink.awk` does not emit but zic accepts - was such
+     * a line, and one of them ahead of a genuine `L` line silently cost that
+     * link. Whether the long form ought to be supported is a separate
+     * question from whether the two passes answer it alike.
+     */
+    if ((*line != 'L' && *line != 'l') || line + 1 >= stop
+        || (line[1] != ' ' && line[1] != '\t')) {
       continue;
     }
     *stop = '\0';
