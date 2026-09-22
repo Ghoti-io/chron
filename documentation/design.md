@@ -958,11 +958,11 @@ to be unambiguous.
 
 ### 8.8 `strftime` below year 1000, where the C library is not followed
 
-The `strftime` syntax is checked against the C library itself - nearly twenty
-million formattings, every accepted specifier over every day from 1000 to
-2200 and every hour of the days where the ISO week year, a leap day or the
-12-hour cycle make it interesting (§12). They agree on all of it except one
-class, and that class is a decision rather than a defect.
+The `strftime` syntax is checked against the C library itself - every
+specifier at twelve moments chosen where the answers move, then every day of
+eighty years, about 1.3 million comparisons in `make test` (§12). They agree
+on all of it except one class, and that class is a decision rather than a
+defect.
 
 Below year 1000 glibc writes `%Y` as a plain decimal and lets `%F` and `%G`
 inherit it, so on year 1 it produces `1`, `1-06-15` and `1`. This library
@@ -988,10 +988,11 @@ but they count weeks from the first Sunday or Monday and put the days before
 it in "week 0", which is not the ISO week, has no LDML letter, and is almost
 never what a caller who asked for a week number wanted. `%V` is.
 
-The deviation is asserted from both sides - `tools/oracle/strftime_probe.c`
-checks that the C library still disagrees in exactly these cases, so a libc
-that starts padding is noticed rather than absorbed, and
-`tests/unit/test_format.cpp` pins what this library writes.
+The deviation is asserted from both sides in
+`tests/conformance/test_strftime.cpp`: what this library writes, and that the
+C library still disagrees in exactly these cases - so a libc that starts
+padding fails the differential and is looked at, rather than quietly making
+the deviation disappear.
 
 ---
 
@@ -1145,17 +1146,19 @@ below is produced by software this library did not write.
 | Claim | Oracle | Driver | On this machine |
 | --- | --- | --- | --- |
 | civil ↔ epoch day, Gregorian | exhaustive round trip over ±100,000 years (7.3e7 days, seconds of runtime); property check over the full nine-digit range; Python `date.toordinal()` for years 1–9999 | `tests/unit/test_civil.cpp`; `tools/oracle/ordinal.py` | yes |
-| the 33 sample dates in every calendar | Reingold & Dershowitz, *Calendrical Calculations*, the sample-data appendix; the `convertdate` package; `ncal -J` for Julian | `tools/oracle/rd_table.py` | neither installed: `pip install convertdate`, `apt install ncal` |
+| the 33 sample dates in every calendar | Reingold & Dershowitz, *Calendrical Calculations*, the sample-data appendix; the `convertdate` package, which implements their algorithms directly | `tools/oracle/calendars.py` → `tests/data/vectors/calendar/{julian,hybrid}.vec`, read by `tests/unit/test_calendar.cpp` | vectors committed; `convertdate` not installed here, so they cannot be regenerated on this machine |
 | every zone's every transition | **`zdump -v`** over all zones in the system database: the UTC instant and the civil time, offset, abbreviation and DST flag on both sides of every transition, from the reference implementation of the tzdb itself. Several hundred thousand assertions, regenerated when tzdata updates | `tools/oracle/zdump.py` → `tests/data/vectors/zones/transitions.vec` | `zdump` 2.41, tzdata 2026c |
-| the same, independently | Python 3.13 `zoneinfo` reading the same TZif files through different code | `tools/oracle/zoneinfo_diff.py` | yes |
-| POSIX TZ string evaluation | glibc's own `tzset` + `localtime_r` with `TZ` set to each footer string in the database, across a lattice of instants | `tools/oracle/tzset_probe.c` | yes |
+| the same, independently | Python 3.13 `zoneinfo` reading the same TZif files through different code | `tools/oracle/zoneinfo_diff.py` + `tools/oracle/gchron_zone.c`, `make check-oracle-zoneinfo` | yes |
+| POSIX TZ string evaluation | glibc's own `tzset` + `localtime_r` with `TZ` set to each footer string in the database, across a lattice of instants. The corpus is harvested from the system's own TZif files rather than written out | `tests/conformance/test_posixtz_tzset.cpp` - in process, because the oracle is a libc function | yes, in `make test` |
 | civil → instant in a gap or overlap | Python `zoneinfo` with `fold=0` / `fold=1`, and `zdump`'s transition rows | as above | yes |
-| RFC 3339, `date`, `time`, `duration` text | JSON-Schema-Test-Suite `tests/draft2020-12/optional/format/{date-time,date,time,duration}.json` | `tools/oracle/jsonschema_format.py` | fetched by `tools/corpus/fetch.sh` |
-| ISO 8601 and RFC 9557 strings | test262's Temporal string-parsing tests, through Node (present for `text`'s js-yaml oracle); Python `datetime.fromisoformat` | `tools/oracle/test262.js`, `tools/oracle/fromiso.py` | node yes |
-| LDML pattern semantics | **ICU** `icu::SimpleDateFormat` in the root locale, through a small C++ driver built only when `pkg-config icu-i18n` succeeds. ICU is the definition of what a pattern means and is never linked by the library | `tools/oracle/icu_format.cpp` | `libicu-dev` is installed for `ctang` |
-| `strftime` | the C library's own `strftime` in the C locale, every accepted specifier over every day from 1000 to 2200 and every hour of the interesting days - nearly twenty million comparisons, `make check-oracle-strftime`. The one class they disagree on is checked as a deviation rather than skipped (§8.8) | `tools/oracle/strftime_probe.c` | yes |
-| HTTP-date, RFC 5322 | the RFCs' own examples, plus `curl`'s `parsedate` behaviour where it is on the machine | vectors committed | |
-| leap seconds | `/usr/share/zoneinfo/leap-seconds.list` and its expiry; the JSON Schema leap vectors above | | yes; no `right/` zoneinfo on Debian |
+| RFC 3339, `date`, `time`, `duration` text | JSON-Schema-Test-Suite `tests/draft2020-12/optional/format/{date-time,date,time,duration}.json` | `tools/oracle/jsonschema_format.py` → `tests/data/vectors/parse/`, read by `tests/conformance/test_jsonschema_format.cpp` | fetched by `tools/corpus/fetch.sh` |
+| ISO 8601 and RFC 9557 strings | test262's Temporal string-parsing tests, through Node (present for `text`'s js-yaml oracle); Python `datetime.fromisoformat` | **not written.** `tests/unit/test_rfc9557.cpp` carries hand-written cases, which is not an oracle | node is here; the drivers are not |
+| LDML pattern semantics | **ICU** `icu::SimpleDateFormat` in the root locale, through a small C++ driver built only when `pkg-config icu-i18n` succeeds. ICU is the definition of what a pattern means and is never linked by the library | `tools/oracle/icu_format.cpp` + `gchron_format.c` + `ldml_diff.py`, `make check-oracle-ldml` | `libicu-dev` is installed for `ctang` |
+| LDML patterns read backwards (§8.7) | **ICU** again, but as the *writer*: ICU formats an instant, then both sides are handed ICU's own bytes to read | `tools/oracle/ldml_parse_diff.py` + `gchron_scan.c` + `icu_format.cpp`, `make check-oracle-ldml-parse` | `libicu-dev` is installed for `ctang` |
+| `strftime` | the C library's own `strftime` in the C locale: every specifier at twelve chosen moments, then every day of eighty years - about 1.3 million comparisons. The one class they disagree on is asserted as a deviation rather than skipped (§8.8) | `tests/conformance/test_strftime.cpp` - in process, because the oracle is a libc function | yes, in `make test` |
+| YAML 1.1 `!!timestamp` | **PyYAML**, the reference implementation of the YAML version that has a timestamp type at all, and the parser most existing 1.1 documents were written against | `tools/oracle/yaml_timestamp.py` + `gchron_yaml.c` → `tests/data/vectors/parse/yaml_timestamp.vec`, read by `tests/conformance/test_yaml_timestamp.cpp` | yes |
+| HTTP-date, RFC 5322 | the RFCs' own examples | `tests/unit/test_httpdate.cpp`, which carries them inline; **no committed vectors and no outside driver**, so this row is weaker than every other one here | the examples, yes; an oracle, no |
+| leap seconds | the tzdb's *other* file, `/usr/share/zoneinfo/leapseconds` - the same facts restated in zic's syntax by zic's maintainers, so it is not the file the built-in table was generated from | `tools/oracle/leapseconds.py` → `tests/data/vectors/leap/leapseconds.vec`, read by `tests/conformance/test_leapseconds.cpp` | yes; no `right/` zoneinfo on Debian |
 
 Regeneration is `make vectors`, gated per oracle by an environment variable
 as `regex` does, and the vectors are committed so that `make test` never
@@ -1225,26 +1228,35 @@ include/ghoti.io/chron/
   interop.h     §10                                                                        [tier 1]
   chron.h       umbrella
 
-src/core/       result strings, limits, diagnostics, checked arithmetic helpers
-src/civil/      civil.c gregory.c julian.c hybrid.c tabular.c week.c
-src/instant/    instant.c duration.c offset.c interval.c round.c
-src/parse/      options.c rfc3339.c duration_text.c toml.c write_rfc3339.c
-                iso8601.c rfc9557.c yaml11.c httpdate.c rfc5322.c unix.c
-src/format/     compile.c ldml.c strftime.c emit.c names_english.c
-src/zone/       tzif.c posixtz.c zonedb.c zone.c zoned.c local.c  local_win.c (TODO(windows))
-src/zone/embedded/  generated by tools/tzdata/embed.py; never edited
+src/core/       core.c allocator.c  (result strings, limits, diagnostics,
+                checked arithmetic helpers)
+src/civil/      civil.c gregory.c hybrid.c tabular.c week.c calendar.c
+src/instant/    instant.c duration.c duration_math.c offset.c interval.c
+src/parse/      options.c rfc3339.c write_rfc3339.c duration_text.c
+                iso8601_duration.c toml.c yaml.c
+src/format/     compile.c emit.c scan.c named.c names_english.c httpdate.c
+src/zone/       tzif.c posixtz.c zonedb.c zone.c zoned.c local.c rfc9557.c
+                tzdata_embedded.c windows_zones.c  (the last two generated;
+                local.c carries the TODO(windows) branches)
 src/clock/      clock.c  (one #ifdef _WIN32 branch)
-src/leap/       leap.c tai.c
+src/leap/       leap.c tai.c leap_builtin.c (generated)
 src/interop/    interop.c
 src/chron.c     version
 
-tools/tzdata/   embed.py (IANA source tree → C table + windowsZones mapping); fetch.sh
-tools/oracle/   zdump.py zoneinfo_diff.py gchron_zone.c icu_format.cpp strftime_probe.c
-                jsonschema_format.py test262.js fromiso.py ordinal.py rd_table.py
-tools/corpus/   fetch.sh for JSON-Schema-Test-Suite, test262, the R&D tables
+tools/tzdata/   embed.py (IANA source tree → C table); windows_zones.py
+                (CLDR → the Windows mapping); fetch-cldr.sh; CLDR_TAG
+tools/leap/     embed.py (leap-seconds.list → the built-in table)
+tools/oracle/   zdump.py zoneinfo_diff.py gchron_zone.c
+                icu_format.cpp ldml_diff.py gchron_format.c
+                ldml_parse_diff.py gchron_scan.c
+                yaml_timestamp.py gchron_yaml.c
+                jsonschema_format.py ordinal.py calendars.py leapseconds.py
+tools/corpus/   fetch.sh for JSON-Schema-Test-Suite; JSON_SCHEMA_COMMIT
+tools/fuzz/     seed.py
+tools/coverage.sh   line coverage, and the growth-path triage in §12
 tests/unit/     one file per header; test_policies.cpp (§3.7); test_roundtrip.cpp
-tests/conformance/  the vector runner
-tests/data/vectors/ zones/ parse/ format/ calendar/
+tests/conformance/  one file per differential whose oracle is on the machine
+tests/data/vectors/ zones/ parse/ calendar/ leap/
 tests/fuzz/     §12.2
 ```
 

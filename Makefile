@@ -634,9 +634,8 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
-.PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar
+.PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar vectors-calendars
 .PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license
-.PHONY: check-oracle-strftime
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -845,11 +844,7 @@ check-layering: ## Fail if a lower tier includes a higher tier's header
 # it the same questions it asks itself. Built on demand, installed by nothing,
 # and not part of the library.
 
-# Two shapes of driver. A gchron_*.c puts the library behind a line protocol
-# so that an oracle written in another language can drive it; a *_probe.c has
-# the oracle already linked - glibc - and does the comparison itself.
-ORACLE_SOURCES := $(wildcard tools/oracle/gchron_*.c) \
-	$(wildcard tools/oracle/*_probe.c)
+ORACLE_SOURCES := $(wildcard tools/oracle/gchron_*.c)
 ORACLE_TOOLS := $(patsubst tools/oracle/%.c,$(APP_DIR)/tools/%$(EXE_EXTENSION),$(ORACLE_SOURCES))
 
 $(APP_DIR)/tools/%$(EXE_EXTENSION): tools/oracle/%.c $(APP_DIR)/$(STATIC_TARGET) \
@@ -893,17 +888,6 @@ check-oracle-ldml-parse: $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
 		--chron $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
 		--icu $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
 
-#
-# The C library is the oracle for its own definition of `%c`, `%x`, `%X` and
-# `%r` (design.md section 8.5), and it is already linked, so this one needs
-# nothing installed. A machine without the C locale has no oracle and says so
-# rather than passing.
-#
-check-oracle-strftime: ## Check the strftime formatter against the C library
-check-oracle-strftime: $(APP_DIR)/tools/strftime_probe$(EXE_EXTENSION)
-	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" \
-		$(APP_DIR)/tools/strftime_probe$(EXE_EXTENSION)
-
 check-oracle-zoneinfo: ## Check every zone against Python's zoneinfo (needs python3)
 check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
 	@if ! command -v python3 >/dev/null 2>&1; then \
@@ -929,7 +913,7 @@ JSON_SCHEMA_SUITE := third_party/json-schema-test-suite/$(shell cat tools/corpus
 
 vectors: ## Regenerate every committed conformance vector file
 vectors: vectors-jsonschema vectors-zones vectors-calendar vectors-leap
-vectors: vectors-yaml
+vectors: vectors-yaml vectors-calendars
 
 vectors-yaml: ## Rebuild the YAML 1.1 timestamp vectors (needs PyYAML)
 	@if ! python3 -c 'import yaml' 2>/dev/null; then \
@@ -948,6 +932,22 @@ vectors-zones: ## Rebuild the zone transition vectors (needs zdump)
 
 vectors-calendar: ## Rebuild the Gregorian calendar vectors (needs python3)
 	python3 tools/oracle/ordinal.py --out tests/data/vectors/calendar
+
+#
+# The Julian and hybrid vectors, which come from a different oracle than the
+# Gregorian ones above: `convertdate` implements Reingold and Dershowitz's
+# algorithms directly. design.md section 12 says regeneration is `make
+# vectors`, and these two files were committed without a target that could
+# rebuild them.
+#
+vectors-calendars: ## Rebuild the Julian and hybrid vectors (needs convertdate)
+	@if ! python3 -c 'import convertdate' 2>/dev/null; then \
+		printf "\033[0;31mvectors-calendars: convertdate is not installed.\033[0m\n" >&2; \
+		printf "It implements Reingold and Dershowitz's algorithms and is the\n" >&2; \
+		printf "oracle for the calendars beyond Gregorian: pip install convertdate\n" >&2; \
+		exit 1; \
+	fi
+	python3 tools/oracle/calendars.py --out tests/data/vectors/calendar
 
 vectors-jsonschema: ## Rebuild the JSON Schema format vectors (needs the fetched suite)
 	@if [ ! -d "$(JSON_SCHEMA_SUITE)" ]; then \
