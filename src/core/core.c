@@ -89,6 +89,8 @@ static const char * const DIAG_STRINGS[GCHRON_DIAG_COUNT] = {
       "a critical annotation this library does not understand",
   [GCHRON_DIAG_OFFSET_ZONE_CONFLICT] =
       "the offset and the zone annotation disagree",
+  [GCHRON_DIAG_ZONE_NOT_FOUND] =
+      "the database has no zone with that name",
   [GCHRON_DIAG_YAML_DATE_WIDTH] =
       "a YAML timestamp with no time needs a two-digit month and day",
   [GCHRON_DIAG_YAML_LOWERCASE_Z] =

@@ -73,6 +73,7 @@ typedef struct GCHRON_TimeParts {
   uint8_t digits;      /**< Fractional digits the text carried, capped at 255. */
   int32_t offset_sec;  /**< Seconds ahead of UTC. */
   bool offset_unknown; /**< The offset was written `-00:00`. */
+  bool offset_is_z;    /**< The offset was written `Z`, not `+00:00`. */
   bool has_offset;     /**< An offset was present at all. */
 } GCHRON_TimeParts;
 

@@ -266,7 +266,7 @@ GCHRON_API bool gchron_zoned_identical(const GCHRON_ZonedDateTime * a,
  * what carries the name, and this is the only text format in the library that
  * can round-trip a GCHRON_ZonedDateTime without losing it.
  *
- * Three things the RFC asks of a reader, and this does:
+ * Four things the RFC asks of a reader, and this does:
  *
  * - **A `!` on an annotation makes it critical.** A critical annotation the
  *   implementation does not understand is GCHRON_ERR_UNSUPPORTED, which is
@@ -276,6 +276,13 @@ GCHRON_API bool gchron_zoned_identical(const GCHRON_ZonedDateTime * a,
  *   GCHRON_ParseOptions::zone_conflict, whose zero value refuses. Whichever
  *   way it is resolved, GCHRON_ParseInfo::offset_disagreed_with_zone records
  *   that the text contradicted itself.
+ * - **A `Z` cannot disagree with anything.** Section 3.4 is explicit, and
+ *   gives the pair as its two figures: `2022-07-08T00:14:07+00:00[Europe/
+ *   London]` is inconsistent, because London was on `+01:00` that July,
+ *   while `2022-07-08T00:14:07Z[Europe/London]` is not - a `Z` asserts "no
+ *   particular local time nor local offset". It names the instant; the
+ *   annotation says where to read it. GCHRON_ParseInfo::offset_is_z is which
+ *   spelling the text used.
  * - **The annotation may be an offset rather than a name** (`[-05:00]`), and
  *   then the zone is a fixed-offset zone.
  *

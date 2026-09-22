@@ -206,7 +206,7 @@ gives no way to work out. The annotation carries the name, and this is the
 only text format in the library that round-trips a `GCHRON_ZonedDateTime`
 whole.
 
-### The three things the RFC asks of a reader
+### The four things the RFC asks of a reader
 
 - **A `!` makes an annotation critical.** The writer is saying that ignoring
   it would change what the timestamp means, so a reader that does not
@@ -219,11 +219,36 @@ whole.
   the civil reading through the zone. Either way,
   `GCHRON_ParseInfo::offset_disagreed_with_zone` records that the text
   contradicted itself.
+- **A `Z` cannot disagree with anything.** Section 3.4 is the whole of this
+  rule and it gives two figures for one instant:
+
+      2022-07-08T00:14:07+00:00[Europe/London]   inconsistent
+      2022-07-08T00:14:07Z[Europe/London]        not inconsistent
+
+  London was on `+01:00` that July, so the first contradicts itself. The
+  second does not, "because they do not assert any particular local time nor
+  local offset" - a `Z` names the instant and leaves the local reading to the
+  annotation. `GCHRON_ParseInfo::offset_is_z` is which spelling the text
+  used. `-00:00` is **not** exempt: RFC 3339 §4.3 makes it *offset unknown*,
+  but it is still a written offset of zero, and both oracles below refuse it
+  against a zone that was not on zero.
+
+  This library refused all four of those figures until 2026-09-21, which the
+  differential found. The shape it was rejecting is an ordinary one: a row
+  stored as UTC beside the zone it should be displayed in.
 - **The annotation may be an offset rather than a name** - `[-05:00]`, `[Z]` -
   and then the zone is a fixed-offset one.
 
 `[u-ca=...]` is copied into `GCHRON_ParseInfo::calendar`; acting on it is
 phase 2's, and carrying it rather than dropping it is phase 1's.
+
+A zone annotation is matched **exactly**. §3.1: "Keys are lowercase only.
+Values are case-sensitive unless otherwise specified", and the name is a
+value, so `[europe/paris]` is a zone the database does not have and says so
+with `GCHRON_DIAG_ZONE_NOT_FOUND`. Temporal matches identifiers
+case-insensitively, which is a rule Temporal adds on top of the RFC rather
+than one the RFC gives; `whenever` refuses the lower-case spelling as this
+library does.
 
 ### What the writer does with a zone that has no name
 

@@ -319,6 +319,19 @@ typedef struct GCHRON_ParseInfo {
   /** The offset was written `-00:00`: RFC 3339 section 4.3's *unknown*. */
   bool offset_unknown;
 
+  /**
+   * The offset was written `Z` rather than `+00:00`.
+   *
+   * The two are the same offset and a different statement. RFC 9557 section
+   * 3.4: a `Z` "does not assert any particular local time nor local offset",
+   * so `2022-07-08T00:14:07Z[Europe/London]` is **not** inconsistent even
+   * though London was on `+01:00` that day, while the same timestamp written
+   * `+00:00[Europe/London]` is - and the RFC gives exactly that pair as its
+   * two figures. This field is how a reader of that grammar tells them
+   * apart, and why this library does not refuse the first one.
+   */
+  bool offset_is_z;
+
   /** An RFC 9557 `[Zone]` annotation was present. */
   bool had_zone_annotation;
 

@@ -155,6 +155,7 @@ typedef enum {
   GCHRON_DIAG_ANNOTATION_REPEATED,     ///< A second `[Zone]` annotation.
   GCHRON_DIAG_ANNOTATION_CRITICAL,     ///< A `!` annotation not understood.
   GCHRON_DIAG_OFFSET_ZONE_CONFLICT,    ///< The offset and the zone disagree.
+  GCHRON_DIAG_ZONE_NOT_FOUND,          ///< The database has no such zone.
 
   /* YAML 1.1 timestamps. */
   GCHRON_DIAG_YAML_DATE_WIDTH,         ///< A date with no time needs `YYYY-MM-DD`.

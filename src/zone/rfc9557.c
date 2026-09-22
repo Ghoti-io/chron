@@ -319,8 +319,14 @@ GCHRON_Result gchron_parse_rfc9557(const char * text, size_t len,
         zone_name[annotation.value_length] = '\0';
         result = gchron_zonedb_zone(db, zone_name, &zone);
         if (result != GCHRON_OK) {
-          return gchron_fail(err, result, GCHRON_DIAG_NONE, annotation.at,
-              annotation.value_length);
+          /*
+           * Named, because "no further detail" cannot be acted on: a caller
+           * has no way to tell a zone this database does not carry - a
+           * spelling, a zone retired from the tzdb, a name in a case the
+           * database does not use - from a timestamp that is malformed.
+           */
+          return gchron_fail(err, result, GCHRON_DIAG_ZONE_NOT_FOUND,
+              annotation.at, annotation.value_length);
         }
       }
       continue;
@@ -386,11 +392,22 @@ GCHRON_Result gchron_parse_rfc9557(const char * text, size_t len,
     if (result != GCHRON_OK) {
       return gchron_fail(err, result, GCHRON_DIAG_NONE, 0, len);
     }
-    if (at_instant.offset_sec != base.offset_sec) {
+    if (at_instant.offset_sec != base.offset_sec && !base_info.offset_is_z) {
       /*
        * The two halves contradict each other. Something upstream is wrong -
        * a stale zone table, or a clock - and which half to believe is the
        * application's decision, not this parser's (RFC 9557 section 4.1).
+       *
+       * `Z` is exempt, and the exemption is the RFC's, not a convenience.
+       * Section 3.4 gives two figures for the same instant: with `+00:00`
+       * the timestamps "are inconsistent" because London was on `+01:00`
+       * that July, and with `Z` they "are not inconsistent because they do
+       * not assert any particular local time nor local offset". A `Z` says
+       * only which instant this is; the annotation says where to read it.
+       * Refusing that pair - which this library did until a differential
+       * against two independent implementations was written, and both read
+       * it - rejects the ordinary shape of a row stored as UTC beside the
+       * zone it should be displayed in.
        */
       if (info != NULL) {
         info->offset_disagreed_with_zone = true;
@@ -428,6 +445,7 @@ GCHRON_Result gchron_parse_rfc9557(const char * text, size_t len,
     info->fraction_truncated = base_info.fraction_truncated;
     info->fraction_digits = base_info.fraction_digits;
     info->offset_unknown = base_info.offset_unknown;
+    info->offset_is_z = base_info.offset_is_z;
     info->had_zone_annotation = seen_zone;
     if (have_calendar) {
       memcpy(info->calendar, calendar, strlen(calendar) + 1);

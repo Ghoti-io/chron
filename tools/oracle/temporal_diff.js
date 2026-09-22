@@ -73,29 +73,17 @@ const ORACLE_GAPS = [
 ];
 
 /*
- * Differences nobody has ruled on yet. They are counted and printed under
- * their own heading rather than failing the run, because a gate that is
- * expected to be red teaches people to ignore it - but they are not filtered
- * out either, because the count is the thing that should prompt a decision.
+ * Where Temporal is looser than the RFC it profiles. Not a V8 defect and not
+ * this library's decision either - a rule Temporal adds on top.
  */
-const UNDECIDED = [
+const TEMPORAL_EXTRA = [
   {
-    name: "Z with a named zone",
-    rule: "`2026-09-20T15:30:45Z[Europe/Paris]`. Temporal treats `Z` as " +
-          "\"the exact time is known\" and does not apply the offset option " +
-          "to it, so the zone is only how to display the instant. This " +
-          "library reads `Z` as the offset +00:00, finds it contradicts " +
-          "Paris in September, and refuses under the zero value of " +
-          "GCHRON_ZONECONFLICT (RFC 9557 §4.1 leaves the choice to the " +
-          "application). GCHRON_ZONECONFLICT_PREFER_OFFSET already gives " +
-          "Temporal's answer",
-    matches: (s) => /Z\[[A-Za-z]+\//.test(s),
-  },
-  {
-    name: "zone name case",
-    rule: "Temporal folds ASCII case in a zone identifier; this library " +
-          "resolves it as an IANA identifier exactly, so `[europe/paris]` " +
-          "is a zone the database does not have",
+    name: "zone identifier case",
+    rule: "Temporal matches IANA identifiers case-insensitively, so it " +
+          "reads `[europe/paris]`. RFC 9557 §3.1: \"Keys are lowercase " +
+          "only. Values are case-sensitive unless otherwise specified\" - " +
+          "and the name is a value, so this library resolves it exactly. " +
+          "`whenever` refuses it too",
     matches: (s) => {
       const m = s.match(/\[([A-Za-z_]+\/[A-Za-z_]+)\]/);
       return m !== null && m[1] !== canonical(m[1]);
@@ -206,7 +194,7 @@ for (let i = 0; i < strings.length; ++i) {
 
   const gap = ORACLE_GAPS.find((g) => g.matches(text))
       ?? DESIGNED.find((d) => d.matches(text))
-      ?? UNDECIDED.find((u) => u.matches(text));
+      ?? TEMPORAL_EXTRA.find((t) => t.matches(text));
   if (gap !== undefined) {
     skipped.set(gap.name, (skipped.get(gap.name) ?? 0) + 1);
     continue;
@@ -246,8 +234,7 @@ function report(heading, entries) {
 report("The oracle is wrong here, and a newer V8 should drop these to zero:",
     ORACLE_GAPS);
 report("This library's own decision:", DESIGNED);
-report("NOT YET DECIDED - these are not compared and not counted as " +
-    "failures:", UNDECIDED);
+report("Temporal is looser than RFC 9557 here:", TEMPORAL_EXTRA);
 console.log(`temporal: ${compared} strings compared, ${agreed} agreed, ` +
     `${disagreements.length} differed`);
 for (const line of disagreements.slice(0, 40)) {

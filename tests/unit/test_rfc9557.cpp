@@ -195,7 +195,7 @@ TEST_F(Ixdtf, TheGrammarsEdgesAreRefusedDeliberately) {
     { "2026-09-20T15:30:00Z[u-ca=]", "a value that is empty" },
     { "2026-09-20T17:30:00+02:00[Europe/Paris]tail", "trailing text" },
     { "2026-09-20T17:30:00+02:00[Europe/Paris]\n", "a trailing newline" },
-    { "2026-09-20T15:30:00Z[Europe/Paris]",
+    { "2026-09-20T15:30:00+00:00[Europe/Paris]",
       "Paris is +02:00 in September, so the two halves contradict" },
   };
   for (const Case & c : bad) {
@@ -283,4 +283,97 @@ TEST_F(Ixdtf, ParseOfWriteIsTheIdentityForEveryNamedZone) {
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+/*
+ * RFC 9557 section 3.4 gives two figures for the same instant, and the whole
+ * rule is the difference between them:
+ *
+ *     2022-07-08T00:14:07+00:00[!Europe/London]   inconsistent
+ *     2022-07-08T00:14:07+00:00[Europe/London]    inconsistent
+ *     2022-07-08T00:14:07Z[!Europe/London]        not inconsistent
+ *     2022-07-08T00:14:07Z[Europe/London]         not inconsistent
+ *
+ * "because `Europe/London` used offset `+01:00` in July 2022, the timestamps
+ * are inconsistent" - and the `Z` pair "are not inconsistent because they do
+ * not assert any particular local time nor local offset".
+ *
+ * This library refused all four until 2026-09-21. The differential against
+ * V8's Temporal and against `whenever` reads the `Z` pair, both of them, and
+ * the RFC says why. A row stored as UTC beside the zone it should be
+ * displayed in is exactly this shape.
+ */
+TEST_F(Ixdtf, AZOffsetCannotContradictTheZoneAnnotation) {
+  // The RFC's own figures, both halves.
+  for (const char * text : { "2022-07-08T00:14:07Z[Europe/London]",
+           "2022-07-08T00:14:07Z[!Europe/London]" }) {
+    GCHRON_ZonedDateTime zoned{};
+    GCHRON_ParseInfo info{};
+    ASSERT_EQ(GCHRON_OK, parse(text, &zoned, nullptr, &info)) << text;
+    EXPECT_EQ(1657239247, zoned.instant.sec) << text;
+    // The instant came from the `Z`; the offset is whatever London was on.
+    EXPECT_EQ(3600, zoned.offset_sec) << text;
+    EXPECT_STREQ("Europe/London", gchron_zone_id(zoned.zone)) << text;
+    EXPECT_TRUE(info.offset_is_z) << text;
+    EXPECT_FALSE(info.offset_disagreed_with_zone) << text;
+  }
+
+  // The same instant with the offset spelled out is the other figure, and is
+  // still refused: `+00:00` does assert a local offset, and London's was not.
+  for (const char * text : { "2022-07-08T00:14:07+00:00[Europe/London]",
+           "2022-07-08T00:14:07+00:00[!Europe/London]" }) {
+    GCHRON_ZonedDateTime zoned{};
+    GCHRON_Error err{};
+    EXPECT_EQ(GCHRON_ERR_FORMAT, parse(text, &zoned, nullptr, nullptr, &err))
+        << text;
+    EXPECT_EQ(GCHRON_DIAG_OFFSET_ZONE_CONFLICT, err.diag) << text;
+  }
+
+  // `-00:00` is not `Z`. RFC 3339 section 4.3 makes it "offset unknown", but
+  // it is still a written offset of zero, and both oracles refuse it against
+  // a zone that was not on zero.
+  {
+    GCHRON_ZonedDateTime zoned{};
+    GCHRON_Error err{};
+    EXPECT_EQ(GCHRON_ERR_FORMAT,
+        parse("2022-07-08T00:14:07-00:00[Europe/London]", &zoned, nullptr,
+            nullptr, &err));
+    EXPECT_EQ(GCHRON_DIAG_OFFSET_ZONE_CONFLICT, err.diag);
+  }
+
+  // And a `Z` with a zone that *is* on UTC is unremarkable either way.
+  {
+    GCHRON_ZonedDateTime zoned{};
+    GCHRON_ParseInfo info{};
+    ASSERT_EQ(GCHRON_OK,
+        parse("2022-01-08T00:14:07Z[Europe/London]", &zoned, nullptr, &info));
+    EXPECT_EQ(0, zoned.offset_sec);
+    EXPECT_TRUE(info.offset_is_z);
+  }
+}
+
+/*
+ * A zone the database does not carry used to refuse with GCHRON_DIAG_NONE -
+ * "no further detail" - which a caller cannot act on: a retired identifier, a
+ * misspelling, and a name in a case the database does not use all arrived as
+ * the same silence, and none of them could be told from a malformed
+ * timestamp.
+ */
+TEST_F(Ixdtf, AZoneTheDatabaseDoesNotHaveSaysSo) {
+  struct Case { const char * text; const char * why; };
+  const Case cases[] = {
+    { "2026-09-20T15:30:00Z[Europe/Atlantis]", "no such zone" },
+    { "2026-09-20T15:30:00Z[europe/paris]",
+      "RFC 9557 section 3.1: an annotation value is case-sensitive, and the "
+      "database has no lower-case spelling" },
+  };
+  for (const Case & c : cases) {
+    GCHRON_ZonedDateTime zoned{};
+    GCHRON_Error err{};
+    EXPECT_NE(GCHRON_OK, parse(c.text, &zoned, nullptr, nullptr, &err))
+        << c.why;
+    EXPECT_EQ(GCHRON_DIAG_ZONE_NOT_FOUND, err.diag) << c.why;
+    // The position names the annotation, not the whole string.
+    EXPECT_GT(err.offset, 0u) << c.why;
+  }
 }

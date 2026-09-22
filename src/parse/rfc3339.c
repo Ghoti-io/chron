@@ -103,10 +103,11 @@ GCHRON_Result gchron_scan_full_date(GCHRON_Scanner * sc, GCHRON_Date * out) {
  * @param sc The scanner.
  * @param out_sec Receives the offset in seconds.
  * @param out_unknown Receives whether it was written `-00:00`.
+ * @param out_is_z Receives whether it was written `Z` rather than `+00:00`.
  * @return GCHRON_OK or GCHRON_ERR_FORMAT.
  */
 static GCHRON_Result scan_offset(GCHRON_Scanner * sc, int32_t * out_sec,
-    bool * out_unknown) {
+    bool * out_unknown, bool * out_is_z) {
   char c;
   int negative;
   int hour;
@@ -119,10 +120,18 @@ static GCHRON_Result scan_offset(GCHRON_Scanner * sc, int32_t * out_sec,
         sc->pos, 0);
   }
   c = sc->text[sc->pos];
+  *out_is_z = false;
   if (c == 'Z' || c == 'z') {
     sc->pos += 1;
     *out_sec = 0;
     *out_unknown = false;
+    /*
+     * Which spelling was used is not a curiosity: RFC 9557 section 3.4 says
+     * a `Z` "does not assert any particular local time nor local offset", so
+     * it cannot contradict a `[Zone]` annotation the way `+00:00` can. The
+     * reader of that grammar needs to know which one it saw.
+     */
+    *out_is_z = true;
     return GCHRON_OK;
   }
   if (c != '+' && c != '-') {
@@ -286,7 +295,8 @@ GCHRON_Result gchron_scan_full_time(GCHRON_Scanner * sc,
       || (mode == GCHRON_OFFSET_OPTIONAL && sc->pos < sc->len
           && (sc->text[sc->pos] == 'Z' || sc->text[sc->pos] == 'z'
               || sc->text[sc->pos] == '+' || sc->text[sc->pos] == '-'))) {
-    result = scan_offset(sc, &out->offset_sec, &out->offset_unknown);
+    result = scan_offset(sc, &out->offset_sec, &out->offset_unknown,
+        &out->offset_is_z);
     if (result != GCHRON_OK) {
       return result;
     }
@@ -372,6 +382,7 @@ static void fill_info(GCHRON_ParseInfo * info, const GCHRON_TimeParts * parts) {
   info->fraction_truncated = parts->truncated;
   info->fraction_digits = parts->digits;
   info->offset_unknown = parts->offset_unknown;
+  info->offset_is_z = parts->offset_is_z;
 }
 
 GCHRON_Result gchron_scan_check_leap_table(const GCHRON_ParseOptions * opts,
