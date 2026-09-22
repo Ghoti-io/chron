@@ -605,3 +605,109 @@ TEST(Format, ARefusalPartWayThroughAGrowingCompileLeavesNothingBehind) {
 
   EXPECT_EQ(expected, with_long_pattern(pattern.c_str(), odt));
 }
+
+/*
+ * The `strftime` syntax. What each accepted specifier *means* is settled by
+ * the differential in `tools/oracle/strftime_probe.c`, which compares nearly
+ * twenty million formattings against the C library's own `strftime` in the C
+ * locale - the authority on its own definition of `%c`, `%x`, `%X` and `%r`
+ * (design.md section 8.5).
+ *
+ * What is here is what that differential cannot ask. The C library has no
+ * refusals to compare against: it copies `%Q`, a trailing `%` and a bare
+ * `%E` through as text, so there is nothing on the other side to diff
+ * against a refusal. And `make test` does not run the oracle, so the two
+ * specifiers no other test compiles - `%c` and `%s` - are pinned here.
+ */
+TEST(Format, TheCompoundStrftimeSpecifiersExpandAsTheCLocaleDefinesThem) {
+  GCHRON_OffsetDateTime odt = sample();
+
+  // `%a %b %e %H:%M:%S %Y`, with %e space-padding a single-digit day.
+  EXPECT_EQ("Sun Sep 20 15:30:45 2026",
+      with_pattern("%c", odt, GCHRON_FORMAT_STRFTIME));
+  // Seconds since the epoch, from an offset date-time: 15:30:45+02:00.
+  EXPECT_EQ("1789911045", with_pattern("%s", odt, GCHRON_FORMAT_STRFTIME));
+
+  // `%E` and `%O` are the C locale's alternative-representation modifiers,
+  // which in that locale mean the unmodified specifier.
+  EXPECT_EQ(with_pattern("%d", odt, GCHRON_FORMAT_STRFTIME),
+      with_pattern("%Od", odt, GCHRON_FORMAT_STRFTIME));
+  EXPECT_EQ(with_pattern("%Y", odt, GCHRON_FORMAT_STRFTIME),
+      with_pattern("%EY", odt, GCHRON_FORMAT_STRFTIME));
+}
+
+TEST(Format, AnUnknownStrftimeSpecifierIsRefusedWithAPosition) {
+  GCHRON_Format * format = nullptr;
+  GCHRON_Error err{};
+
+  // glibc writes `%Q` through as the two characters `%Q`. Copying an
+  // unrecognised specifier into the output is how a typo ends up inside a
+  // timestamp and stays there; this refuses, as it does for an unknown LDML
+  // letter above.
+  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
+      gchron_format_compile("%Q", 2, GCHRON_FORMAT_STRFTIME, nullptr,
+          nullptr, &format, &err));
+  EXPECT_EQ(GCHRON_DIAG_PATTERN_LETTER_UNKNOWN, err.diag);
+  EXPECT_EQ(0u, err.offset);
+  EXPECT_EQ(nullptr, format);
+
+  // A bare `%E` at the end of the pattern is the modifier with nothing to
+  // modify, which is the same refusal rather than a silently dropped byte.
+  err = GCHRON_Error{};
+  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
+      gchron_format_compile("%E", 2, GCHRON_FORMAT_STRFTIME, nullptr,
+          nullptr, &format, &err));
+  EXPECT_EQ(GCHRON_DIAG_PATTERN_LETTER_UNKNOWN, err.diag);
+
+  // `%U` and `%W` count weeks from the first Sunday or Monday of the year
+  // and put the days before it in "week 0". glibc answers both; neither is
+  // the ISO week, and a caller who wants a week number wants `%V`. Refused
+  // rather than approximated, which is the whole table in design.md
+  // section 2: a policy enum's zero refuses rather than guesses.
+  for (const char * spec : {"%U", "%W"}) {
+    err = GCHRON_Error{};
+    EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
+        gchron_format_compile(spec, 2, GCHRON_FORMAT_STRFTIME, nullptr,
+            nullptr, &format, &err))
+        << spec;
+    EXPECT_EQ(GCHRON_DIAG_PATTERN_LETTER_UNKNOWN, err.diag) << spec;
+  }
+}
+
+TEST(Format, AStrftimePatternEndingInAPercentIsRefused) {
+  GCHRON_Format * format = nullptr;
+  GCHRON_Error err{};
+
+  // glibc writes the trailing `%` through as itself.
+  EXPECT_EQ(GCHRON_ERR_FORMAT,
+      gchron_format_compile("abc%", 4, GCHRON_FORMAT_STRFTIME, nullptr,
+          nullptr, &format, &err));
+  EXPECT_EQ(GCHRON_DIAG_UNEXPECTED_END, err.diag);
+  EXPECT_EQ(3u, err.offset);
+  EXPECT_EQ(nullptr, format);
+}
+
+/*
+ * The one place this library and the C library disagree, and it is on
+ * purpose. Below year 1000 glibc writes `%Y` as a plain decimal and lets
+ * `%F` inherit it, so `%F` on year 1 is `1-06-15`; this library writes the
+ * year to its nominal width, so `%F` is ISO 8601's `0001-06-15`. design.md
+ * section 8.8 argues it. The oracle checks the same thing from the other
+ * side, so that a C library which starts padding is noticed.
+ */
+TEST(Format, TheYearIsWrittenToItsWidthBelowYearOneThousand) {
+  GCHRON_DateTime civil = gchrontest::datetime(1, 6, 15, 6, 5, 4);
+  GCHRON_OffsetDateTime odt{};
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, false, &odt));
+
+  EXPECT_EQ("0001", with_pattern("%Y", odt, GCHRON_FORMAT_STRFTIME));
+  EXPECT_EQ("0001-06-15", with_pattern("%F", odt, GCHRON_FORMAT_STRFTIME));
+  EXPECT_EQ("00", with_pattern("%C", odt, GCHRON_FORMAT_STRFTIME));
+  EXPECT_EQ("01", with_pattern("%y", odt, GCHRON_FORMAT_STRFTIME));
+
+  GCHRON_DateTime late = gchrontest::datetime(999, 6, 15, 6, 5, 4);
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&late, 0, false, &odt));
+  EXPECT_EQ("0999", with_pattern("%Y", odt, GCHRON_FORMAT_STRFTIME));
+  EXPECT_EQ("0999", with_pattern("%G", odt, GCHRON_FORMAT_STRFTIME));
+  EXPECT_EQ("09", with_pattern("%C", odt, GCHRON_FORMAT_STRFTIME));
+}

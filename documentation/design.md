@@ -956,6 +956,43 @@ produces is internally consistent and in range - and
 `tests/unit/test_format_parse.cpp` asserts the identity over patterns chosen
 to be unambiguous.
 
+### 8.8 `strftime` below year 1000, where the C library is not followed
+
+The `strftime` syntax is checked against the C library itself - nearly twenty
+million formattings, every accepted specifier over every day from 1000 to
+2200 and every hour of the days where the ISO week year, a leap day or the
+12-hour cycle make it interesting (§12). They agree on all of it except one
+class, and that class is a decision rather than a defect.
+
+Below year 1000 glibc writes `%Y` as a plain decimal and lets `%F` and `%G`
+inherit it, so on year 1 it produces `1`, `1-06-15` and `1`. This library
+writes `0001`, `0001-06-15` and `0001`, and `%C` as `00` where glibc writes
+`0`.
+
+The C standard says `%Y` is "the year as a decimal number", which is what
+glibc does and is a fair reading. It also says `%F` is *equivalent to*
+`%Y-%m-%d` and calls that the ISO 8601 date format - and ISO 8601 has no
+variable-width year. glibc is internally consistent and produces a `%F` that
+ISO 8601 does not admit; the choice here is the other one, because `%F` and
+`%G` exist to produce ISO 8601 and a four-digit year is what ISO 8601 is.
+`%C` follows POSIX's own `[00,99]`.
+
+The practical case is a year like 999 in a historical dataset, where the
+difference is a field that changes width and a column that stops lining up.
+The cost is that a format string moved here from C produces a different
+string for those years, which is why it is written down rather than left to
+be discovered.
+
+`%U` and `%W` are refused outright for a related reason: glibc answers both,
+but they count weeks from the first Sunday or Monday and put the days before
+it in "week 0", which is not the ISO week, has no LDML letter, and is almost
+never what a caller who asked for a week number wanted. `%V` is.
+
+The deviation is asserted from both sides - `tools/oracle/strftime_probe.c`
+checks that the C library still disagrees in exactly these cases, so a libc
+that starts padding is noticed rather than absorbed, and
+`tests/unit/test_format.cpp` pins what this library writes.
+
 ---
 
 ## 9. Clocks
@@ -1116,7 +1153,7 @@ below is produced by software this library did not write.
 | RFC 3339, `date`, `time`, `duration` text | JSON-Schema-Test-Suite `tests/draft2020-12/optional/format/{date-time,date,time,duration}.json` | `tools/oracle/jsonschema_format.py` | fetched by `tools/corpus/fetch.sh` |
 | ISO 8601 and RFC 9557 strings | test262's Temporal string-parsing tests, through Node (present for `text`'s js-yaml oracle); Python `datetime.fromisoformat` | `tools/oracle/test262.js`, `tools/oracle/fromiso.py` | node yes |
 | LDML pattern semantics | **ICU** `icu::SimpleDateFormat` in the root locale, through a small C++ driver built only when `pkg-config icu-i18n` succeeds. ICU is the definition of what a pattern means and is never linked by the library | `tools/oracle/icu_format.cpp` | `libicu-dev` is installed for `ctang` |
-| `strftime` | glibc `strftime` in the C locale | `tools/oracle/strftime_probe.c` | yes |
+| `strftime` | the C library's own `strftime` in the C locale, every accepted specifier over every day from 1000 to 2200 and every hour of the interesting days - nearly twenty million comparisons, `make check-oracle-strftime`. The one class they disagree on is checked as a deviation rather than skipped (§8.8) | `tools/oracle/strftime_probe.c` | yes |
 | HTTP-date, RFC 5322 | the RFCs' own examples, plus `curl`'s `parsedate` behaviour where it is on the machine | vectors committed | |
 | leap seconds | `/usr/share/zoneinfo/leap-seconds.list` and its expiry; the JSON Schema leap vectors above | | yes; no `right/` zoneinfo on Debian |
 

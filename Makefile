@@ -636,6 +636,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar
 .PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license
+.PHONY: check-oracle-strftime
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -844,7 +845,11 @@ check-layering: ## Fail if a lower tier includes a higher tier's header
 # it the same questions it asks itself. Built on demand, installed by nothing,
 # and not part of the library.
 
-ORACLE_SOURCES := $(wildcard tools/oracle/gchron_*.c)
+# Two shapes of driver. A gchron_*.c puts the library behind a line protocol
+# so that an oracle written in another language can drive it; a *_probe.c has
+# the oracle already linked - glibc - and does the comparison itself.
+ORACLE_SOURCES := $(wildcard tools/oracle/gchron_*.c) \
+	$(wildcard tools/oracle/*_probe.c)
 ORACLE_TOOLS := $(patsubst tools/oracle/%.c,$(APP_DIR)/tools/%$(EXE_EXTENSION),$(ORACLE_SOURCES))
 
 $(APP_DIR)/tools/%$(EXE_EXTENSION): tools/oracle/%.c $(APP_DIR)/$(STATIC_TARGET) \
@@ -887,6 +892,17 @@ check-oracle-ldml-parse: $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
 	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/oracle/ldml_parse_diff.py \
 		--chron $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
 		--icu $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
+
+#
+# The C library is the oracle for its own definition of `%c`, `%x`, `%X` and
+# `%r` (design.md section 8.5), and it is already linked, so this one needs
+# nothing installed. A machine without the C locale has no oracle and says so
+# rather than passing.
+#
+check-oracle-strftime: ## Check the strftime formatter against the C library
+check-oracle-strftime: $(APP_DIR)/tools/strftime_probe$(EXE_EXTENSION)
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" \
+		$(APP_DIR)/tools/strftime_probe$(EXE_EXTENSION)
 
 check-oracle-zoneinfo: ## Check every zone against Python's zoneinfo (needs python3)
 check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
