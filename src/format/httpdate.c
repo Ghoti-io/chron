@@ -593,6 +593,20 @@ GCHRON_Result gchron_write_rfc5322(const GCHRON_OffsetDateTime * odt,
     return result;
   }
 
+  /*
+   * RFC 5322's `zone` is `(("+" / "-") 4DIGIT)` - four digits, hours and
+   * minutes, with nowhere to put seconds. GCHRON_OffsetDateTime holds
+   * seconds on purpose (offset.h), so it can hold offsets this grammar
+   * cannot write, and writing `(magnitude / 60) % 60` and dropping the rest
+   * moves the instant the text denotes by up to 59 seconds while returning
+   * GCHRON_OK. Every named zone has a local-mean-time era, so any historical
+   * date reaches this. Refused rather than truncated, by the same rule
+   * design.md section 10 gives for a narrower encoding.
+   */
+  if (!odt->offset_unknown && (odt->offset_sec % 60) != 0) {
+    return GCHRON_ERR_RANGE;
+  }
+
   magnitude = odt->offset_sec < 0 ? -odt->offset_sec : odt->offset_sec;
   length = (size_t)snprintf(scratch, sizeof(scratch),
       "%s, %02u %s %04d %02u:%02u:%02u %c%02d%02d", DAYS[weekday],

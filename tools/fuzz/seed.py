@@ -329,6 +329,15 @@ def seed_textfmt():
         b"2026-01-01T00:00:00Z[UTC][u-ca=iso8601]",
         b"2026-03-08T02:30:00-05:00[America/New_York]",
         b"1970-01-01T00:00:00Z[Etc/GMT+12]",
+        # Historical dates, where every named zone is on local mean time and
+        # the offset is not a whole number of minutes. This shape is what
+        # found the writer truncating a sub-minute offset and moving the
+        # instant by fifteen seconds; London was -00:01:15 before 1847 and
+        # Amsterdam +00:19:32 until 1937.
+        b"0222-07-08T00:14:07Z[Europe/London]",
+        b"1222-07-08T00:14:07Z[Europe/London]",
+        b"1900-01-01T00:00:00Z[Europe/Amsterdam]",
+        b"1800-06-15T12:00:00Z[Europe/Paris]",
     ]
     http = [
         b"Sun, 06 Nov 1994 08:49:37 GMT",       # IMF-fixdate

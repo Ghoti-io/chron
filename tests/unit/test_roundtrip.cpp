@@ -198,13 +198,20 @@ TEST(Write, TheDeclaredMaximaHoldForTheLongestOutputOfEachGrammar) {
   size_t len = 0;
   char buf[GCHRON_RFC3339_DATE_TIME_MAX];
 
-  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, -86399, false, &odt));
+  /*
+   * -86340 is -23:59:00, the largest offset RFC 3339 can *write*. It used to
+   * be -86399, which is -23:59:59 - a value the type holds and the grammar
+   * has no seconds field for, and which the writer used to truncate to
+   * `-23:59` while reporting success. It is refused now, so the longest
+   * writable output is this one.
+   */
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, -86340, false, &odt));
   ASSERT_EQ(GCHRON_OK,
       gchron_write_rfc3339_date_time(&odt, nullptr, buf, sizeof(buf), &len));
   EXPECT_LT(len, GCHRON_RFC3339_DATE_TIME_MAX);
 
   ot.time = civil.time;
-  ot.offset_sec = -86399;
+  ot.offset_sec = -86340;
   ASSERT_EQ(GCHRON_OK,
       gchron_write_rfc3339_full_time(&ot, nullptr, buf,
           GCHRON_RFC3339_TIME_MAX, &len));
@@ -214,6 +221,62 @@ TEST(Write, TheDeclaredMaximaHoldForTheLongestOutputOfEachGrammar) {
       gchron_write_rfc3339_full_date(&civil.date, buf,
           GCHRON_RFC3339_DATE_MAX, &len));
   EXPECT_LT(len, GCHRON_RFC3339_DATE_MAX);
+}
+
+/*
+ * An offset the type can hold and the grammar cannot spell.
+ *
+ * GCHRON_OffsetDateTime keeps the offset in seconds on purpose: design.md
+ * section 3.1 and offset.h give the same reason in the same words, that
+ * Europe/Amsterdam kept local mean time at +00:19:32 until 1937 and an offset
+ * type that cannot hold that cannot round-trip the zone's own history. RFC
+ * 3339's `time-numoffset` is hours and minutes with no seconds field, so
+ * there are values the type holds that this grammar cannot write.
+ *
+ * What the writer used to do was write the hours and minutes and drop the
+ * seconds, and return GCHRON_OK. That is not a rounding of the text: it moves
+ * the instant the text denotes, by up to 59 seconds, silently.
+ * `1222-07-08T00:14:07Z[Europe/London]` written back out became
+ * `1222-07-08T00:12:52-00:01`, fifteen seconds earlier, because London's LMT
+ * was -00:01:15. Found by tests/fuzz/fuzz_textfmt.cpp.
+ *
+ * Note which of these is the loud one. RFC 9557 refuses to re-read its own
+ * writer's output, because section 3.4 calls an offset disagreeing with its
+ * zone inconsistent - so the round trip fails and something notices. Plain
+ * RFC 3339 has no zone to disagree with, so it hands back a timestamp that is
+ * simply fifteen seconds wrong, and nothing notices at all.
+ */
+TEST(Write, AnOffsetWithSecondsIsRefusedRatherThanTruncated) {
+  GCHRON_DateTime civil = gchrontest::datetime(1222, 7, 8, 0, 12, 52, 0);
+  GCHRON_OffsetDateTime odt;
+  char buf[GCHRON_RFC3339_DATE_TIME_MAX];
+  size_t len = 0;
+
+  // London's local mean time, which is what sent this test looking.
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, -75, false, &odt));
+  EXPECT_EQ(GCHRON_ERR_RANGE,
+      gchron_write_rfc3339_date_time(&odt, nullptr, buf, sizeof(buf), &len));
+  EXPECT_EQ(GCHRON_ERR_RANGE,
+      gchron_write_rfc5322(&odt, buf, sizeof(buf), &len));
+
+  // Amsterdam's, the one the design document names.
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 1172, false, &odt));
+  EXPECT_EQ(GCHRON_ERR_RANGE,
+      gchron_write_rfc3339_date_time(&odt, nullptr, buf, sizeof(buf), &len));
+
+  // A whole minute of the same magnitude still writes.
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, -60, false, &odt));
+  EXPECT_EQ(GCHRON_OK,
+      gchron_write_rfc3339_date_time(&odt, nullptr, buf, sizeof(buf), &len));
+
+  /*
+   * `-00:00` is exempt. It is a statement that the offset is not known
+   * (RFC 3339 section 4.3), not a magnitude, so there is nothing about it
+   * that the grammar cannot express.
+   */
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, true, &odt));
+  EXPECT_EQ(GCHRON_OK,
+      gchron_write_rfc3339_date_time(&odt, nullptr, buf, sizeof(buf), &len));
 }
 
 // Property 3 of design.md section 12.1, over random values rather than a

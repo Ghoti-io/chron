@@ -168,6 +168,35 @@ static void put_partial_time(char * out, size_t * at, const GCHRON_Time * time,
   put_secfrac(out, at, time->nsec, fraction_digits);
 }
 
+/**
+ * Whether `time-numoffset` can say this offset at all.
+ *
+ * RFC 3339 spells an offset as hours and minutes and has no field for
+ * seconds. `GCHRON_OffsetDateTime` holds seconds deliberately - design.md
+ * section 3.1 and offset.h both say why, in the same words: Europe/Amsterdam
+ * kept local mean time at `+00:19:32` until 1937, and an offset type that
+ * cannot hold that cannot round-trip the zone's own history. So the type can
+ * hold values this grammar has no way to write.
+ *
+ * What this used to do was write the hours and the minutes and drop the
+ * seconds, which is not a rounding of the text but a **change of the instant
+ * the text denotes**, by up to 59 seconds, reported as GCHRON_OK.
+ * `1222-07-08T00:14:07Z[Europe/London]` came back out as
+ * `1222-07-08T00:12:52-00:01` - fifteen seconds earlier, because London's
+ * LMT was `-00:01:15` - and RFC 9557 then refused to read it, because
+ * section 3.4 calls an offset that disagrees with its zone inconsistent.
+ * Every named zone has a local-mean-time era, so this reached any historical
+ * date in any zone, which is a use case this library states.
+ *
+ * Section 10 of design.md already gives the rule for a narrower encoding:
+ * return GCHRON_ERR_RANGE when the value does not fit, and do not round a
+ * sub-unit fraction without being asked. This is that rule.
+ */
+static bool offset_is_representable(int32_t offset_sec, bool offset_unknown) {
+  /* `-00:00` carries no magnitude at all; it is a statement, not a number. */
+  return offset_unknown || (offset_sec % 60) == 0;
+}
+
 /** Write `time-offset`. */
 static void put_offset(char * out, size_t * at, int32_t offset_sec,
     bool offset_unknown, const GCHRON_WriteOptions * opts) {
@@ -234,6 +263,9 @@ GCHRON_Result gchron_write_rfc3339_full_time(const GCHRON_OffsetTime * ot,
   if ((buf == NULL && buf_len != 0) || !gchron_offset_time_is_valid(ot)) {
     return GCHRON_ERR_INVALID;
   }
+  if (!offset_is_representable(ot->offset_sec, ot->offset_unknown)) {
+    return GCHRON_ERR_RANGE;
+  }
   opts = effective(opts, &fallback);
   put_partial_time(scratch, &at, &ot->time, opts->fraction_digits);
   put_offset(scratch, &at, ot->offset_sec, ot->offset_unknown, opts);
@@ -250,6 +282,9 @@ GCHRON_Result gchron_write_rfc3339_date_time(const GCHRON_OffsetDateTime * odt,
 
   if ((buf == NULL && buf_len != 0) || !gchron_offset_is_valid(odt)) {
     return GCHRON_ERR_INVALID;
+  }
+  if (!offset_is_representable(odt->offset_sec, odt->offset_unknown)) {
+    return GCHRON_ERR_RANGE;
   }
   opts = effective(opts, &fallback);
   result = put_full_date(scratch, &at, &odt->civil.date);
@@ -314,6 +349,10 @@ GCHRON_Result gchron_write_toml(const GCHRON_TomlValue * value,
         if (value->offset_sec <= -GCHRON_OFFSET_LIMIT_SECONDS
             || value->offset_sec >= GCHRON_OFFSET_LIMIT_SECONDS) {
           return GCHRON_ERR_INVALID;
+        }
+        if (!offset_is_representable(value->offset_sec,
+                value->offset_unknown)) {
+          return GCHRON_ERR_RANGE;
         }
         put_offset(scratch, &at, value->offset_sec, value->offset_unknown,
             opts);
@@ -392,6 +431,10 @@ GCHRON_Result gchron_write_yaml_timestamp(const GCHRON_YamlValue * value,
         if (value->offset_sec <= -GCHRON_OFFSET_LIMIT_SECONDS
             || value->offset_sec >= GCHRON_OFFSET_LIMIT_SECONDS) {
           return GCHRON_ERR_INVALID;
+        }
+        if (!offset_is_representable(value->offset_sec,
+                value->offset_unknown)) {
+          return GCHRON_ERR_RANGE;
         }
         put_offset(scratch, &at, value->offset_sec, value->offset_unknown,
             opts);
