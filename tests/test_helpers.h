@@ -80,6 +80,70 @@ inline GCHRON_DateTime datetime(int32_t year, int month, int day, int hour,
   return dt;
 }
 
+/**
+ * An allocator that grants a fixed number of allocations and then fails every
+ * one after them.
+ *
+ * The library's out-of-memory branches are unreachable from any input: they
+ * are taken when the allocator says no, and the default allocator does not.
+ * Sweeping the grant count over a compile walks the failure one allocation
+ * further in each time, which reaches those branches and - because the suite
+ * runs under Valgrind - also checks that a half-built structure is released
+ * rather than abandoned.
+ *
+ * `free_fn` always frees, so a sweep leaks nothing whichever allocation was
+ * refused. A refused `realloc` leaves the original block intact, as the C
+ * library's does, because the caller still owns it.
+ */
+class FailingAllocator {
+public:
+  explicit FailingAllocator(int grants) : grants_(grants) {
+    allocator_.ctx = this;
+    allocator_.malloc_fn = &FailingAllocator::do_malloc;
+    allocator_.calloc_fn = &FailingAllocator::do_calloc;
+    allocator_.realloc_fn = &FailingAllocator::do_realloc;
+    allocator_.free_fn = &FailingAllocator::do_free;
+  }
+
+  FailingAllocator(const FailingAllocator &) = delete;
+  FailingAllocator & operator=(const FailingAllocator &) = delete;
+
+  const GCHRON_Allocator * get() const { return &allocator_; }
+
+  /** How many allocations were actually granted before the refusals began. */
+  int granted() const { return granted_; }
+
+private:
+  bool grant() {
+    if (granted_ >= grants_) {
+      return false;
+    }
+    granted_ += 1;
+    return true;
+  }
+
+  static void * do_malloc(void * ctx, size_t size) {
+    FailingAllocator * self = static_cast<FailingAllocator *>(ctx);
+    return self->grant() ? std::malloc(size) : nullptr;
+  }
+
+  static void * do_calloc(void * ctx, size_t nitems, size_t size) {
+    FailingAllocator * self = static_cast<FailingAllocator *>(ctx);
+    return self->grant() ? std::calloc(nitems, size) : nullptr;
+  }
+
+  static void * do_realloc(void * ctx, void * ptr, size_t size) {
+    FailingAllocator * self = static_cast<FailingAllocator *>(ctx);
+    return self->grant() ? std::realloc(ptr, size) : nullptr;
+  }
+
+  static void do_free(void *, void * ptr) { std::free(ptr); }
+
+  GCHRON_Allocator allocator_{};
+  int grants_;
+  int granted_ = 0;
+};
+
 } // namespace gchrontest
 
 #endif // GHOTI_IO_GCHRON_TEST_HELPERS_H

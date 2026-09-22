@@ -59,6 +59,27 @@ typedef struct Builder {
   size_t pattern_at;
 } Builder;
 
+/*
+ * Three guards in the two functions below are deliberately unreachable from
+ * any pattern, and are recorded here so that the next coverage triage does
+ * not have to work it out again:
+ *
+ *   - the `gcu_safe_mul_size` and `gcu_safe_add_size` failures, and the
+ *     `capacity > (size_t)-1 / 2` test in the doubling loop. All three
+ *     need a pattern in the gigabytes. `max_format_length` caps it at 4096
+ *     by default, but a caller may set that limit to 0, which means no cap,
+ *     and `size_t` is 32 bits on some of the platforms this is meant to
+ *     build for. They stay.
+ *   - `push_literal`'s `len == 0` return. Both call sites consume at least
+ *     one byte before calling, so no pattern produces an empty run today;
+ *     the guard is for the next call site rather than for this one.
+ *
+ * Everything else in both functions is exercised, the refused allocations
+ * included - see FailingAllocator in tests/test_helpers.h. gcov reports the
+ * two identical `return GCHRON_ERR_OOM;` statements in push_item as one
+ * line, so the count on the first of them belongs to the second.
+ */
+
 /** Append an item, growing the list. */
 static GCHRON_Result push_item(Builder * b, GCHRON_ItemKind kind, int count) {
   if (b->max_items != 0 && b->item_count >= b->max_items) {

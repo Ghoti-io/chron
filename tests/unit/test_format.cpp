@@ -50,6 +50,34 @@ std::string with_pattern(const char * pattern, const GCHRON_OffsetDateTime & odt
   return text;
 }
 
+/**
+ * `with_pattern` writes into 256 bytes, which the growth tests exceed. This
+ * one asks the compiled format how much room it needs, so it also checks
+ * that the bound is still right for a pattern whose pools were reallocated -
+ * a bound computed from stale capacities would show up here as a refusal to
+ * format rather than as wrong text.
+ */
+std::string with_long_pattern(const char * pattern,
+    const GCHRON_OffsetDateTime & odt) {
+  GCHRON_Format * format = nullptr;
+  EXPECT_EQ(GCHRON_OK,
+      gchron_format_compile(pattern, std::strlen(pattern), GCHRON_FORMAT_LDML,
+          nullptr, nullptr, &format, nullptr));
+  if (format == nullptr) {
+    return std::string();
+  }
+  size_t bound = 0;
+  EXPECT_EQ(GCHRON_OK, gchron_format_max_length(format, &bound));
+  std::vector<char> buffer(bound);
+  size_t length = 0;
+  GCHRON_Result result = gchron_format_offset(format, &odt, nullptr,
+      buffer.data(), buffer.size(), &length);
+  EXPECT_EQ(GCHRON_OK, result);
+  gchron_format_destroy(format);
+  return (result == GCHRON_OK) ? std::string(buffer.data(), length)
+                               : std::string();
+}
+
 GCHRON_OffsetDateTime sample() {
   GCHRON_DateTime civil =
       gchrontest::datetime(2026, 9, 20, 15, 30, 45, 123456789);
@@ -437,4 +465,143 @@ TEST(Format, TheDeclaredBoundReallyBoundsEveryPattern) {
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+/*
+ * The literal pool and the item list each take a first allocation of a fixed
+ * size and double from there. Until these tests the doubling loop in
+ * push_literal had never run: every pattern in the suite held 32 bytes of
+ * literal text or fewer, so the pool was allocated once at its initial size
+ * and never grown, and `make coverage` reported those two lines as the only
+ * growth path in the library no test reached.
+ *
+ * Reaching them is not the point. A reallocation that loses bytes, or that
+ * leaves an earlier item naming the wrong place in the moved pool, is the
+ * kind of defect that produces corrupted output rather than a crash - so
+ * these check the bytes that come out, at and either side of every size
+ * where the capacity changes.
+ */
+TEST(Format, TheLiteralPoolGrowsWithoutLosingWhatItHeld) {
+  GCHRON_OffsetDateTime odt = sample();
+
+  for (size_t run : {31u, 32u, 33u, 63u, 64u, 65u, 127u, 128u, 129u, 255u,
+           256u, 257u, 511u, 512u, 513u}) {
+    std::string text(run, 'a');
+    std::string pattern = "'" + text + "'uuuu";
+    EXPECT_EQ(text + "2026", with_long_pattern(pattern.c_str(), odt))
+        << "literal run of " << run << " bytes";
+  }
+}
+
+/*
+ * The one a growth defect would actually break. Each run is stored as an
+ * offset and a length into a pool that realloc is free to move, so the runs
+ * written before the move have to still name the right bytes after it. The
+ * long run at the end is what forces the pool past its first allocation, and
+ * the three before it were written while it was somewhere else.
+ */
+TEST(Format, LiteralsWrittenBeforeAGrowthStillReadCorrectlyAfterIt) {
+  GCHRON_OffsetDateTime odt = sample();
+  std::string tail(200, 'z');
+  std::string pattern = "'alpha'uuuu'beta'MM'" + tail + "'dd";
+
+  EXPECT_EQ("alpha2026beta09" + tail + "20",
+      with_long_pattern(pattern.c_str(), odt));
+}
+
+/*
+ * The item list doubles from 16. `y'x'` compiles to two items, so the
+ * boundaries fall at 8, 16 and 32 repetitions.
+ */
+TEST(Format, TheItemListGrowsAcrossItsDoublingBoundaries) {
+  GCHRON_OffsetDateTime odt = sample();
+
+  for (size_t pairs : {7u, 8u, 9u, 15u, 16u, 17u, 31u, 32u, 40u}) {
+    std::string pattern;
+    std::string expected;
+    for (size_t i = 0; i < pairs; ++i) {
+      pattern += "y'x'";
+      expected += "2026x";
+    }
+    EXPECT_EQ(expected, with_long_pattern(pattern.c_str(), odt))
+        << pairs << " item pairs";
+  }
+}
+
+/*
+ * The other half of a growth path is the growth that fails, and it is
+ * unreachable from any input: it is taken when the allocator says no, and
+ * the default allocator does not. Granting a fixed number of allocations and
+ * refusing the rest walks the refusal one allocation further in each time.
+ *
+ * `'x'` needs exactly three, in this order: the format struct, the literal
+ * pool, the item list. Each refusal has to be reported as GCHRON_ERR_OOM
+ * rather than returning a half-built format, and the caller's pointer has to
+ * be left alone - a caller who checks the result and not the pointer is the
+ * common case, but one who checks the pointer should not find a dangling one.
+ */
+TEST(Format, ARefusedAllocationIsReportedRatherThanHalfCompiled) {
+  for (int grants = 0; grants < 3; ++grants) {
+    gchrontest::FailingAllocator allocator(grants);
+    GCHRON_Format * format = nullptr;
+
+    EXPECT_EQ(GCHRON_ERR_OOM,
+        gchron_format_compile("'x'", 3, GCHRON_FORMAT_LDML, nullptr,
+            allocator.get(), &format, nullptr))
+        << grants << " allocations granted";
+    EXPECT_EQ(nullptr, format) << grants << " allocations granted";
+    EXPECT_EQ(grants, allocator.granted());
+  }
+
+  // And the third grant is enough for it to succeed, which is what says the
+  // count above is the real one rather than an accident of the loop bound.
+  {
+    gchrontest::FailingAllocator allocator(3);
+    GCHRON_Format * format = nullptr;
+    EXPECT_EQ(GCHRON_OK,
+        gchron_format_compile("'x'", 3, GCHRON_FORMAT_LDML, nullptr,
+            allocator.get(), &format, nullptr));
+    ASSERT_NE(nullptr, format);
+    gchron_format_destroy(format);
+  }
+}
+
+/*
+ * The same sweep over a pattern that reallocates both pools several times, so
+ * that the refusal lands in the middle of a structure that already holds
+ * something. Whatever was built by then has to be released: the suite runs
+ * under Valgrind, which is what actually checks that claim, and these were
+ * the only paths through the compiler's cleanup that nothing had run.
+ */
+TEST(Format, ARefusalPartWayThroughAGrowingCompileLeavesNothingBehind) {
+  GCHRON_OffsetDateTime odt = sample();
+  std::string pattern;
+  std::string expected;
+  for (int i = 0; i < 40; ++i) {
+    pattern += "'aaaa'y";
+    expected += "aaaa2026";
+  }
+
+  int succeeded = 0;
+  for (int grants = 0; grants < 16; ++grants) {
+    gchrontest::FailingAllocator allocator(grants);
+    GCHRON_Format * format = nullptr;
+    GCHRON_Result result = gchron_format_compile(pattern.c_str(),
+        pattern.size(), GCHRON_FORMAT_LDML, nullptr, allocator.get(),
+        &format, nullptr);
+
+    if (result == GCHRON_OK) {
+      succeeded += 1;
+      gchron_format_destroy(format);
+    }
+    else {
+      EXPECT_EQ(GCHRON_ERR_OOM, result) << grants << " allocations granted";
+      EXPECT_EQ(nullptr, format) << grants << " allocations granted";
+    }
+  }
+  // Somewhere in that range the allocator stopped being the limit, or the
+  // sweep never reached the growth it was written for.
+  EXPECT_GT(succeeded, 0);
+
+  EXPECT_EQ(expected, with_long_pattern(pattern.c_str(), odt));
 }
