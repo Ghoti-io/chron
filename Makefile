@@ -1082,7 +1082,18 @@ endif
 ####################################################################
 # Sanitizer build (ASan + UBSan): separate build dir, run the test suite
 ####################################################################
-ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -g
+#
+# -fno-sanitize-recover=undefined for the reason given at FUZZ_SAN below: with
+# UBSan recovering, undefined behaviour prints a line to stderr and execution
+# continues, so the suite finishes green and the finding scrolls past in a few
+# hundred lines of gtest output. ASan aborts either way, which is why this is
+# easy to miss - the half of the pair that does not abort is the half that
+# catches signed overflow, and this library computes in nanoseconds since 1970.
+# The flag was added to the fuzz build and not to this one, which is the build
+# that runs on every change.
+#
+ASAN_UBSAN_FLAGS := -fsanitize=address,undefined -fno-sanitize-recover=undefined \
+	-fno-omit-frame-pointer -g
 ASAN_BUILD_DIR := ./build/$(BUILD)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
 ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
