@@ -801,7 +801,14 @@ GCHRON_API void gchron_write_options_default(GCHRON_WriteOptions * out);
  *   how a caller asks for the length alone.
  * @param buf_len Bytes available at @p buf.
  * @param out_len Receives the length written, without the NUL. May be NULL.
- * @return GCHRON_OK; GCHRON_ERR_LIMIT; GCHRON_ERR_INVALID.
+ * An offset that is not a whole number of minutes is GCHRON_ERR_RANGE rather
+ * than being truncated to one. `time-numoffset` has no seconds field, the
+ * offset type has one on purpose (offset.h), and writing the minutes alone
+ * would move the instant the text denotes by up to 59 seconds - which is what
+ * happens to any zone during its local-mean-time era. `-00:00` is exempt: it
+ * says the offset is unknown rather than naming a magnitude.
+ *
+ * @return GCHRON_OK; GCHRON_ERR_LIMIT; GCHRON_ERR_RANGE; GCHRON_ERR_INVALID.
  */
 GCHRON_API GCHRON_Result gchron_write_rfc3339_date_time(
     const GCHRON_OffsetDateTime * odt, const GCHRON_WriteOptions * opts,
@@ -829,7 +836,14 @@ GCHRON_API GCHRON_Result gchron_write_rfc3339_full_date(
  * @param buf Where to write; see gchron_write_rfc3339_date_time().
  * @param buf_len Bytes available at @p buf.
  * @param out_len Receives the length written, without the NUL. May be NULL.
- * @return GCHRON_OK; GCHRON_ERR_LIMIT; GCHRON_ERR_INVALID.
+ * An offset that is not a whole number of minutes is GCHRON_ERR_RANGE rather
+ * than being truncated to one. `time-numoffset` has no seconds field, the
+ * offset type has one on purpose (offset.h), and writing the minutes alone
+ * would move the instant the text denotes by up to 59 seconds - which is what
+ * happens to any zone during its local-mean-time era. `-00:00` is exempt: it
+ * says the offset is unknown rather than naming a magnitude.
+ *
+ * @return GCHRON_OK; GCHRON_ERR_LIMIT; GCHRON_ERR_RANGE; GCHRON_ERR_INVALID.
  */
 GCHRON_API GCHRON_Result gchron_write_rfc3339_full_time(
     const GCHRON_OffsetTime * ot, const GCHRON_WriteOptions * opts, char * buf,

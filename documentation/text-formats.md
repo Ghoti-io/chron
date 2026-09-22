@@ -71,6 +71,33 @@ operation that keeps the offset preserves it, and the writer writes it back as
 that carries the meaning. `gchron_offset_compare` says the two are the same
 moment; `gchron_offset_identical` says they are not the same statement.
 
+### An offset with seconds cannot be written
+
+`time-numoffset` is `("+" / "-") time-hour ":" time-minute`. There is no
+seconds field, and `GCHRON_OffsetDateTime` holds the offset in seconds on
+purpose - the tzdb records local mean time to the second, and `Europe/London`
+was `-00:01:15` until 1847 while `Europe/Amsterdam` was `+00:19:32` until
+1937. So the type holds offsets this grammar cannot spell.
+
+The writer **refuses** them, with `GCHRON_ERR_RANGE`. It used to write the
+hours and minutes and drop the seconds, which reads like a rounding of the
+text and is not: it moves the instant the text denotes, by up to 59 seconds,
+while reporting success. `1222-07-08T00:14:07Z[Europe/London]` came back out
+as `1222-07-08T00:12:52-00:01`, fifteen seconds earlier. RFC 9557 then refused
+to read that back, because its section 3.4 calls an offset disagreeing with
+its zone inconsistent - so the annotated form failed loudly while the plain
+form returned a wrong answer quietly.
+
+This is the rule design.md section 10 already states for foreign encodings,
+applied to a text one: a conversion to something narrower reports
+`GCHRON_ERR_RANGE` rather than rounding a sub-unit fraction unasked. `-00:00`
+is exempt, because it is a statement that the offset is unknown and not a
+magnitude.
+
+The LDML formatter is not affected: `Z`..`ZZZ` is ISO 8601 basic with an
+optional seconds field, so `gchron_format_datetime` writes `+000921` where
+the seconds matter.
+
 ### `:60`
 
 The grammar permits it
