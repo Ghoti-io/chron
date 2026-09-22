@@ -550,3 +550,67 @@ int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+/*
+ * max_tzif_bytes says "largest TZif image the zone loader will *read*", and
+ * four places honour it: the parse-time length check in tzif.c, and three
+ * reads - a named zone, a link target, and /etc/localtime.
+ *
+ * Only the parse-time one was tested, and the three reads could all be set to
+ * "unlimited" with the whole suite still green. That is invisible from a
+ * return code: an oversized zone fails with GCHRON_ERR_LIMIT whether the read
+ * stopped at the cap or the parse rejected a megabyte already sitting in
+ * memory. The status is the same and the memory is not, and a caller setting
+ * this field is bounding the memory.
+ *
+ * So this asserts the bound. The file is far larger than the cap, and the
+ * largest single allocation has to stay near the cap rather than near the
+ * file. Dropping the cap at zonedb.c's named-zone read makes this fail with
+ * "largest single allocation 2097152 bytes against a 4096-byte cap".
+ *
+ * It covers one of the three reads. The link-target read beside it and
+ * local.c's /etc/localtime read are still decided by no test: the first needs
+ * a link table a directory database does not build from a fixture, and the
+ * second reads an absolute system path this suite cannot point elsewhere.
+ * Both are recorded here rather than left to be rediscovered, because the
+ * suite passing says nothing about either.
+ */
+TEST(ZoneDb, AnOversizedZoneFileIsNotReadJustToBeRejected) {
+  const size_t cap = 4096;
+
+  // The largest single allocation made while refusing a zone file of the
+  // given size. Returned rather than asserted so the two readings can be
+  // compared with each other, which is the whole test.
+  auto peak_refusing = [cap](size_t file_size) {
+    gchrontest::TempDir dir;
+    dir.write("Oversized", std::string(file_size, '\0'));
+
+    GCHRON_Limits limits{};
+    gchron_limits_default(&limits);
+    limits.max_tzif_bytes = cap;
+
+    gchrontest::RecordingAllocator recorder;
+    GCHRON_ZoneDb * db = nullptr;
+    EXPECT_EQ(GCHRON_OK, gchron_zonedb_directory(dir.path().c_str(),
+        recorder.get(), &limits, &db));
+
+    const GCHRON_Zone * zone = nullptr;
+    EXPECT_EQ(GCHRON_ERR_LIMIT, gchron_zonedb_zone(db, "Oversized", &zone));
+
+    gchron_zonedb_destroy(db);
+    return recorder.largest();
+  };
+
+  const size_t small = peak_refusing(256 * 1024);
+  const size_t large = peak_refusing(1024 * 1024);
+
+  // The property, with no threshold in it: refusing a file four times the
+  // size must not cost four times the memory, because the cap is what the
+  // reader stops at and the cap did not change. A number to compare against
+  // would need choosing, and would drift into a test of the reader's
+  // buffering; this needs nothing chosen.
+  EXPECT_EQ(small, large)
+      << "the file was read before it was refused: refusing 256 KiB peaked at "
+      << small << " bytes and refusing 1 MiB at " << large
+      << ", against a " << cap << "-byte cap that did not move";
+}

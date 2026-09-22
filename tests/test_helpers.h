@@ -181,6 +181,65 @@ private:
  * refused. A refused `realloc` leaves the original block intact, as the C
  * library's does, because the caller still owns it.
  */
+/**
+ * An allocator that grants everything and remembers the largest single
+ * request.
+ *
+ * For asserting a *bound* rather than a status. A cap on how many bytes a
+ * reader will read cannot be observed from the return code - the call fails
+ * with GCHRON_ERR_LIMIT whether the cap stopped the read or a later check
+ * rejected what the read had already pulled into memory - and the difference
+ * is the whole point of the cap. The largest request is what separates them.
+ */
+class RecordingAllocator {
+public:
+  RecordingAllocator() {
+    allocator_.ctx = this;
+    allocator_.malloc_fn = &RecordingAllocator::do_malloc;
+    allocator_.calloc_fn = &RecordingAllocator::do_calloc;
+    allocator_.realloc_fn = &RecordingAllocator::do_realloc;
+    allocator_.free_fn = &RecordingAllocator::do_free;
+  }
+
+  RecordingAllocator(const RecordingAllocator &) = delete;
+  RecordingAllocator & operator=(const RecordingAllocator &) = delete;
+
+  const GCHRON_Allocator * get() const { return &allocator_; }
+
+  /** The largest number of bytes asked for in one call. */
+  size_t largest() const { return largest_; }
+
+private:
+  void note(size_t size) {
+    if (size > largest_) {
+      largest_ = size;
+    }
+  }
+
+  static void * do_malloc(void * ctx, size_t size) {
+    RecordingAllocator * self = static_cast<RecordingAllocator *>(ctx);
+    self->note(size);
+    return std::malloc(size);
+  }
+
+  static void * do_calloc(void * ctx, size_t n, size_t size) {
+    RecordingAllocator * self = static_cast<RecordingAllocator *>(ctx);
+    self->note(n * size);
+    return std::calloc(n, size);
+  }
+
+  static void * do_realloc(void * ctx, void * ptr, size_t size) {
+    RecordingAllocator * self = static_cast<RecordingAllocator *>(ctx);
+    self->note(size);
+    return std::realloc(ptr, size);
+  }
+
+  static void do_free(void *, void * ptr) { std::free(ptr); }
+
+  GCHRON_Allocator allocator_{};
+  size_t largest_ = 0;
+};
+
 class FailingAllocator {
 public:
   explicit FailingAllocator(int grants) : grants_(grants) {
