@@ -49,7 +49,6 @@
 
 #include <ghoti.io/cutil/allocator.h>
 #include <ghoti.io/cutil/path.h>
-#include <ghoti.io/cutil/safemath.h>
 
 #include "../core/core_internal.h"
 #if defined(_WIN32)

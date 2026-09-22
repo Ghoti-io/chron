@@ -44,7 +44,6 @@
 #include <string.h>
 
 #include <ghoti.io/cutil/allocator.h>
-#include <ghoti.io/cutil/safemath.h>
 
 #include "../core/core_internal.h"
 #include "calendar_internal.h"
