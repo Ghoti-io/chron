@@ -636,6 +636,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar vectors-calendars
 .PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license
+.PHONY: check-oracle-temporal
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -887,6 +888,24 @@ check-oracle-ldml-parse: $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
 	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/oracle/ldml_parse_diff.py \
 		--chron $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
 		--icu $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
+
+#
+# Temporal's string format *is* RFC 9557 - the `[America/New_York]` suffix was
+# standardised for it - and V8's implementation is the one test262 exercises,
+# so asking V8 is the same authority without a corpus to fetch. Temporal is
+# behind a flag in node 22, and the driver says so rather than skipping.
+#
+check-oracle-temporal: ## Check the RFC 9557 reader against V8's Temporal (needs node)
+check-oracle-temporal: $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)
+	@if ! command -v node >/dev/null 2>&1; then \
+		printf "\033[0;31mcheck-oracle-temporal: node is not installed.\033[0m\n" >&2; \
+		printf "Temporal is the oracle for this grammar; without it the check\n" >&2; \
+		printf "is absent rather than weaker, and saying so beats a green run.\n" >&2; \
+		exit 1; \
+	fi
+	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" node --harmony-temporal \
+		tools/oracle/temporal_diff.js \
+		--driver $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)
 
 check-oracle-zoneinfo: ## Check every zone against Python's zoneinfo (needs python3)
 check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
