@@ -376,7 +376,14 @@ static GCHRON_Result serial_to_civil(double serial, int64_t epoch_day,
     return GCHRON_ERR_INVALID;
   }
   if (!(serial > -1e12 && serial < 1e12)) {
-    /* Also catches NaN, which every comparison refuses. */
+    /*
+     * Written as the negation of "inside" rather than as "outside", because
+     * NaN fails every comparison: `!(in range)` refuses it and the tidier
+     * `serial <= -1e12 || serial >= 1e12` accepts it. What follows is
+     * `(int64_t)` of this value, which for NaN or anything too large is
+     * undefined behaviour rather than a wrong answer - so this line is the
+     * whole of the defence, and its shape is the load-bearing part.
+     */
     return GCHRON_ERR_RANGE;
   }
   whole = floor(serial);
@@ -402,6 +409,9 @@ GCHRON_Result gchron_interop_from_excel_1900(double serial,
     return GCHRON_ERR_INVALID;
   }
   if (!(serial >= 1.0)) {
+    /* Negated for NaN, as serial_to_civil explains. INVALID rather than
+     * RANGE: a serial below the epoch is a wrong argument, not an
+     * unrepresentable one - and either way it is refused before the cast. */
     return GCHRON_ERR_INVALID;
   }
   if (serial >= 60.0 && serial < 61.0) {
@@ -449,6 +459,9 @@ GCHRON_Result gchron_interop_to_excel_1900(const GCHRON_DateTime * dt,
 GCHRON_Result gchron_interop_from_excel_1904(double serial,
     GCHRON_DateTime * out) {
   if (!(serial >= 0.0)) {
+    /* Negated for NaN, as serial_to_civil explains. INVALID rather than
+     * RANGE: a serial below the epoch is a wrong argument, not an
+     * unrepresentable one - and either way it is refused before the cast. */
     return GCHRON_ERR_INVALID;
   }
   return serial_to_civil(serial, EXCEL_1904_EPOCH_DAY, out);
@@ -716,6 +729,7 @@ GCHRON_Result gchron_interop_from_cocoa(double value, GCHRON_Instant * out) {
     return GCHRON_ERR_INVALID;
   }
   if (!(value > -1e17 && value < 1e17)) {
+    /* The negation is deliberate and refuses NaN; see serial_to_civil. */
     return GCHRON_ERR_RANGE;
   }
   whole = floor(value);
@@ -768,6 +782,7 @@ GCHRON_Result gchron_interop_from_mjd(double value, GCHRON_Instant * out) {
     return GCHRON_ERR_INVALID;
   }
   if (!(value > -1e12 && value < 1e12)) {
+    /* The negation is deliberate and refuses NaN; see serial_to_civil. */
     return GCHRON_ERR_RANGE;
   }
   whole = floor(value);
