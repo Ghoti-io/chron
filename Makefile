@@ -929,19 +929,45 @@ vectors-jsonschema: ## Rebuild the JSON Schema format vectors (needs the fetched
 
 test: ## Make and run the unit tests
 test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
-	@for test_exe in $(TEST_EXECUTABLES); do \
+	@#
+	@# `failed` is what makes this a gate, for the reason spelled out on
+	@# test-valgrind: a bare for-loop reports the exit status of its *last*
+	@# iteration, so this target passed whenever the alphabetically-last suite
+	@# passed and the other $(words $(TEST_EXECUTABLES)) could fail unseen.
+	@# That is the defect section 12.3 names, and it sat in the target every
+	@# commit is measured against - including the commit that fixed the
+	@# identical loop one target below and stopped there.
+	@#
+	@failed=""; \
+	for test_exe in $(TEST_EXECUTABLES); do \
 		test_name=$$(basename $$test_exe $(EXE_EXTENSION)); \
 		printf "\033[0;30;43m\n"; \
 		printf "############################\n"; \
 		printf "### Running %s tests ###\n" "$$test_name"; \
 		printf "############################"; \
 		printf "\033[0m\n\n"; \
-		LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1; \
-	done
+		if ! LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_brief=1; then \
+			failed="$$failed $$test_name"; \
+		fi; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		printf "\033[0;31m\nFailed:$$failed\033[0m\n"; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32m\nAll $(words $(TEST_EXECUTABLES)) suites passed.\033[0m\n"
 
 test-quiet: ## Run tests with minimal output (one line per test suite)
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
-	@total_tests=0; total_passed=0; total_failed=0; total_time=0; failed_suites=""; \
+	@#
+	@# total_suites_failed is counted separately from total_failed because a
+	@# suite that dies before printing its summary - a segfault at start-up, a
+	@# missing shared library, an ASan abort - yields no "[  FAILED  ] n" line
+	@# to parse. Its row said FAIL while the total said PASS and the target
+	@# exited 0, because the only thing being summed was a number that suite
+	@# never got far enough to print.
+	@#
+	@total_tests=0; total_passed=0; total_failed=0; total_suites_failed=0; \
+	total_time=0; failed_suites=""; \
 	printf "\n\033[1;36m%-30s %8s %10s %s\033[0m\n" "Test Suite" "Tests" "Time" "Status"; \
 	printf "\033[1;36m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
 	for test_exe in $(TEST_EXECUTABLES); do \
@@ -961,16 +987,17 @@ test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)
 			failures=$$(echo "$$output" | grep -oP '\[\s*FAILED\s*\]\s*\K\d+' | head -1); \
 			[ -z "$$failures" ] && failures=$$num_tests; \
 			total_failed=$$((total_failed + failures)); \
+			total_suites_failed=$$((total_suites_failed + 1)); \
 			total_passed=$$((total_passed + num_tests - failures)); \
 			printf "%-30s %8d %8dms \033[0;31mFAIL\033[0m\n" "$$test_name" "$$num_tests" "$$time_ms"; \
 			failed_suites="$$failed_suites\n\033[0;31m=== $$test_name FAILURES ===\033[0m\n$$output\n"; \
 		fi; \
 	done; \
 	printf "\033[1;36m%-30s %8s %10s %s\033[0m\n" "------------------------------" "--------" "----------" "------"; \
-	if [ $$total_failed -eq 0 ]; then \
+	if [ $$total_failed -eq 0 ] && [ $$total_suites_failed -eq 0 ]; then \
 		printf "\033[0;32m%-30s %8d %6dms PASS\033[0m\n\n" "TOTAL" "$$total_tests" "$$total_time"; \
 	else \
-		printf "\033[0;31m%-30s %8d %6dms FAIL (%d failed)\033[0m\n" "TOTAL" "$$total_tests" "$$total_time" "$$total_failed"; \
+		printf "\033[0;31m%-30s %8d %6dms FAIL (%d failed in %d suites)\033[0m\n" "TOTAL" "$$total_tests" "$$total_time" "$$total_failed" "$$total_suites_failed"; \
 		printf "$$failed_suites\n"; \
 		exit 1; \
 	fi
