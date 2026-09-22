@@ -171,6 +171,15 @@ GCHRON_Result gchron_zone_read_file(const char * path, size_t max_bytes,
    * GCU_FILE_UNLIMITED is 0, which is what this function already documented
    * `max_bytes` of 0 to mean, so the caller-facing contract is unchanged.
    */
+  /*
+   * Checked here so that a GCU_FILE_ERR_INVALID coming back can only be about
+   * the path's *length*, never about this library having handed cutil a null.
+   * The mapping below depends on that being true.
+   */
+  if (path == NULL || out_data == NULL || out_len == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+
   switch (gcu_file_read(path, max_bytes, allocator, out_data, out_len)) {
     case GCU_FILE_OK:
       return GCHRON_OK;
@@ -178,8 +187,6 @@ GCHRON_Result gchron_zone_read_file(const char * path, size_t max_bytes,
       return GCHRON_ERR_LIMIT;
     case GCU_FILE_ERR_OOM:
       return GCHRON_ERR_OOM;
-    case GCU_FILE_ERR_INVALID:
-      return GCHRON_ERR_INVALID;
     /*
      * A default rather than the remaining names spelled out. Enumerating them
      * turns the next value cutil adds into a build failure here, and - worse
@@ -187,6 +194,20 @@ GCHRON_Result gchron_zone_read_file(const char * path, size_t max_bytes,
      * bug in this library to a caller whose file was simply deleted. Every
      * way a read can fail that this function has no better word for is an I/O
      * failure, which is what the caller needs to know.
+     *
+     * GCU_FILE_ERR_INVALID is deliberately among them, and is the one that
+     * looks like it should not be. It means `ENAMETOOLONG`, and
+     * GCHRON_ERR_INVALID means "a caller-supplied argument is wrong" - which
+     * this is not. `NAME_MAX` and `PATH_MAX` are per-filesystem, so the same
+     * path is too long on one mount and fine on another, and the argument the
+     * caller supplied is a zone identifier that may be perfectly good; what
+     * was too long is the directory this database was built with. Reported as
+     * GCHRON_ERR_INVALID it told a caller to fix `Europe/Paris`.
+     *
+     * It also matters further up: gchron_zonedb_zone() consults the tzdb's
+     * link table only when this says GCHRON_ERR_IO, so an over-long path used
+     * to skip the backward-compatibility names as well as mislabelling
+     * itself.
      */
     default:
       break;

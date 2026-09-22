@@ -688,6 +688,38 @@ TEST_F(LeapFile, ATzdirCopyTooLargeToReadIsAnAnswerRatherThanAFallback) {
 }
 
 /*
+ * A `$TZDIR` too long for the filesystem to accept **stops the search** and
+ * is reported, rather than falling through to the system table.
+ *
+ * This is the edge of the rule rather than an instance of it, and it is the
+ * one that changed when cutil grew a vocabulary. `ENAMETOOLONG` used to be
+ * reported as the same "could not open" value as an absent file, so it fell
+ * through and the caller got the system table and never learned that the
+ * directory it configured was unusable. cutil now spells it separately, and
+ * Corey chose to let a location that can never work be surfaced rather than
+ * worked around: an unusable $TZDIR is a misconfiguration, and silently
+ * answering from somewhere else is how it survives.
+ *
+ * The neighbouring cases stay as they were - see the tests above - so what
+ * this pins is the boundary between "this location yielded nothing, try the
+ * next" and "this location cannot work, say so".
+ */
+TEST_F(LeapFile, ATzdirTooLongForTheFilesystemIsReportedNotWorkedAround) {
+  if (::access("/usr/share/zoneinfo/leap-seconds.list", R_OK) != 0) {
+    GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
+  }
+  std::string dir(5000, 'a');
+  dir[0] = '/';
+  ::setenv("TZDIR", dir.c_str(), 1);
+
+  GCHRON_LeapTable * table = nullptr;
+  EXPECT_EQ(GCHRON_ERR_IO,
+      gchron_leap_table_file(nullptr, nullptr, &table, nullptr))
+      << "an unusable $TZDIR was quietly answered from the system table";
+  EXPECT_EQ(nullptr, table);
+}
+
+/*
  * The case in between, and the one the condition in leap.c actually turns on:
  * a `$TZDIR` copy that is there and cannot be *opened*.
  *

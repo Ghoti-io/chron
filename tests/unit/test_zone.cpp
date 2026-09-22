@@ -506,6 +506,46 @@ TEST_F(Zones, DumpWritesSomethingForEveryInput) {
   std::fclose(sink);
 }
 
+/*
+ * A zone directory too long for the filesystem to accept is a fact about the
+ * environment, not about the identifier the caller passed.
+ *
+ * cutil reports `ENAMETOOLONG` as GCU_FILE_ERR_INVALID, on the reasoning that
+ * only the caller can change its argument - which is right at that boundary
+ * and wrong when it crosses this one, because the argument *this* library's
+ * caller supplied is a zone name that may be perfectly good. Passed straight
+ * through it told them to fix `Europe/Paris`.
+ *
+ * GCHRON_ERR_UNSUPPORTED - "this database does not have that zone" - is the
+ * same answer an unreadable directory gives, which is what an over-long one
+ * is a case of.
+ */
+TEST(ZoneDb, ADirectoryTooLongForTheFilesystemIsNotTheCallersZoneName) {
+  std::string dir(5000, 'a');
+  dir[0] = '/';
+  GCHRON_ZoneDb * db = nullptr;
+  ASSERT_EQ(GCHRON_OK,
+      gchron_zonedb_directory(dir.c_str(), nullptr, nullptr, &db));
+
+  const GCHRON_Zone * zone = nullptr;
+  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
+      gchron_zonedb_zone(db, "Europe/Paris", &zone))
+      << "an over-long directory was reported as a bad zone identifier";
+  EXPECT_EQ(nullptr, zone);
+
+  // A name the tzdb only reaches through its link table takes the same route,
+  // which it can only do because the failure above is spelled GCHRON_ERR_IO
+  // underneath: that is the value gating the link lookup.
+  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,
+      gchron_zonedb_zone(db, "US/Eastern", &zone));
+
+  gchron_zonedb_destroy(db);
+
+  // And a genuinely bad argument still says so.
+  EXPECT_EQ(GCHRON_ERR_INVALID,
+      gchron_zonedb_zone(nullptr, "Europe/Paris", &zone));
+}
+
 int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

@@ -430,6 +430,14 @@ GCHRON_Result gchron_leap_table_file(const char * path,
      * look. Narrowing this to NOT_FOUND alone would turn a root-only copy
      * under $TZDIR from a fallback into a refusal, which is a change of
      * behaviour and not a translation - tests/unit/test_leap.cpp pins both.
+     *
+     * Two spellings are deliberately *outside* the pair, and both used to be
+     * inside it when every open failure was one value. A path too long for
+     * the filesystem is GCU_FILE_ERR_INVALID and an open that failed for
+     * memory is GCU_FILE_ERR_OOM; neither says "look somewhere else", and
+     * both used to be answered from the system table with nothing said. A
+     * $TZDIR that can never work is a misconfiguration worth surfacing, and
+     * running out of memory is not a fact about the filesystem at all.
      */
     if (read == GCU_FILE_ERR_NOT_FOUND || read == GCU_FILE_ERR_ACCESS) {
       read = gcu_file_read(GCHRON_LEAP_SECONDS_PATH, GCHRON_LEAP_SECONDS_MAX,
