@@ -406,6 +406,103 @@ GCHRON_API GCHRON_Result gchron_interop_to_exif(const GCHRON_DateTime * dt,
     char out[GCHRON_EXIF_DATETIME_BYTES]);
 
 /*--------------------------------------------------------------------------*
+ * ASN.1 - X.509, CMS, LDAP
+ *--------------------------------------------------------------------------*/
+
+/** Bytes gchron_interop_to_asn1_utctime() writes, NUL included. */
+#define GCHRON_ASN1_UTCTIME_BYTES 14
+
+/** Bytes gchron_interop_to_asn1_gentime() may write, NUL included. */
+#define GCHRON_ASN1_GENTIME_BYTES 26
+
+/**
+ * @brief The pivot RFC 5280 section 4.1.2.5.1 gives for a two-digit year.
+ *
+ * Years below it are 20xx and years at or above it are 19xx, so 50 means
+ * 1950..2049.
+ */
+#define GCHRON_ASN1_UTCTIME_PIVOT_RFC5280 50
+
+/**
+ * @brief An instant from an ASN.1 `UTCTime`.
+ *
+ * `YYMMDDHHMMSSZ` - the encoding X.509 certificates carry for any validity
+ * date before 2050, and the one that made a certificate expiring in 2050 a
+ * different kind of problem from one expiring in 2049.
+ *
+ * **The pivot is a parameter.** RFC 5280 fixes it at 50, and
+ * ::GCHRON_ASN1_UTCTIME_PIVOT_RFC5280 is that value, but the same encoding
+ * appears elsewhere under other rules and a library that guesses a century
+ * for its caller is making mistake M18 on their behalf. Pass the constant
+ * unless you know you need something else.
+ *
+ * Read accepts the looser BER spellings that real certificates carry: the
+ * seconds may be absent, and the zone may be `Z` or `+HHMM`/`-HHMM` rather
+ * than only `Z`. Write is DER-strict.
+ *
+ * @param text The field. Not assumed to be NUL-terminated.
+ * @param len Bytes at @p text.
+ * @param pivot The two-digit year at which the century changes, 0..99.
+ * @param out Receives the instant on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_FORMAT; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_interop_from_asn1_utctime(const char * text,
+    size_t len, int pivot, GCHRON_Instant * out);
+
+/**
+ * @brief An ASN.1 `UTCTime` from an instant, DER-strict.
+ *
+ * Always `YYMMDDHHMMSSZ`: UTC, seconds present, no fraction - which is what
+ * DER requires and what X.509 therefore carries.
+ *
+ * @param i A valid instant whose UTC year is within the pivot's window.
+ * @param pivot The pivot the reader will use, so that what is written can be
+ *   read back as the same year.
+ * @param out Receives GCHRON_ASN1_UTCTIME_BYTES bytes, NUL-terminated.
+ * @return GCHRON_OK; GCHRON_ERR_RANGE when the year is outside the hundred
+ *   years @p pivot selects, rather than a silently wrong century;
+ *   GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_interop_to_asn1_utctime(
+    const GCHRON_Instant * i, int pivot,
+    char out[GCHRON_ASN1_UTCTIME_BYTES]);
+
+/**
+ * @brief An instant from an ASN.1 `GeneralizedTime`.
+ *
+ * `YYYYMMDDHHMMSS[.fff]Z`, with a four-digit year and therefore no pivot to
+ * get wrong. What X.509 uses for any date from 2050 on.
+ *
+ * Read accepts BER: the fraction may be introduced by `.` or `,` (both are
+ * legal in BER, and DER allows only `.`), the seconds may be absent, and the
+ * zone may be an offset rather than `Z`.
+ *
+ * @param text The field. Not assumed to be NUL-terminated.
+ * @param len Bytes at @p text.
+ * @param out Receives the instant on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_FORMAT; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_interop_from_asn1_gentime(const char * text,
+    size_t len, GCHRON_Instant * out);
+
+/**
+ * @brief An ASN.1 `GeneralizedTime` from an instant, DER-strict.
+ *
+ * DER restricts what BER allows, and the restrictions are the ones two
+ * implementations most often differ on: the zone is `Z` and nothing else,
+ * the seconds are always present, a fraction never ends in a zero, and a
+ * fraction that would be zero is omitted along with its point. So one second
+ * past midnight is `YYYYMMDD000001Z` and never `...000001.000Z`.
+ *
+ * @param i A valid instant whose UTC year is 0..9999.
+ * @param out Receives at most GCHRON_ASN1_GENTIME_BYTES bytes,
+ *   NUL-terminated.
+ * @return GCHRON_OK, GCHRON_ERR_RANGE or GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_interop_to_asn1_gentime(
+    const GCHRON_Instant * i, char out[GCHRON_ASN1_GENTIME_BYTES]);
+
+/*--------------------------------------------------------------------------*
  * Other epochs
  *--------------------------------------------------------------------------*/
 

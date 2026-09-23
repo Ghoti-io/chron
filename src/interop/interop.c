@@ -806,3 +806,341 @@ GCHRON_Result gchron_interop_to_mjd(const GCHRON_Instant * i, double * out) {
   *out = (double)(day - MJD_EPOCH_DAY) + (double)nanos / (86400.0 * 1e9);
   return GCHRON_OK;
 }
+
+/*--------------------------------------------------------------------------*
+ * ASN.1 - X.509, CMS, LDAP
+ *--------------------------------------------------------------------------*/
+
+/** Read @p count decimal digits, or fail. */
+static bool asn1_digits(const char * text, size_t len, size_t at,
+    size_t count, int * out) {
+  int value = 0;
+  size_t index;
+
+  if (at + count > len) {
+    return false;
+  }
+  for (index = 0; index < count; ++index) {
+    const char c = text[at + index];
+    if (c < '0' || c > '9') {
+      return false;
+    }
+    value = value * 10 + (c - '0');
+  }
+  *out = value;
+  return true;
+}
+
+/**
+ * Parse the tail an ASN.1 time string shares between its two forms: optional
+ * seconds, an optional fraction, and a zone that is `Z` or an offset.
+ *
+ * @param allow_fraction GeneralizedTime has one; UTCTime does not.
+ * @param at Where the tail starts, just past the minutes.
+ * @param out_offset Receives the offset in seconds to subtract.
+ */
+static GCHRON_Result asn1_tail(const char * text, size_t len, size_t at,
+    bool allow_fraction, int * out_second, int32_t * out_nsec,
+    int * out_offset) {
+  int second = 0;
+  int32_t nsec = 0;
+  int offset = 0;
+
+  /*
+   * Seconds are optional in BER and required in DER. Real certificates carry
+   * the DER form, but the looser one appears in older CMS and in LDAP, and
+   * refusing it would be refusing input that exists.
+   */
+  if (at + 2 <= len && text[at] >= '0' && text[at] <= '9') {
+    if (!asn1_digits(text, len, at, 2, &second)) {
+      return GCHRON_ERR_FORMAT;
+    }
+    at += 2;
+  }
+  if (allow_fraction && at < len && (text[at] == '.' || text[at] == ',')) {
+    /*
+     * BER allows a comma as the decimal separator and DER allows only a full
+     * stop. Both are read; only the full stop is written.
+     */
+    int64_t scale = GCHRON_NANOS_PER_SECOND / 10;
+    size_t digits = 0;
+
+    at += 1;
+    while (at < len && text[at] >= '0' && text[at] <= '9') {
+      if (scale > 0) {
+        nsec += (int32_t)((text[at] - '0') * scale);
+        scale /= 10;
+      }
+      /* Digits past nanosecond resolution are dropped, not refused: the
+       * encoding permits them and the type cannot hold them. */
+      at += 1;
+      digits += 1;
+    }
+    if (digits == 0) {
+      return GCHRON_ERR_FORMAT;
+    }
+  }
+
+  if (at >= len) {
+    /*
+     * No zone at all. BER calls this local time, which means the value names
+     * no instant without knowing where it was written - so it is refused
+     * rather than guessed at as UTC (design.md, mistake M2).
+     */
+    return GCHRON_ERR_UNSUPPORTED;
+  }
+  if (text[at] == 'Z') {
+    at += 1;
+  }
+  else if (text[at] == '+' || text[at] == '-') {
+    const int sign = text[at] == '-' ? -1 : 1;
+    int hours = 0;
+    int minutes = 0;
+
+    at += 1;
+    if (!asn1_digits(text, len, at, 2, &hours)) {
+      return GCHRON_ERR_FORMAT;
+    }
+    at += 2;
+    if (at + 2 <= len && text[at] >= '0' && text[at] <= '9') {
+      if (!asn1_digits(text, len, at, 2, &minutes)) {
+        return GCHRON_ERR_FORMAT;
+      }
+      at += 2;
+    }
+    if (hours > 23 || minutes > 59) {
+      return GCHRON_ERR_FORMAT;
+    }
+    offset = sign * (hours * 3600 + minutes * 60);
+  }
+  else {
+    return GCHRON_ERR_FORMAT;
+  }
+  if (at != len) {
+    return GCHRON_ERR_FORMAT;
+  }
+
+  *out_second = second;
+  *out_nsec = nsec;
+  *out_offset = offset;
+  return GCHRON_OK;
+}
+
+/** Build an instant from the fields an ASN.1 time string carried. */
+static GCHRON_Result asn1_assemble(int32_t year, int month, int day,
+    int hour, int minute, int second, int32_t nsec, int offset,
+    GCHRON_Instant * out) {
+  GCHRON_DateTime dt;
+  GCHRON_Instant built;
+  GCHRON_Result result;
+  int64_t sec;
+
+  result = gchron_date_create(year, month, day, &dt.date);
+  if (result != GCHRON_OK) {
+    return GCHRON_ERR_FORMAT;
+  }
+  /*
+   * A leap second is spelled 60 here and the civil type does not hold one.
+   * Clamped to 59 rather than refused, because an ASN.1 timestamp that names
+   * one is naming a real moment and the library's own leap handling lives in
+   * leap.h, which this tier cannot see.
+   */
+  if (second == 60) {
+    second = 59;
+  }
+  if (hour > 23 || minute > 59 || second > 59) {
+    return GCHRON_ERR_FORMAT;
+  }
+  dt.time.hour = (uint8_t)hour;
+  dt.time.minute = (uint8_t)minute;
+  dt.time.second = (uint8_t)second;
+  dt.time.nsec = nsec;
+
+  result = gchron_instant_from_utc(&dt, &built);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  if (!gchron_sub_i64(built.sec, (int64_t)offset, &sec)) {
+    return GCHRON_ERR_RANGE;
+  }
+  built.sec = sec;
+  *out = built;
+  return GCHRON_OK;
+}
+
+GCHRON_Result gchron_interop_from_asn1_utctime(const char * text, size_t len,
+    int pivot, GCHRON_Instant * out) {
+  int yy = 0;
+  int month = 0;
+  int day = 0;
+  int hour = 0;
+  int minute = 0;
+  int second = 0;
+  int32_t nsec = 0;
+  int offset = 0;
+  int32_t year;
+  GCHRON_Result result;
+
+  if (text == NULL || out == NULL || pivot < 0 || pivot > 99) {
+    return GCHRON_ERR_INVALID;
+  }
+  if (!asn1_digits(text, len, 0, 2, &yy)
+      || !asn1_digits(text, len, 2, 2, &month)
+      || !asn1_digits(text, len, 4, 2, &day)
+      || !asn1_digits(text, len, 6, 2, &hour)
+      || !asn1_digits(text, len, 8, 2, &minute)) {
+    return GCHRON_ERR_FORMAT;
+  }
+  result = asn1_tail(text, len, 10, false, &second, &nsec, &offset);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  /* RFC 5280 section 4.1.2.5.1, with the pivot the caller chose. */
+  year = yy < pivot ? (int32_t)(2000 + yy) : (int32_t)(1900 + yy);
+  return asn1_assemble(year, month, day, hour, minute, second, nsec, offset,
+      out);
+}
+
+GCHRON_Result gchron_interop_to_asn1_utctime(const GCHRON_Instant * i,
+    int pivot, char out[GCHRON_ASN1_UTCTIME_BYTES]) {
+  GCHRON_DateTime dt;
+  GCHRON_Result result;
+  int32_t low;
+  int32_t high;
+
+  if (out == NULL || pivot < 0 || pivot > 99) {
+    return GCHRON_ERR_INVALID;
+  }
+  result = gchron_instant_to_utc(i, &dt);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  /*
+   * The hundred years this pivot can name. Outside them the two-digit year
+   * would be read back as a different century, so it is GCHRON_ERR_RANGE
+   * rather than a value that round-trips to the wrong answer - which is the
+   * whole failure mode two-digit years are famous for.
+   */
+  low = (int32_t)(1900 + pivot);
+  high = low + 99;
+  if (dt.date.year < low || dt.date.year > high) {
+    return GCHRON_ERR_RANGE;
+  }
+  if (dt.time.nsec != 0) {
+    /* UTCTime has no fraction; dropping one silently would move the value. */
+    return GCHRON_ERR_RANGE;
+  }
+  {
+    /*
+     * Bounded explicitly rather than left to the types. Every one of these
+     * is already in range - the year by the check above, the rest by
+     * gchron_instant_to_utc() - but saying so here is what lets the compiler
+     * see that thirteen characters fit in fourteen bytes, and it turns a
+     * broken invariant into GCHRON_ERR_INTERNAL instead of a truncated
+     * certificate date.
+     */
+    const int yy = (int)(dt.date.year % 100);
+    const int mo = (int)dt.date.month;
+    const int dd = (int)dt.date.day;
+    const int hh = (int)dt.time.hour;
+    const int mi = (int)dt.time.minute;
+    const int ss = (int)dt.time.second;
+
+    if (yy < 0 || yy > 99 || mo < 1 || mo > 12 || dd < 1 || dd > 31
+        || hh < 0 || hh > 23 || mi < 0 || mi > 59 || ss < 0 || ss > 59) {
+      return GCHRON_ERR_INTERNAL;
+    }
+    snprintf(out, GCHRON_ASN1_UTCTIME_BYTES, "%02d%02d%02d%02d%02d%02dZ",
+        yy, mo, dd, hh, mi, ss);
+  }
+  return GCHRON_OK;
+}
+
+GCHRON_Result gchron_interop_from_asn1_gentime(const char * text, size_t len,
+    GCHRON_Instant * out) {
+  int year = 0;
+  int month = 0;
+  int day = 0;
+  int hour = 0;
+  int minute = 0;
+  int second = 0;
+  int32_t nsec = 0;
+  int offset = 0;
+  GCHRON_Result result;
+
+  if (text == NULL || out == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  if (!asn1_digits(text, len, 0, 4, &year)
+      || !asn1_digits(text, len, 4, 2, &month)
+      || !asn1_digits(text, len, 6, 2, &day)
+      || !asn1_digits(text, len, 8, 2, &hour)
+      || !asn1_digits(text, len, 10, 2, &minute)) {
+    return GCHRON_ERR_FORMAT;
+  }
+  result = asn1_tail(text, len, 12, true, &second, &nsec, &offset);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  return asn1_assemble((int32_t)year, month, day, hour, minute, second, nsec,
+      offset, out);
+}
+
+GCHRON_Result gchron_interop_to_asn1_gentime(const GCHRON_Instant * i,
+    char out[GCHRON_ASN1_GENTIME_BYTES]) {
+  GCHRON_DateTime dt;
+  GCHRON_Result result;
+  int written;
+
+  if (out == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  result = gchron_instant_to_utc(i, &dt);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  if (dt.date.year < 0 || dt.date.year > 9999) {
+    return GCHRON_ERR_RANGE;
+  }
+  {
+    const int yyyy = (int)dt.date.year;
+    const int mo = (int)dt.date.month;
+    const int dd = (int)dt.date.day;
+    const int hh = (int)dt.time.hour;
+    const int mi = (int)dt.time.minute;
+    const int ss = (int)dt.time.second;
+
+    if (mo < 1 || mo > 12 || dd < 1 || dd > 31 || hh < 0 || hh > 23
+        || mi < 0 || mi > 59 || ss < 0 || ss > 59) {
+      return GCHRON_ERR_INTERNAL;
+    }
+    written = snprintf(out, GCHRON_ASN1_GENTIME_BYTES,
+        "%04d%02d%02d%02d%02d%02d", yyyy, mo, dd, hh, mi, ss);
+  }
+  if (written < 0 || (size_t)written >= GCHRON_ASN1_GENTIME_BYTES) {
+    return GCHRON_ERR_INTERNAL;
+  }
+  if (dt.time.nsec != 0) {
+    /*
+     * DER: no trailing zeros, and no point at all when the fraction would be
+     * zero. Nine digits are written and then the zeros are cut, which is
+     * shorter than deciding the precision first and is the same answer.
+     */
+    char frac[11];
+    int digits = 9;
+
+    snprintf(frac, sizeof frac, ".%09d", (int)dt.time.nsec);
+    while (digits > 1 && frac[digits] == '0') {
+      digits -= 1;
+    }
+    frac[digits + 1] = '\0';
+    if ((size_t)written + strlen(frac) + 2 > GCHRON_ASN1_GENTIME_BYTES) {
+      return GCHRON_ERR_INTERNAL;
+    }
+    memcpy(out + written, frac, strlen(frac));
+    written += (int)strlen(frac);
+  }
+  out[written] = 'Z';
+  out[written + 1] = '\0';
+  return GCHRON_OK;
+}

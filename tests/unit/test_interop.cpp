@@ -15,6 +15,10 @@
  */
 
 #include <cmath>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
 #include <cstring>
 #include <ctime>
 #include <limits>
@@ -481,4 +485,299 @@ TEST(Interop, EveryDoubleEntryPointRefusesWhatItCannotCast) {
   // The boundary is exclusive, and a value inside it still works.
   EXPECT_EQ(GCHRON_ERR_RANGE, gchron_interop_from_mjd(1e12, &i));
   EXPECT_EQ(GCHRON_OK, gchron_interop_from_mjd(0.0, &i));
+}
+
+/*--------------------------------------------------------------------------*
+ * ASN.1 - X.509, CMS, LDAP
+ *--------------------------------------------------------------------------*/
+
+namespace {
+
+struct Asn1Vector {
+  std::string encoded;
+  int64_t epoch;
+};
+
+/*
+ * The vectors are the notBefore and notAfter fields of the certificates in
+ * this machine's CA bundle, and the expected instant on each line is
+ * OpenSSL's reading of the string rather than ours. A corpus generated from
+ * our own writer would agree with our own reader about any shared mistake,
+ * and a two-digit year is exactly where to make one.
+ */
+std::vector<Asn1Vector> LoadAsn1Vectors() {
+  std::vector<Asn1Vector> out;
+  std::ifstream in(GCHRON_TEST_DATA "/asn1/ca_bundle_times.txt");
+  std::string line;
+
+  while (std::getline(in, line)) {
+    if (line.empty() || line[0] == '#') {
+      continue;
+    }
+    std::istringstream parts(line);
+    Asn1Vector v;
+    if (parts >> v.encoded >> v.epoch) {
+      out.push_back(v);
+    }
+  }
+  return out;
+}
+
+} // namespace
+
+TEST(Asn1, ReadsEveryTimeInTheCertificateBundle) {
+  const std::vector<Asn1Vector> vectors = LoadAsn1Vectors();
+  ASSERT_GT(vectors.size(), 200u)
+      << "the vector file did not load; this test would otherwise pass by "
+      << "checking nothing";
+
+  size_t utctime = 0;
+  size_t gentime = 0;
+  size_t nineteen = 0;
+  for (const Asn1Vector & v : vectors) {
+    GCHRON_Instant got{};
+    GCHRON_Result result;
+
+    if (v.encoded.size() == 13) {
+      result = gchron_interop_from_asn1_utctime(v.encoded.data(),
+          v.encoded.size(), GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &got);
+      utctime += 1;
+      if (v.encoded[0] >= '5') {
+        nineteen += 1;
+      }
+    }
+    else {
+      result = gchron_interop_from_asn1_gentime(v.encoded.data(),
+          v.encoded.size(), &got);
+      gentime += 1;
+    }
+    ASSERT_EQ(GCHRON_OK, result) << v.encoded;
+    EXPECT_EQ(v.epoch, got.sec) << v.encoded
+        << " read as " << got.sec << ", OpenSSL says " << v.epoch;
+    EXPECT_EQ(0, got.nsec);
+  }
+
+  /*
+   * Both sides of the pivot have to be present or the corpus is not testing
+   * the thing it exists for. The bundle is mostly 20xx, and the handful of
+   * 19xx roots are what keep this honest.
+   */
+  EXPECT_GT(utctime, 200u);
+  EXPECT_GE(gentime, 2u);
+  EXPECT_GE(nineteen, 2u)
+      << "no 19xx vector in the corpus, so the pivot is untested";
+}
+
+TEST(Asn1, TheCenturyPivotIsTheCallersToChoose) {
+  GCHRON_Instant got{};
+  const char * text = "490101000000Z";
+
+  /* RFC 5280: below 50 is 20xx, 50 and above is 19xx. So 49 is 2049. */
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_utctime(text, 13,
+      GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &got));
+  GCHRON_DateTime dt{};
+  ASSERT_EQ(GCHRON_OK, gchron_instant_to_utc(&got, &dt));
+  EXPECT_EQ(2049, dt.date.year);
+
+  /* A different pivot is a different century, which is the caller's call. */
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_utctime(text, 13, 40, &got));
+  ASSERT_EQ(GCHRON_OK, gchron_instant_to_utc(&got, &dt));
+  EXPECT_EQ(1949, dt.date.year)
+      << "with a pivot of 40, a year of 49 is in the 1900s";
+
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_asn1_utctime(text, 13,
+      100, &got));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_asn1_utctime(text, 13,
+      -1, &got));
+
+  /*
+   * The pivot year itself, which is the whole off-by-one. RFC 5280 says
+   * "less than 50" is 20xx, so 50 is 1950 and the window is 1950..2049.
+   *
+   * Nothing tested this until a mutant changed `<` to `<=` and every test
+   * still passed: the certificate corpus happens to contain no year 50, and
+   * the cases above use 49 and 40. A boundary that no vector lands on is a
+   * boundary no corpus can check.
+   */
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_utctime("500101000000Z", 13,
+      GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &got));
+  ASSERT_EQ(GCHRON_OK, gchron_instant_to_utc(&got, &dt));
+  EXPECT_EQ(1950, dt.date.year)
+      << "the pivot year is the first of the 1900s, not the last of the "
+      << "2000s";
+
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_utctime("491231235959Z", 13,
+      GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &got));
+  ASSERT_EQ(GCHRON_OK, gchron_instant_to_utc(&got, &dt));
+  EXPECT_EQ(2049, dt.date.year) << "and 49 is the last of the 2000s";
+}
+
+TEST(Asn1, EveryVectorRoundTripsThroughTheWriter) {
+  const std::vector<Asn1Vector> vectors = LoadAsn1Vectors();
+  ASSERT_GT(vectors.size(), 200u);
+
+  for (const Asn1Vector & v : vectors) {
+    GCHRON_Instant parsed{};
+    if (v.encoded.size() == 13) {
+      ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_utctime(v.encoded.data(),
+          v.encoded.size(), GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &parsed));
+      char buf[GCHRON_ASN1_UTCTIME_BYTES];
+      const GCHRON_Result wrote = gchron_interop_to_asn1_utctime(&parsed,
+          GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, buf);
+      if (wrote == GCHRON_ERR_RANGE) {
+        /* Outside the hundred years this pivot names; refused, not wrong. */
+        continue;
+      }
+      ASSERT_EQ(GCHRON_OK, wrote) << v.encoded;
+      EXPECT_EQ(v.encoded, std::string(buf));
+    }
+    else {
+      ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_gentime(v.encoded.data(),
+          v.encoded.size(), &parsed));
+      char buf[GCHRON_ASN1_GENTIME_BYTES];
+      ASSERT_EQ(GCHRON_OK, gchron_interop_to_asn1_gentime(&parsed, buf));
+      EXPECT_EQ(v.encoded, std::string(buf));
+    }
+  }
+}
+
+/*
+ * DER restricts what BER allows, and these are the restrictions two
+ * implementations most often differ on.
+ */
+TEST(Asn1, TheWriterIsDerStrict) {
+  GCHRON_Instant i{};
+  char buf[GCHRON_ASN1_GENTIME_BYTES];
+
+  /* A fraction that would be zero is omitted, along with its point. */
+  i.sec = 1000000000;
+  i.nsec = 0;
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_asn1_gentime(&i, buf));
+  EXPECT_EQ("20010909014640Z", std::string(buf));
+  EXPECT_EQ(nullptr, std::strchr(buf, '.'))
+      << "DER omits a zero fraction rather than writing .000";
+
+  /* A fraction never ends in a zero. */
+  i.nsec = 500000000;
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_asn1_gentime(&i, buf));
+  EXPECT_EQ("20010909014640.5Z", std::string(buf));
+
+  i.nsec = 123000000;
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_asn1_gentime(&i, buf));
+  EXPECT_EQ("20010909014640.123Z", std::string(buf));
+
+  i.nsec = 123456789;
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_asn1_gentime(&i, buf));
+  EXPECT_EQ("20010909014640.123456789Z", std::string(buf));
+
+  /* UTCTime has no fraction at all, so one is refused rather than dropped. */
+  char small[GCHRON_ASN1_UTCTIME_BYTES];
+  EXPECT_EQ(GCHRON_ERR_RANGE, gchron_interop_to_asn1_utctime(&i,
+      GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, small))
+      << "silently dropping the fraction would move the value";
+}
+
+TEST(Asn1, TheReaderAcceptsTheLooserBerSpellings) {
+  GCHRON_Instant strict{};
+  GCHRON_Instant loose{};
+
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_gentime("20010909014640.5Z",
+      17, &strict));
+
+  /* BER allows a comma for the decimal point; DER allows only a full stop. */
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_gentime("20010909014640,5Z",
+      17, &loose));
+  EXPECT_EQ(0, gchron_instant_compare(&strict, &loose));
+
+  /* Seconds may be absent. */
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_gentime("200109090146Z", 13,
+      &loose));
+  GCHRON_DateTime dt{};
+  ASSERT_EQ(GCHRON_OK, gchron_instant_to_utc(&loose, &dt));
+  EXPECT_EQ(0, dt.time.second);
+
+  /* An offset rather than Z, which older certificates carry. */
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_utctime("010909014640Z", 13,
+      GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &strict));
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_utctime("010909034640+0200",
+      17, GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &loose));
+  EXPECT_EQ(0, gchron_instant_compare(&strict, &loose))
+      << "+0200 means two hours ahead of UTC, so it names the same instant";
+
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_asn1_utctime("010908234640-0200",
+      17, GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &loose));
+  EXPECT_EQ(0, gchron_instant_compare(&strict, &loose));
+}
+
+TEST(Asn1, ALocalTimeWithNoZoneIsRefusedRatherThanAssumedUtc) {
+  GCHRON_Instant got{};
+
+  /* BER calls this local time. It names no instant without knowing where it
+   * was written, so it is refused (design.md, mistake M2). */
+  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED, gchron_interop_from_asn1_gentime(
+      "20010909014640", 14, &got));
+  EXPECT_EQ(GCHRON_ERR_UNSUPPORTED, gchron_interop_from_asn1_utctime(
+      "010909014640", 12, GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &got));
+}
+
+TEST(Asn1, MalformedInputIsFormatNotACrash) {
+  GCHRON_Instant got{};
+  const char * bad[] = {
+    "", "Z", "01", "0109090146", "01090901464xZ", "013209014640Z",
+    "010909014640X", "010909014640+99", "010909014640+2500",
+    "010909254640Z", "010909016040Z", "20010909014640.Z",
+    "20010909014640.5", "010909014640ZZ"
+  };
+
+  for (const char * text : bad) {
+    const size_t len = std::strlen(text);
+    const GCHRON_Result a = gchron_interop_from_asn1_utctime(text, len,
+        GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &got);
+    const GCHRON_Result b = gchron_interop_from_asn1_gentime(text, len, &got);
+    EXPECT_NE(GCHRON_OK, a) << "UTCTime accepted \"" << text << "\"";
+    EXPECT_NE(GCHRON_OK, b) << "GeneralizedTime accepted \"" << text << "\"";
+  }
+
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_asn1_utctime(nullptr, 0,
+      GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, &got));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_asn1_gentime("x", 1,
+      nullptr));
+}
+
+TEST(Asn1, AYearOutsideThePivotsWindowIsRefusedNotMiswritten) {
+  GCHRON_Instant i{};
+  char buf[GCHRON_ASN1_UTCTIME_BYTES];
+  GCHRON_DateTime dt{};
+
+  /* 2050 is outside 1950..2049, which is why X.509 switches to
+   * GeneralizedTime there. */
+  ASSERT_EQ(GCHRON_OK, gchron_date_create(2050, 1, 1, &dt.date));
+  dt.time.hour = 0;
+  dt.time.minute = 0;
+  dt.time.second = 0;
+  dt.time.nsec = 0;
+  ASSERT_EQ(GCHRON_OK, gchron_instant_from_utc(&dt, &i));
+  EXPECT_EQ(GCHRON_ERR_RANGE, gchron_interop_to_asn1_utctime(&i,
+      GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, buf))
+      << "writing 500101... would read back as 1950";
+
+  /* And the last year that does fit. */
+  ASSERT_EQ(GCHRON_OK, gchron_date_create(2049, 12, 31, &dt.date));
+  dt.time.hour = 23;
+  dt.time.minute = 59;
+  dt.time.second = 59;
+  ASSERT_EQ(GCHRON_OK, gchron_instant_from_utc(&dt, &i));
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_asn1_utctime(&i,
+      GCHRON_ASN1_UTCTIME_PIVOT_RFC5280, buf));
+  EXPECT_EQ("491231235959Z", std::string(buf));
+
+  /* GeneralizedTime has a four-digit year and so has no such edge. */
+  char big[GCHRON_ASN1_GENTIME_BYTES];
+  ASSERT_EQ(GCHRON_OK, gchron_date_create(2050, 1, 1, &dt.date));
+  dt.time.hour = 0;
+  dt.time.minute = 0;
+  dt.time.second = 0;
+  ASSERT_EQ(GCHRON_OK, gchron_instant_from_utc(&dt, &i));
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_asn1_gentime(&i, big));
+  EXPECT_EQ("20500101000000Z", std::string(big));
 }
