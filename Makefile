@@ -1122,13 +1122,32 @@ check-aliasing: $(LIBVER_GEN)
 # check-aliasing's explanation of what clang does not implement. Counting
 # prose as an invocation puts English sentences into a pinned number, so
 # rewording a message moves a figure that is supposed to measure the build.
-# A joined record is the right unit for reading a recipe and the wrong unit
-# for counting commands. The two have to be separated in both directions: an
-# invocation at the head of a continuation line is counted, and it does not
-# re-read the record's variables, because the first invocation already read
-# them and the same unrecorded name would be reported once per invocation.
-# UNRECORDED is pinned at zero, so a duplicate is not a cosmetic problem: it
-# is a count of faults that is not a count of faults. Only the compile arm consumes its record: a compile
+# Each count is in the unit its own message claims, which is not the same
+# unit for every arm:
+#
+#   TOTAL      "compile rules"         - rules.  One rule however many lines
+#                                        it spans, so the compile arm claims
+#                                        its whole record.
+#   LINKED     "link rules"            - rules.  The invariant is per rule -
+#                                        this rule names its tree's link
+#                                        stamp - and a second command in the
+#                                        same recipe is the same rule under
+#                                        the same stamp.
+#   UNMODELLED "compiler invocations"  - commands.  The pin exists to notice
+#                                        a new compiler call, so a call at
+#                                        the head of a continuation line
+#                                        counts, and the arm must not consume
+#                                        its record.
+#
+# UNRECORDED follows the rule, not the command: a record's variables are read
+# once, on the line that begins it. Reading them per invocation reports one
+# unrecorded name once per command, and since UNRECORDED is pinned at zero
+# that is a count of faults which is not a count of faults.
+#
+# Getting this wrong in either direction is quiet. Count records where the
+# message says invocations and a pinned number falls while the makefile still
+# says otherwise; count invocations where it says rules and one fault is
+# reported twice. Only the compile arm consumes its record: a compile
 # rule is one rule however many lines it occupies, and its marker may sit on
 # any of them. The link and unmodelled arms deliberately do not, because a
 # logical line can hold more than one compiler invocation - check-aliasing is
@@ -1184,13 +1203,14 @@ END {
       sub(/^\t[ \t]*/, "", head)
       sub(/^[-@]+[ \t]*/, "", head)
       sub(/^if[ \t]+/, "", head)
+      sub(/^![ \t]*/, "", head)
       sub(/^[-@]+[ \t]*/, "", head)
       if (head !~ /^\$$\$$?\([A-Z_]*(CC|CXX)\)[ \t]/ &&
           head !~ /^(cc|c\+\+|gcc|g\+\+|clang|clang\+\+)[ \t]/) continue
       hdr = cur; j = curline
       if (hdr !~ /LINK_FLAGS_STAMP/) { unmodelled++; continue }
-      linked++
       if (iscont) continue
+      linked++
       match(hdr, /\$$\([A-Z_]*LINK_FLAGS_STAMP\)/)
       sn = substr(hdr, RSTART + 2, RLENGTH - 3)
       delete rv; vars(rec, rv)
@@ -1270,12 +1290,12 @@ STAMP_UNMODELLED_EXPECTED := 2
 STAMP_LINK_PREREQ_EXPECTED := 3
 
 # What the planted control must produce. Four compile recipes, one of them
-# wrapped; one with no stamp; six variables no stamp records, three of them
-# past a line break and one before it; five stamped link invocations, two of
-# them sharing one rule; and three compiler invocations outside
+# wrapped; one with no stamp; seven variables no stamp records, three of them
+# past a line break and one before it; four stamped link rules, one of them
+# holding two invocations; and five compiler invocations outside
 # the model, two of which share one logical line. PREREQ is deliberately
 # absent - see the note by the comparison.
-STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 3 UNRECORDED 6 LINKED 5
+STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 5 UNRECORDED 7 LINKED 4
 
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	@mkdir -p $(BUILD_DIR)
@@ -1297,9 +1317,9 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		'$$(LINK_FLAGS_STAMP): force-flags' \
 		"@printf '%s' '\$$(LDFLAGS)' > \$$@.new" \
 		'$$(APP_DIR)/planted_link_ok: planted.o $$(LINK_FLAGS_STAMP)' \
-		'g++ $$(LDFLAGS) -o $$@ planted.o' \
-		'$$(APP_DIR)/planted_link_nostamp: planted.o' \
 		'c++ $$(LDFLAGS) -o $$@ planted.o' \
+		'$$(APP_DIR)/planted_link_nostamp: planted.o' \
+		'g++ $$(LDFLAGS) -o $$@ planted.o' \
 		'$$(APP_DIR)/planted_link_unrec: planted.o $$(LINK_FLAGS_STAMP)' \
 		'g++ $$(LDFLAGS) $$(PLANTED_LINK_UNRECORDED) -o $$@ planted.o' \
 		> $(BUILD_DIR)/stamp_control.mk
@@ -1327,6 +1347,13 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 # lose cc and c++ and nothing here notices: every planted compile rule is
 # found by its -c $< marker and never reaches that pattern at all.
 #
+# It is the *stamped* one deliberately. Spelled on the stampless rule it
+# moved UNMODELLED, where the record-consuming arm and the negation arm
+# already move the same field by the same amount, and three arms printed two
+# fingerprints between them. On the stamped rule it moves LINKED instead and
+# all three are distinguishable. Which field an arm disturbs is part of the
+# control's design, not a detail of where the shape happened to be planted.
+#
 # One correction to the commit that added this. It said chron has no wrapped
 # compile or link recipe, so the defect was latent here. chron has exactly
 # one wrapped compiler invocation - the fuzz harness build below, whose
@@ -1344,23 +1371,47 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		'cc $$(CFLAGS) $$(PLANTED_WRAPC_HEAD) $$(INCLUDE)' \
 		'  $$(PLANTED_WRAPC_UNRECORDED) -c $$< -o $$@' \
 		>> $(BUILD_DIR)/stamp_control.mk
-# One planted gate holds two compiler invocations on one logical line, the
-# second at the head of a continuation. It is the arm for counting records
+# One planted gate holds three compiler invocations on one logical line, two
+# of them at the head of a continuation. It is the arm for counting records
 # instead of commands: consume the record in the unmodelled arm and this
-# reads 1 where the makefile says 2.
-	@printf '%s\n\t%s \\\n\t%s \\\n\t%s\n' \
+# reads 1 where the makefile says 3.
+#
+# Three rather than two so that this arm and the bare-driver-name arm stay
+# distinguishable. Both remove invocations from UNMODELLED; with two, both
+# subtracted one and printed the same fingerprint, so the number said
+# something had broken without saying what. An arm that fails is the
+# requirement, but two arms that fail identically are one arm for the purpose
+# of reading the failure.
+	@printf '%s\n\t%s \\\n\t%s \\\n\t%s \\\n\t%s\n' \
 		'planted-gate:' \
 		'@if $$(CC) $$(CFLAGS) -fsyntax-only probe.c; then' \
 		'  $$(CC) $$(CFLAGS) -fsyntax-only probe2.c;' \
+		'  $$(CC) $$(CFLAGS) -fsyntax-only probe3.c;' \
 		'fi' \
 		>> $(BUILD_DIR)/stamp_control.mk
-# A stamped link rule holding two invocations, with one unrecorded variable
-# past the break. It arms both halves of the split: count the record instead
-# of the commands and LINKED is short by one; let the second invocation
-# re-read the record and the one variable is reported twice.
+# A stampless link rule spelled with a negation. The strip chain runs @, then
+# `if`, then @ again, and a `!` sits between the last two - so without a strip
+# for it the head test rejects the line as not starting with a compiler and
+# the rule lands in neither LINKED nor UNMODELLED. All zeros is the failure
+# mode: a file whose only link rule has no stamp reads as a file with no link
+# rules. Found by a peer porting this sweep into a library with three of them.
+	@printf '%s\n\t%s\n' \
+		'$$(APP_DIR)/planted_negated: planted.o' \
+		'@if ! $$(CXX) $$(LDFLAGS) -o $$@ planted.o; then exit 1; fi' \
+		>> $(BUILD_DIR)/stamp_control.mk
+# A stamped link rule holding two invocations, with a different unrecorded
+# variable in each. It arms three things at once: count the commands instead
+# of the rule and LINKED is long by one; let the second invocation re-read the
+# record and each name is reported twice; read one command instead of the
+# record and only the first name is reported.
+#
+# Two different variables rather than one repeated, because reading the record
+# once is a de-duplication and a de-duplication can swallow a real second
+# finding. "Reported once" and "the other one never reported" are the same
+# output when both names are the same.
 	@printf '%s\n\t%s \\\n\t%s\n' \
 		'$$(APP_DIR)/planted_two_invocations: planted.o $$(LINK_FLAGS_STAMP)' \
-		'g++ $$(LDFLAGS) -o $$@.a planted.o &&' \
+		'g++ $$(LDFLAGS) $$(PLANTED_FIRST_UNRECORDED) -o $$@.a planted.o &&' \
 		'  g++ $$(LDFLAGS) $$(PLANTED_SECOND_UNRECORDED) -o $$@.b planted.o' \
 		>> $(BUILD_DIR)/stamp_control.mk
 # PREREQ is cut from the comparison rather than pinned twice. It counts the
