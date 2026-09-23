@@ -224,7 +224,12 @@ vector is therefore a later *explicit* level, and `CFLAGS` ends with
 `$(EXTRA_CFLAGS)` - `make EXTRA_CFLAGS=-Wstrict-aliasing=3` builds at level
 3 with every flag still present and every sentence here still true.
 `make check-aliasing` catches that, because it compiles its planted
-violation with the real `$(CFLAGS)`. Read the effective level with
+violation with the real `$(CFLAGS)`. On failure it reports the *effective*
+level from `-Q` rather than guessing at a cause: only level 1 diagnoses the
+control, so a reported 0, 2 or 3 says the warning is at the wrong level
+rather than missing, and sends the reader to whatever appended a level
+instead of to `ALIASING_CFLAGS`, which in that case is untouched. A compiler
+that will not report a level at all is the clang case. Read the effective level with
 `gcc -Q --help=warnings <flags>` rather than off the flag list.
 Level 1 is free here only because chron does not build on a common first
 member - all 41 objects compile clean at it under `-Werror`, where

@@ -1009,14 +1009,32 @@ check-aliasing: $(LIBVER_GEN)
 		'}' > $(BUILD_DIR)/alias_control.c
 	@if $(CC) $(CFLAGS) $(INCLUDE) -fsyntax-only \
 			$(BUILD_DIR)/alias_control.c 2> $(BUILD_DIR)/alias_control.log; then \
+		lvl=$$($(CC) -Q --help=warnings $(CFLAGS) 2>/dev/null \
+			| awk '/-Wstrict-aliasing=<0,3>/ { print $$2 }'); \
 		printf "\033[0;31mcheck-aliasing: %s accepted a planted type-punning violation, so this build has no aliasing coverage.\033[0m\n" "$$($(CC) --version 2>/dev/null | head -1)" >&2; \
-		printf '%s\n' \
-			'  Two different things look like this, and they want opposite fixes:' \
-			'    - ALIASING_CFLAGS was disarmed, and the Makefile needs repairing; or' \
-			'    - this compiler does not implement -Wstrict-aliasing, and the Makefile is fine.' \
-			'  clang is the second case. It accepts -fstrict-aliasing -Wstrict-aliasing=1 in silence' \
-			'  and diagnoses nothing, so the flags appear on every compile line of a clang build while' \
-			'  detecting nothing at all. chron aliasing coverage is gcc-only; a clang run does not have it.' >&2; \
+		if [ -z "$$lvl" ]; then \
+			printf '%s\n' \
+				'  This compiler would not report an effective -Wstrict-aliasing level, which gcc gives' \
+				'  through -Q --help=warnings. Expect clang: it accepts -fstrict-aliasing' \
+				'  -Wstrict-aliasing=1 in silence and implements no such diagnostic, so the flags ride' \
+				'  every compile line of a clang build while detecting nothing. chron aliasing coverage' \
+				'  is gcc-only, and a clang run does not have it.' >&2; \
+		elif [ "$$lvl" = "1" ]; then \
+			printf '%s\n' \
+				'  The effective level is 1, which is the level that catches this violation. So the' \
+				'  flags are right and the compiler is not implementing them - that is clang, which' \
+				'  accepts -Wstrict-aliasing=1 in silence. chron aliasing coverage is gcc-only.' >&2; \
+		else \
+			printf '  The effective -Wstrict-aliasing level is %s, and only level 1 diagnoses this control.\n' "$$lvl" >&2; \
+			printf '%s\n' \
+				'  Levels 0, 2 and 3 are all silent on it, measured against this same file - so the' \
+				'  warning is at the WRONG LEVEL rather than missing, and ALIASING_CFLAGS is likely' \
+				'  untouched. What overrides it is a later EXPLICIT level, since an explicit level beats' \
+				'  the 3 that -Wall implies from either side. CFLAGS ends with EXTRA_CFLAGS, so' \
+				'  EXTRA_CFLAGS=-Wstrict-aliasing=3 does exactly this. Note that 3 is also what -Wall' \
+				'  implies on its own, so a level of 3 is equally what removing ALIASING_CFLAGS looks' \
+				'  like; 0 and 2 can only have been asked for.' >&2; \
+		fi; \
 		exit 1; \
 	fi
 	@if ! grep -q 'strict-aliasing' $(BUILD_DIR)/alias_control.log; then \
