@@ -52,6 +52,7 @@
 #include <string>
 #include <vector>
 
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace {
@@ -65,12 +66,40 @@ namespace {
  */
 class Sandbox {
 public:
-  Sandbox() {
-    char pattern[] = "/tmp/gchronfuzzXXXXXX";
-    const char * made = ::mkdtemp(pattern);
-    if (made != nullptr) {
-      path_ = made;
+  Sandbox() { open_one(); }
+
+  /**
+   * Make the directory, under TMPDIR when there is one.
+   *
+   * Not `/tmp` unconditionally, which is what this did first: this machine
+   * sweeps `/tmp` while work is running, and a swept sandbox is worse than a
+   * failed one. Every execution would still *pass* - the database refuses a
+   * directory that is not there, the harness returns early, and the fuzzer
+   * runs faster than ever while asking nothing at all.
+   */
+  bool open_one() {
+    const char * base = std::getenv("TMPDIR");
+    std::string pattern = std::string(base ? base : "/tmp")
+        + "/gchronfuzzXXXXXX";
+    std::vector<char> buffer(pattern.begin(), pattern.end());
+    buffer.push_back('\0');
+    const char * made = ::mkdtemp(buffer.data());
+    if (made == nullptr) {
+      return false;
     }
+    path_ = made;
+    written_.clear();
+    return true;
+  }
+
+  /** Whether the directory is still there, remaking it if it is not. */
+  bool ensure() {
+    struct stat info;
+    if (!path_.empty() && ::stat(path_.c_str(), &info) == 0
+        && S_ISDIR(info.st_mode)) {
+      return true;
+    }
+    return open_one();
   }
 
   ~Sandbox() {
@@ -130,7 +159,7 @@ std::vector<std::string> listing(GCHRON_ZoneDb * db) {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   static Sandbox sandbox;
-  if (sandbox.path().empty() || size < 1) {
+  if (!sandbox.ensure() || size < 1) {
     return 0;
   }
 
