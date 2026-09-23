@@ -300,6 +300,7 @@ endif
 BUILD_DIR := ./build/$(BUILD)
 OBJ_DIR := $(BUILD_DIR)/objects
 FLAGS_STAMP := $(OBJ_DIR)/.flags
+LINK_FLAGS_STAMP := $(OBJ_DIR)/.linkflags
 GEN_DIR := $(BUILD_DIR)/generated
 APP_DIR := $(BUILD_DIR)/apps
 
@@ -402,6 +403,12 @@ TZDATA_DIR ?=
 LIBOBJECTS := $(patsubst src/%.c,$(OBJ_DIR)/%.o,$(SOURCES))
 
 TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cflags gtest`
+
+# TESTFLAGS is backticks the *shell* expands when a recipe runs, so a stamp
+# recording $(TESTFLAGS) records that fixed string and nothing else: upgrade
+# gtest and the flags move while the stamp stays byte for byte identical.
+# Ask pkg-config at make time for the value the stamp is meant to watch.
+TESTFLAGS_RESOLVED := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cflags gtest 2>/dev/null)
 
 # The checks `make test` runs besides the tests themselves. Named in a
 # variable so that a build which cannot satisfy them can clear it: the
@@ -657,10 +664,10 @@ $(OBJ_DIR)/%.o: src/%.c $(FLAGS_STAMP) | $(LIBVER_GEN)
 # Shared Library
 ####################################################################
 
-$(APP_DIR)/$(TARGET): $(LIBOBJECTS)
+$(APP_DIR)/$(TARGET): $(LIBOBJECTS) $(LINK_FLAGS_STAMP)
 	@printf "\n### Compiling Chron Library ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) -shared -o $@ $^ $(LDFLAGS) $(CUTIL_LIBS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)
+	$(CXX) $(CXXFLAGS) -shared -o $@ $(LIBOBJECTS) $(LDFLAGS) $(CUTIL_LIBS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG)
 
 ifeq ($(OS_NAME), Linux)
 	@ln -f -s $(TARGET) $(APP_DIR)/$(SO_NAME)
@@ -719,7 +726,7 @@ define test-executable-rule
 TEST_OBJ_$1 := $(OBJ_DIR)/tests/$(basename $(notdir $1)).o
 
 $(APP_DIR)/$2$(EXE_EXTENSION): $$(TEST_OBJ_$1) $(TEST_HELPER_OBJ) \
-		$(APP_DIR)/$(STATIC_TARGET) | $(APP_DIR)/$(TARGET)
+		$(APP_DIR)/$(STATIC_TARGET) $(LINK_FLAGS_STAMP) | $(APP_DIR)/$(TARGET)
 	@printf "\n### Linking Test: $2 ###\n"
 	@mkdir -p $$(@D)
 	$(CXX) $(CXXFLAGS) -o $$@ $$(TEST_OBJ_$1) $(TEST_HELPER_OBJ) $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS) $(STATIC_LINK_LIBS)
@@ -734,7 +741,7 @@ $(foreach pair,$(TEST_PAIRS),\
 
 # Links the archive, so it depends on the archive; see test-executable-rule.
 $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) \
-		| $(APP_DIR)/$(TARGET)
+		$(LINK_FLAGS_STAMP) | $(APP_DIR)/$(TARGET)
 	@printf "\n### Compiling Example: $* ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS) $(STATIC_LINK_LIBS)
@@ -1023,8 +1030,12 @@ function vars(s, out,   v) {
     s = substr(s, RSTART + RLENGTH)
   }
 }
+BEGIN {
+  PREREQ_N = split("LIBOBJECTS ASAN_LIBOBJECTS TEST_HELPER_OBJ", pa, " ")
+  for (x = 1; x <= PREREQ_N; x++) PREREQ[pa[x]] = 1
+}
 END {
-  total = 0; bad = 0; unmodelled = 0; unrecorded = 0
+  total = 0; bad = 0; unmodelled = 0; unrecorded = 0; linked = 0
   for (i = 1; i <= NR; i++) {
     if (L[i] !~ /^\$$\([A-Z_]*FLAGS_STAMP\):/) continue
     name = L[i]; sub(/^\$$\(/, "", name); sub(/\).*/, "", name)
@@ -1035,8 +1046,17 @@ END {
       break
     }
   }
+  cur = ""; curline = 0; skipto = 0
   for (i = 1; i <= NR; i++) {
-    if (L[i] !~ /^\t/) continue
+    if (i <= skipto) continue
+    if (L[i] !~ /^\t/) {
+      if (L[i] ~ /:/ && L[i] !~ /:=/ && L[i] !~ /^\043/ && L[i] !~ /^[ ]/) {
+        cur = L[i]; curline = i; m = i
+        while (m < NR && L[m] ~ /\\[ \t]*$$/) { m++; cur = cur " " L[m] }
+        skipto = m
+      }
+      continue
+    }
     if (L[i] !~ /-c \$$</) {
       if (L[i] ~ /^\t[ \t]*\043/) continue
       if (L[i] ~ /-c \$$\$$</) continue
@@ -1045,16 +1065,25 @@ END {
       sub(/^[-@]+[ \t]*/, "", head)
       sub(/^if[ \t]+/, "", head)
       sub(/^[-@]+[ \t]*/, "", head)
-      if (head ~ /^\$$\$$?\([A-Z_]*(CC|CXX)\)[ \t]/ ||
-          head ~ /^(gcc|g\+\+|clang|clang\+\+)[ \t]/) unmodelled++
+      if (head !~ /^\$$\$$?\([A-Z_]*(CC|CXX)\)[ \t]/ &&
+          head !~ /^(gcc|g\+\+|clang|clang\+\+)[ \t]/) continue
+      hdr = cur; j = curline
+      if (hdr !~ /LINK_FLAGS_STAMP/) { unmodelled++; continue }
+      linked++
+      match(hdr, /\$$\([A-Z_]*LINK_FLAGS_STAMP\)/)
+      sn = substr(hdr, RSTART + 2, RLENGTH - 3)
+      delete rv; vars(L[i], rv)
+      for (v in rv) {
+        if (v == "" || v in PREREQ) continue
+        if (!((sn "|" v) in SV)) {
+          unrecorded++
+          printf "  %s:%d: link recipe expands $$(%s), which %s does not record\n", FILENAME, i, v, sn
+        }
+      }
       continue
     }
     total++
-    j = i - 1
-    while (j > 0 && (L[j] ~ /^\t/ || L[j] ~ /^[ \t]*$$/ || L[j] ~ /^\043/)) j--
-    hdr = L[j]
-    k = j - 1
-    while (k > 0 && L[k] ~ /\\[ \t]*$$/) { hdr = L[k] " " hdr; k-- }
+    hdr = cur; j = curline
     if (hdr !~ /FLAGS_STAMP/) {
       bad++
       printf "  %s:%d: compiles with no flags stamp: %s\n", FILENAME, j, hdr
@@ -1081,7 +1110,7 @@ END {
       }
     }
   }
-  printf "TOTAL %d BAD %d UNMODELLED %d UNRECORDED %d\n", total, bad, unmodelled, unrecorded
+  printf "TOTAL %d BAD %d UNMODELLED %d UNRECORDED %d LINKED %d PREREQ %d\n", total, bad, unmodelled, unrecorded, linked, PREREQ_N
 }
 endef
 
@@ -1111,7 +1140,12 @@ STAMP_CHECK_MAKEFILE := $(firstword $(MAKEFILE_LIST))
 # This is a pin, not a judgement. It fails when the number moves, so a new
 # compile-to-executable rule - in a library whose binaries do not happen to
 # depend on a stamped object - has to be looked at instead of passing.
-STAMP_UNMODELLED_EXPECTED := 9
+STAMP_UNMODELLED_EXPECTED := 2
+
+# Names the link sweep skips because the rule already lists them as file
+# prerequisites, where mtime is the real check. Pinned so the list cannot
+# grow into an excuse.
+STAMP_LINK_PREREQ_EXPECTED := 3
 
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	@mkdir -p $(BUILD_DIR)
@@ -1120,7 +1154,7 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 # rule: one stamped, one not. A sweep that has stopped matching compile
 # recipes reports nothing wrong, which is indistinguishable from a clean
 # makefile - so require it to find the planted one and only the planted one.
-	@printf '%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n' \
+	@printf '%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n' \
 		'$$(FLAGS_STAMP): force-flags' \
 		"@printf '%s' '\$$(CFLAGS) \$$(INCLUDE)' > \$$@.new" \
 		'$$(OBJ_DIR)/%.o: src/%.c $$(FLAGS_STAMP)' \
@@ -1129,11 +1163,19 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		'cc $$(CFLAGS) $$(INCLUDE) -c $$< -o $$@' \
 		'$$(OBJ_DIR)/planted_unrecorded.o: src/planted2.c $$(FLAGS_STAMP)' \
 		'cc $$(CFLAGS) $$(PLANTED_UNRECORDED) $$(INCLUDE) -c $$< -o $$@' \
+		'$$(LINK_FLAGS_STAMP): force-flags' \
+		"@printf '%s' '\$$(LDFLAGS)' > \$$@.new" \
+		'$$(APP_DIR)/planted_link_ok: planted.o $$(LINK_FLAGS_STAMP)' \
+		'g++ $$(LDFLAGS) -o $$@ planted.o' \
+		'$$(APP_DIR)/planted_link_nostamp: planted.o' \
+		'g++ $$(LDFLAGS) -o $$@ planted.o' \
+		'$$(APP_DIR)/planted_link_unrec: planted.o $$(LINK_FLAGS_STAMP)' \
+		'g++ $$(LDFLAGS) $$(PLANTED_LINK_UNRECORDED) -o $$@ planted.o' \
 		> $(BUILD_DIR)/stamp_control.mk
 	@ctl=$$(awk -f $(BUILD_DIR)/stamp_check.awk \
 			$(BUILD_DIR)/stamp_control.mk | tail -1); \
-	if [ "$$ctl" != "TOTAL 3 BAD 1 UNMODELLED 0 UNRECORDED 1" ]; then \
-		printf "\033[0;31mcheck-stamps: the control says '%s', not 'TOTAL 3 BAD 1 UNMODELLED 0 UNRECORDED 1' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" >&2; \
+	if [ "$$ctl" != "TOTAL 3 BAD 1 UNMODELLED 1 UNRECORDED 2 LINKED 2 PREREQ 3" ]; then \
+		printf "\033[0;31mcheck-stamps: the control says '%s', not 'TOTAL 3 BAD 1 UNMODELLED 1 UNRECORDED 2 LINKED 2 PREREQ 3' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" >&2; \
 		exit 1; \
 	fi
 
@@ -1148,7 +1190,9 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	got=$$(printf '%s\n' "$$out" | sed -n 's/^TOTAL \([0-9]*\) .*/\1/p'); \
 	bad=$$(printf '%s\n' "$$out" | sed -n 's/^TOTAL [0-9]* BAD \([0-9]*\) .*/\1/p'); \
 	unmodelled=$$(printf '%s\n' "$$out" | sed -n 's/.* UNMODELLED \([0-9]*\) .*/\1/p'); \
-	unrecorded=$$(printf '%s\n' "$$out" | sed -n 's/.* UNRECORDED \([0-9]*\)$$/\1/p'); \
+	unrecorded=$$(printf '%s\n' "$$out" | sed -n 's/.* UNRECORDED \([0-9]*\) .*/\1/p'); \
+	linked=$$(printf '%s\n' "$$out" | sed -n 's/.* LINKED \([0-9]*\) .*/\1/p'); \
+	prereq=$$(printf '%s\n' "$$out" | sed -n 's/.* PREREQ \([0-9]*\)$$/\1/p'); \
 	if [ "$$got" != "$$want" ]; then \
 		printf "\033[0;31mcheck-stamps: the sweep saw %s compile recipes and grep found %s. One of them is wrong, so neither count can be trusted.\033[0m\n" "$$got" "$$want" >&2; \
 		exit 1; \
@@ -1158,8 +1202,13 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 			"$$unmodelled" "$(STAMP_UNMODELLED_EXPECTED)" >&2; \
 		exit 1; \
 	fi; \
+	if [ "$$prereq" != "$(STAMP_LINK_PREREQ_EXPECTED)" ]; then \
+		printf "\033[0;31mcheck-stamps: the link sweep ignores %s variable names, not the %s it is pinned to. Those names are skipped because the rule already lists them as file prerequisites, so mtime covers them; a name added for any other reason silences the check for that variable.\033[0m\n" \
+			"$$prereq" "$(STAMP_LINK_PREREQ_EXPECTED)" >&2; \
+		exit 1; \
+	fi; \
 	if [ "$$unrecorded" != "0" ]; then \
-		printf "\033[0;31m\n### %s compile recipes expand a variable their stamp does not record ###\033[0m\n" "$$unrecorded" >&2; \
+		printf "\033[0;31m\n### %s recipes expand a variable their stamp does not record ###\033[0m\n" "$$unrecorded" >&2; \
 		printf '%s\n' "$$out" | grep 'does not record' >&2; \
 		printf "\nNaming the right stamp is not enough: the stamp only moves when the\n" >&2; \
 		printf "variables inside its own printf change. A flag that lives only in a\n" >&2; \
@@ -1174,7 +1223,7 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		printf "into everything downstream of it.\n" >&2; \
 		exit 1; \
 	fi; \
-	printf "\033[0;32mAll %s compile rules carry the flags stamp for their own tree; %s compiler invocations are outside the model, as pinned.\033[0m\n" "$$got" "$$unmodelled"
+	printf "\033[0;32mAll %s compile rules carry the flags stamp for their own tree and %s link rules carry their tree's link stamp, every variable either recorded or a file prerequisite; %s compiler invocations are outside the model, as pinned.\033[0m\n" "$$got" "$$linked" "$$unmodelled"
 
 check-layering: ## Fail if a lower tier includes a higher tier's header
 	$(call layering-check,0,$(TIER0_FORBIDDEN),$(TIER0_FILES))
@@ -1194,7 +1243,7 @@ ORACLE_SOURCES := $(wildcard tools/oracle/gchron_*.c)
 ORACLE_TOOLS := $(patsubst tools/oracle/%.c,$(APP_DIR)/tools/%$(EXE_EXTENSION),$(ORACLE_SOURCES))
 
 $(APP_DIR)/tools/%$(EXE_EXTENSION): tools/oracle/%.c $(APP_DIR)/$(STATIC_TARGET) \
-		| $(APP_DIR)/$(TARGET)
+		$(LINK_FLAGS_STAMP) | $(APP_DIR)/$(TARGET)
 	@printf "\n### Building oracle driver: $* ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS) $(STATIC_LINK_LIBS)
@@ -1209,7 +1258,7 @@ tools: $(ORACLE_TOOLS) $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
 ICU_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags icu-i18n icu-uc 2>/dev/null)
 ICU_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs icu-i18n icu-uc 2>/dev/null)
 
-$(APP_DIR)/tools/icu_format$(EXE_EXTENSION): tools/oracle/icu_format.cpp
+$(APP_DIR)/tools/icu_format$(EXE_EXTENSION): tools/oracle/icu_format.cpp $(LINK_FLAGS_STAMP)
 	@if [ -z "$(strip $(ICU_LIBS))" ]; then \
 		printf "\033[0;31micu_format: ICU was not found by pkg-config.\033[0m\n" >&2; \
 		printf "The LDML differential has no oracle without it, and design.md\n" >&2; \
@@ -1560,6 +1609,7 @@ ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) \
 ASAN_BUILD_DIR := ./build/$(BUILD)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
 ASAN_FLAGS_STAMP := $(ASAN_OBJ_DIR)/.flags
+ASAN_LINK_FLAGS_STAMP := $(ASAN_OBJ_DIR)/.linkflags
 ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
 
 ASAN_LIBOBJECTS := $(patsubst src/%.c,$(ASAN_OBJ_DIR)/%.o,$(SOURCES))
@@ -1578,10 +1628,10 @@ $(ASAN_OBJ_DIR)/%.o: src/%.c $(ASAN_FLAGS_STAMP)
 	@mkdir -p $(@D)
 	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
-$(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS)
+$(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS) $(ASAN_LINK_FLAGS_STAMP)
 	@printf "\n### Linking ASan+UBSan Chron Library ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(ASAN_CXXFLAGS) -shared -o $@ $^ $(ASAN_LDFLAGS) $(CUTIL_LIBS)
+	$(CXX) $(ASAN_CXXFLAGS) -shared -o $@ $(ASAN_LIBOBJECTS) $(ASAN_LDFLAGS) $(CUTIL_LIBS)
 
 $(ASAN_OBJ_DIR)/tests/%.o: tests/%.cpp $(ASAN_FLAGS_STAMP)
 	@printf "\n### Compiling ASan Test: $* ###\n"
@@ -1601,7 +1651,8 @@ $(ASAN_OBJ_DIR)/tests/%.o: tests/conformance/%.cpp $(ASAN_FLAGS_STAMP)
 define asan-test-executable-rule
 ASAN_TEST_OBJ_$1 := $(ASAN_OBJ_DIR)/tests/$(basename $(notdir $1)).o
 
-$(ASAN_APP_DIR)/$2$(EXE_EXTENSION): $$(ASAN_TEST_OBJ_$1) $(ASAN_APP_DIR)/$(ASAN_TARGET)
+$(ASAN_APP_DIR)/$2$(EXE_EXTENSION): $$(ASAN_TEST_OBJ_$1) $(ASAN_APP_DIR)/$(ASAN_TARGET) \
+		$(ASAN_LINK_FLAGS_STAMP)
 	@printf "\n### Linking ASan Test: $2 ###\n"
 	@mkdir -p $$(@D)
 	$(CXX) $(ASAN_CXXFLAGS) -o $$@ $$(ASAN_TEST_OBJ_$1) $(ASAN_LDFLAGS) $(ASAN_CHRONLIBRARY) $(CUTIL_LIBS) $(TESTFLAGS) $(STATIC_LINK_LIBS)
@@ -2051,6 +2102,24 @@ help: ## Display this help
 # not exist. And the first target in a makefile is the default goal, so a stamp
 # rule above `all:` makes a bare `make` build the stamp and nothing else.
 .PHONY: force-flags
+
+# Link flags are their own stamp rather than an addition to the compile
+# stamp: the two sets overlap but a change to one should not rebuild the
+# other's population. A gtest upgrade has no business recompiling 41
+# library objects.
+#
+# The archive rule is deliberately not here. It runs ar, which takes none
+# of these, and it passes $$^ - a stamp prerequisite would be archived
+# into the library rather than watched.
+$(LINK_FLAGS_STAMP): force-flags
+	@mkdir -p $(@D)
+	@printf '%s\n' '$(CC) $(CXX) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(CUTIL_LIBS) $(STATIC_LINK_LIBS) $(OS_SPECIFIC_LIBRARY_NAME_FLAG) $(ICU_CFLAGS) $(ICU_LIBS) $(CHRONLIBRARY) $(TESTFLAGS) $(TESTFLAGS_RESOLVED)' > $@.new
+	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
+
+$(ASAN_LINK_FLAGS_STAMP): force-flags
+	@mkdir -p $(@D)
+	@printf '%s\n' '$(CXX) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(ASAN_CHRONLIBRARY) $(CUTIL_LIBS) $(STATIC_LINK_LIBS) $(TESTFLAGS) $(TESTFLAGS_RESOLVED)' > $@.new
+	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)

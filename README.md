@@ -257,6 +257,32 @@ before being believed: built with `default` the library exports 287 symbols
 against 240 for `hidden`, so the flag was genuinely an input and the 0 was
 staleness rather than a no-op.
 
+Those three arms all read compile rules, which the gate selected by the `-c
+$<` in their recipes - and that marker is also what makes them blind to
+*link* rules, which take flags of their own. chron's link lines carry
+`$(TESTFLAGS)` for gtest, `$(CUTIL_LIBS)` and `$(ICU_LIBS)` from pkg-config,
+and no stamp recorded any of them: changing `TESTFLAGS` relinked 0 of 30 test
+binaries and changing `CUTIL_LIBS` relinked 0 of 30, with a touched test
+source relinking 1 to prove the count could move at all. pkg-config values
+are the reachable case here, because they change when `.local` is
+reinstalled rather than when anyone edits chron. Each tree now has a second
+stamp for link flags, kept separate from the compile stamp so that a gtest
+upgrade does not recompile 41 library objects, and the gate checks link rules
+the same way it checks compile rules. `TESTFLAGS` is recorded through a
+`$(shell ...)` of its pkg-config query rather than as itself: it is a
+backtick string the *shell* expands at recipe time, so recording
+`$(TESTFLAGS)` records characters that never change however far gtest moves.
+
+Two shapes of that change are worth naming. The shared-library and ASan
+library rules linked `$^`, so adding a stamp to their prerequisites would
+have handed a `.flags` file to the linker; both now name their object list
+explicitly. The archive rule still uses `$^` and deliberately has no stamp -
+it runs `ar`, which takes none of these flags, and a stamp there would be
+archived into the library rather than watched. The gate ignores three
+variable names on link lines, all object lists the rule already declares as
+file prerequisites where mtime is the real check, and the length of that list
+is pinned so it cannot quietly become an excuse.
+
 Its own sweep is checked three ways. A planted fragment carrying one
 unstamped rule and one whose recipe uses a variable the stamp omits must come
 back as exactly those two findings. An independent count of the same
