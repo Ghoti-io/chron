@@ -1122,6 +1122,15 @@ check-aliasing: $(LIBVER_GEN)
 # check-aliasing's explanation of what clang does not implement. Counting
 # prose as an invocation puts English sentences into a pinned number, so
 # rewording a message moves a figure that is supposed to measure the build.
+# A joined record is the right unit for reading a recipe and the wrong unit
+# for counting commands. Only the compile arm consumes its record: a compile
+# rule is one rule however many lines it occupies, and its marker may sit on
+# any of them. The link and unmodelled arms deliberately do not, because a
+# logical line can hold more than one compiler invocation - check-aliasing is
+# a single `@if ... fi` holding three - and consuming the record would count
+# them once while the pin, the message and the makefile all still say three.
+# That collapse looks like a clean refactor: the control passes, a pinned
+# number falls, and nothing says why. The arms below include one for it.
 define stamp-check-awk
 { L[NR] = $$0 }
 function vars(s, out,   v) {
@@ -1162,7 +1171,6 @@ END {
     }
     rec = L[i]; e = i
     while (e < NR && L[e] ~ /\\[ \t]*$$/) { e++; rec = rec " " L[e] }
-    skipto = e
     if (rec !~ /-c \$$</) {
       if (rec ~ /^\t[ \t]*\043/) continue
       if (rec ~ /-c \$$\$$</) continue
@@ -1172,7 +1180,7 @@ END {
       sub(/^if[ \t]+/, "", head)
       sub(/^[-@]+[ \t]*/, "", head)
       if (head !~ /^\$$\$$?\([A-Z_]*(CC|CXX)\)[ \t]/ &&
-          head !~ /^(gcc|g\+\+|clang|clang\+\+)[ \t]/) continue
+          head !~ /^(cc|c\+\+|gcc|g\+\+|clang|clang\+\+)[ \t]/) continue
       hdr = cur; j = curline
       if (hdr !~ /LINK_FLAGS_STAMP/) { unmodelled++; continue }
       linked++
@@ -1188,6 +1196,7 @@ END {
       }
       continue
     }
+    skipto = e
     total++
     hdr = cur; j = curline
     if (hdr !~ /FLAGS_STAMP/) {
@@ -1254,10 +1263,11 @@ STAMP_UNMODELLED_EXPECTED := 2
 STAMP_LINK_PREREQ_EXPECTED := 3
 
 # What the planted control must produce. Four compile recipes, one of them
-# wrapped; one with no stamp; four variables no stamp records, two of them
-# past a line break. PREREQ is deliberately absent - see the note by the
-# comparison.
-STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 1 UNRECORDED 4 LINKED 3
+# wrapped; one with no stamp; five variables no stamp records, two of them
+# past a line break and one before it; and three compiler invocations outside
+# the model, two of which share one logical line. PREREQ is deliberately
+# absent - see the note by the comparison.
+STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 3 UNRECORDED 5 LINKED 3
 
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	@mkdir -p $(BUILD_DIR)
@@ -1281,7 +1291,7 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		'$$(APP_DIR)/planted_link_ok: planted.o $$(LINK_FLAGS_STAMP)' \
 		'g++ $$(LDFLAGS) -o $$@ planted.o' \
 		'$$(APP_DIR)/planted_link_nostamp: planted.o' \
-		'g++ $$(LDFLAGS) -o $$@ planted.o' \
+		'c++ $$(LDFLAGS) -o $$@ planted.o' \
 		'$$(APP_DIR)/planted_link_unrec: planted.o $$(LINK_FLAGS_STAMP)' \
 		'g++ $$(LDFLAGS) $$(PLANTED_LINK_UNRECORDED) -o $$@ planted.o' \
 		> $(BUILD_DIR)/stamp_control.mk
@@ -1298,6 +1308,16 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 # that exercises nothing. It has to sit past the backslash - and for the
 # compile rule, on the same line as the -c $< that makes the rule visible at
 # all, so that dropping the join loses the variable and the rule together.
+# It carries a second variable *before* the break for the opposite reason:
+# with the marker past the break and nothing planted ahead of it, an unjoined
+# marker test still finds the rule on its continuation line and counts it
+# correctly, so TOTAL stops being able to show the defect. One variable on
+# each side of the backslash is what makes both joins load-bearing.
+#
+# One planted link rule is spelled c++ rather than g++, so that the bare
+# driver names in the head pattern are exercised. Without it the pattern can
+# lose cc and c++ and nothing here notices: every planted compile rule is
+# found by its -c $< marker and never reaches that pattern at all.
 #
 # One correction to the commit that added this. It said chron has no wrapped
 # compile or link recipe, so the defect was latent here. chron has exactly
@@ -1313,8 +1333,18 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		'g++ $$(LDFLAGS) -o $$@ planted.o' \
 		'  $$(PLANTED_WRAP_UNRECORDED)' \
 		'$$(OBJ_DIR)/planted_wrapc.o: src/planted3.c $$(FLAGS_STAMP)' \
-		'cc $$(CFLAGS) $$(INCLUDE)' \
+		'cc $$(CFLAGS) $$(PLANTED_WRAPC_HEAD) $$(INCLUDE)' \
 		'  $$(PLANTED_WRAPC_UNRECORDED) -c $$< -o $$@' \
+		>> $(BUILD_DIR)/stamp_control.mk
+# One planted gate holds two compiler invocations on one logical line, the
+# second at the head of a continuation. It is the arm for counting records
+# instead of commands: consume the record in the unmodelled arm and this
+# reads 1 where the makefile says 2.
+	@printf '%s\n\t%s \\\n\t%s \\\n\t%s\n' \
+		'planted-gate:' \
+		'@if $$(CC) $$(CFLAGS) -fsyntax-only probe.c; then' \
+		'  $$(CC) $$(CFLAGS) -fsyntax-only probe2.c;' \
+		'fi' \
 		>> $(BUILD_DIR)/stamp_control.mk
 # PREREQ is cut from the comparison rather than pinned twice. It counts the
 # link sweep's skip list, which is a constant of the sweep and not something
