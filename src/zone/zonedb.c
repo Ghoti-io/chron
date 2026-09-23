@@ -271,7 +271,7 @@ static char * join_path(const GCHRON_Allocator * allocator,
  * from gchron_zonedb_version() rather than a guess.
  */
 static char * read_version(const GCHRON_Allocator * allocator,
-    const char * directory) {
+    const GCHRON_Limits * limits, const char * directory) {
   static const char * const candidates[] = { "+VERSION", "tzdata.zi" };
   size_t which;
 
@@ -284,8 +284,8 @@ static char * read_version(const GCHRON_Allocator * allocator,
     if (path == NULL) {
       return NULL;
     }
-    if (gchron_zone_read_file(path, 1024 * 1024, allocator, &data, &len)
-        == GCHRON_OK) {
+    if (gchron_zone_read_file(path, limits->max_tzdata_bytes, allocator,
+            &data, &len) == GCHRON_OK) {
       char * text = (char *)data;
       char * start = text;
       char * end;
@@ -352,7 +352,7 @@ static GCHRON_Result db_create(const GCHRON_Allocator * allocator,
       gcu_allocator_free(allocator, db);
       return GCHRON_ERR_OOM;
     }
-    db->version = read_version(allocator, directory);
+    db->version = read_version(allocator, &db->limits, directory);
   }
   if (GCU_MUTEX_CREATE(db->lock) == 0) {
     db->lock_ready = true;
@@ -667,6 +667,14 @@ static void build_links(GCHRON_ZoneDb * db) {
   char * end;
 
   db->links_built = true;
+  /*
+   * The same file read under the same cap as read_version(). They were 4 MiB
+   * here and 1 MiB there, so a tzdata.zi between the two would have loaded
+   * its links and then failed to report its version - a database that knows
+   * every name the tzdb defines and cannot say which release it is. Nothing
+   * observable today, since a real one is about 110 KiB, but the two numbers
+   * described one file and disagreed about it.
+   */
   if (db->directory == NULL) {
     return;
   }
@@ -674,8 +682,8 @@ static void build_links(GCHRON_ZoneDb * db) {
   if (path == NULL) {
     return;
   }
-  if (gchron_zone_read_file(path, 4 * 1024 * 1024, db->allocator, &data, &len)
-      != GCHRON_OK) {
+  if (gchron_zone_read_file(path, db->limits.max_tzdata_bytes, db->allocator,
+          &data, &len) != GCHRON_OK) {
     gcu_allocator_free(db->allocator, path);
     return;
   }

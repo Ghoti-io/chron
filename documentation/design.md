@@ -1300,6 +1300,7 @@ the caller on a failing call, and the `CountingAllocator` pattern from
 | Field | Enforced in | Bounds |
 | --- | --- | --- |
 | `max_tzif_bytes` | zone loader | size of one TZif file |
+| `max_tzdata_bytes` | zone database | size of `tzdata.zi` |
 | `max_transitions` | TZif reader | transition records in one zone |
 | `max_zones` | database | zones loaded and cached |
 | `max_parse_length` | every parser | bytes of input |
@@ -1312,8 +1313,9 @@ loader takes one; `ERR_LIMIT` names the field in the message.
 
 `GCHRON_Limits` carries only the fields something enforces **today** -
 `max_parse_length` after phase 0, and `max_tzif_bytes`, `max_transitions`,
-`max_zone_types` and `max_zones` after phase 1 - and each of the rest arrives
-in the phase that enforces it. A limit nothing reads is a promise nothing keeps, and this
+`max_zone_types` and `max_zones` after phase 1, and `max_tzdata_bytes` when
+the two hardcoded caps on `tzdata.zi` were found to disagree with each other -
+and each of the rest arrives in the phase that enforces it. A limit nothing reads is a promise nothing keeps, and this
 suite has the scar: `regex` declared table flags it never consulted, and the
 mechanism they implied was designed twice before anyone noticed the field was
 dead.

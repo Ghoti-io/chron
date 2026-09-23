@@ -238,6 +238,7 @@ GCHRON_API void gchron_error_clear(GCHRON_Error * error);
 typedef struct GCHRON_Limits {
   size_t max_parse_length; ///< Longest text any parser will look at, in bytes.
   size_t max_tzif_bytes;   ///< Largest TZif image the zone loader will read.
+  size_t max_tzdata_bytes; ///< Largest `tzdata.zi` the zone database will read.
   size_t max_transitions;  ///< Transition records in one zone.
   size_t max_zone_types;   ///< Local-time types in one zone.
   size_t max_zones;        ///< Zones one database will load and cache.
@@ -329,6 +330,23 @@ GCHRON_API int gchron_unit_is_exact(GCHRON_Unit unit);
  * anything real and far below anything that matters to a process.
  */
 #define GCHRON_DEFAULT_MAX_TZIF_BYTES ((size_t)(1024 * 1024))
+
+/**
+ * The default for GCHRON_Limits::max_tzdata_bytes.
+ *
+ * `tzdata.zi` is the tzdb's own source in one file; the database reads it for
+ * its version line and for the link table. Every real one is around 110 KiB,
+ * and four megabytes is the larger of the two numbers this was hardcoded to
+ * before the limit existed - chosen so that raising it into the caller's
+ * hands refuses nothing that used to be read.
+ *
+ * It is a separate field from GCHRON_Limits::max_tzif_bytes because a
+ * `tzdata.zi` is not a TZif image: it is text, it is the whole database
+ * rather than one zone, and it is two orders of magnitude larger than the
+ * largest zone. A caller tightening the TZif cap is saying something about
+ * individual zones and should not thereby lose the link table.
+ */
+#define GCHRON_DEFAULT_MAX_TZDATA_BYTES ((size_t)(4 * 1024 * 1024))
 
 /**
  * The default for GCHRON_Limits::max_transitions.

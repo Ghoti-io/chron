@@ -733,6 +733,70 @@ TEST(ZoneDb, ALinkNameIsResolvedThroughTzdataZi) {
 }
 
 /*
+ * `tzdata.zi` is read twice by two different functions - read_version() for
+ * the `# version` line, and build_links() for the link table - and they used
+ * to apply two different hardcoded caps to it, 1 MiB and 4 MiB. Nothing was
+ * observable, because every real tzdata.zi is about 110 KiB and both numbers
+ * are far above it. A file between them would have loaded its links and then
+ * failed to report its version: a database that knows every name the tzdb
+ * defines and cannot say which release it is, which no caller could make
+ * sense of.
+ *
+ * The cap is now GCHRON_Limits::max_tzdata_bytes and both reads take it, so
+ * the property to hold is not a number but an agreement - at any cap, the
+ * two readers make the same decision about the same file.
+ *
+ * Told apart the way the link tests above are: by the bytes read. A resolved
+ * link opens the 128 KiB target, and an unresolved one never opens anything.
+ */
+TEST(ZoneDb, TheVersionLineAndTheLinkTableAreReadUnderOneCap) {
+  const std::string body(128 * 1024, 'x');
+  std::string zi = "# version 2026c\nL RealZone AliasZone\n";
+  zi += std::string(4096, '#');
+  zi += "\n";
+
+  auto probe = [&](size_t cap) {
+    gchrontest::TempDir dir;
+    dir.write("RealZone", body);
+    dir.write("tzdata.zi", zi);
+
+    GCHRON_Limits limits{};
+    gchron_limits_default(&limits);
+    limits.max_tzdata_bytes = cap;
+
+    gchrontest::RecordingAllocator recorder;
+    GCHRON_ZoneDb * db = nullptr;
+    EXPECT_EQ(GCHRON_OK, gchron_zonedb_directory(dir.path().c_str(),
+        recorder.get(), &limits, &db));
+
+    const bool has_version = (gchron_zonedb_version(db) != nullptr);
+
+    const size_t before = recorder.largest();
+    const GCHRON_Zone * zone = nullptr;
+    (void)gchron_zonedb_zone(db, "AliasZone", &zone);
+    const bool followed_link = recorder.largest() > before
+        && recorder.largest() >= body.size();
+
+    gchron_zonedb_destroy(db);
+    return std::make_pair(has_version, followed_link);
+  };
+
+  /* Below the file: both readers must refuse it. */
+  const std::pair<bool, bool> under = probe(64);
+  EXPECT_FALSE(under.first)
+      << "a cap of 64 bytes refused the link table but still read the "
+      << "version line out of the same " << zi.size() << "-byte file";
+  EXPECT_FALSE(under.second)
+      << "a cap of 64 bytes refused the version line but still built the "
+      << "link table out of the same " << zi.size() << "-byte file";
+
+  /* Above it: both must read it. */
+  const std::pair<bool, bool> over = probe(zi.size() + 1);
+  EXPECT_TRUE(over.first);
+  EXPECT_TRUE(over.second);
+}
+
+/*
  * A line `tzdata.zi` does not use, next to one it does.
  *
  * build_links() walks the file twice: once to count the link lines so the

@@ -188,6 +188,7 @@ void gchron_limits_default(GCHRON_Limits * limits) {
   }
   limits->max_parse_length = GCHRON_DEFAULT_MAX_PARSE_LENGTH;
   limits->max_tzif_bytes = GCHRON_DEFAULT_MAX_TZIF_BYTES;
+  limits->max_tzdata_bytes = GCHRON_DEFAULT_MAX_TZDATA_BYTES;
   limits->max_transitions = GCHRON_DEFAULT_MAX_TRANSITIONS;
   limits->max_zone_types = GCHRON_DEFAULT_MAX_ZONE_TYPES;
   limits->max_zones = GCHRON_DEFAULT_MAX_ZONES;
