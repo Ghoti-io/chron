@@ -1337,7 +1337,20 @@ STAMP_CHECK_AWK := $(BUILD_DIR)/stamp_check.awk
 # command in a never-built clone, `rm -rf build` between each. Eleven targets
 # here, across every reachable rule including the fuzz tree. `make -n` is not
 # a substitute - it resolves the graph without compiling, so a missing
-# order-only prerequisite cannot show up.
+# order-only prerequisite cannot show up. The peer who found this class
+# started with `-n`, got a pass, and the defect was there; so did I, one
+# target further on, where the pass was really a target name I had invented.
+# Read the exit status, and know the two texts apart: "No rule to make target"
+# is a wrong path of your own, "No such file or directory" from the compiler
+# is a real missing prerequisite.
+#
+# The two rules that match no source - tests/%.cpp in the release and ASan
+# trees - are covered by making them briefly reachable rather than by reading
+# them: drop a throwaway tests/*.cpp into a clone, build its object, delete
+# the clone. Both build. And the probe is not vacuous - removing the
+# order-only prerequisite from the rule under it fails with exactly the error
+# this section is about. An unreachable rule can be tested; it just cannot be
+# tested in place.
 STAMP_UNMODELLED_EXPECTED := 1
 
 # Gate probes: compiler invocations that produce nothing. check-aliasing's
