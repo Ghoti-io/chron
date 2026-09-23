@@ -227,6 +227,17 @@ fail both ways, disarmed and broken-for-another-reason, and the second
 attempt found a bug in the first one's error message that only the failing
 path could show.
 
+**That instrument is gcc's.** clang accepts `-fstrict-aliasing
+-Wstrict-aliasing=1` in silence and implements no such diagnostic - it rejects
+only the level 3 spelling, as an unknown warning option. So a `make CC=clang`
+build carries the aliasing flags on every compile line and has no aliasing
+coverage whatsoever, and nothing about the command line says so. `make
+check-aliasing` fails under clang for that reason, which is correct and not a
+Makefile fault; its message names the compiler that accepted the violation,
+because a disarmed `ALIASING_CFLAGS` and a compiler without the warning look
+identical and want opposite fixes. Running the suite under clang therefore
+needs a decision about aliasing coverage rather than a flag.
+
 `make check-stamps` guards the build's own incrementality. Every object rule
 names a stamp file holding the flags it was compiled with, so changing a flag
 rebuilds what it affects; a rule added without one compiles with whatever is

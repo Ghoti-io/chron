@@ -953,6 +953,12 @@ check-aliasing: ## Fail if the strict-aliasing warning is no longer armed
 # It is deliberately the real $(CFLAGS) and not a copy: a control compiled
 # with flags written out beside it proves those flags work, which is not the
 # question.
+#
+# The warning is a gcc diagnostic. clang accepts -Wstrict-aliasing=1 and
+# implements nothing, so `make CC=clang` reaches this gate with the aliasing
+# flags visible on every compile line and no aliasing coverage behind them.
+# That is a true failure and the gate reports it, but the reason is the
+# compiler rather than the flags, so the message names both causes.
 check-aliasing: $(LIBVER_GEN)
 	@mkdir -p $(BUILD_DIR)
 	@printf '%s\n' \
@@ -964,7 +970,14 @@ check-aliasing: $(LIBVER_GEN)
 		'}' > $(BUILD_DIR)/alias_control.c
 	@if $(CC) $(CFLAGS) $(INCLUDE) -fsyntax-only \
 			$(BUILD_DIR)/alias_control.c 2> $(BUILD_DIR)/alias_control.log; then \
-		printf "\033[0;31mcheck-aliasing: the build accepted a planted type-punning violation. ALIASING_CFLAGS is no longer armed, and a clean build proves nothing about aliasing.\033[0m\n" >&2; \
+		printf "\033[0;31mcheck-aliasing: %s accepted a planted type-punning violation, so this build has no aliasing coverage.\033[0m\n" "$$($(CC) --version 2>/dev/null | head -1)" >&2; \
+		printf '%s\n' \
+			'  Two different things look like this, and they want opposite fixes:' \
+			'    - ALIASING_CFLAGS was disarmed, and the Makefile needs repairing; or' \
+			'    - this compiler does not implement -Wstrict-aliasing, and the Makefile is fine.' \
+			'  clang is the second case. It accepts -fstrict-aliasing -Wstrict-aliasing=1 in silence' \
+			'  and diagnoses nothing, so the flags appear on every compile line of a clang build while' \
+			'  detecting nothing at all. chron aliasing coverage is gcc-only; a clang run does not have it.' >&2; \
 		exit 1; \
 	fi
 	@if ! grep -q 'strict-aliasing' $(BUILD_DIR)/alias_control.log; then \
@@ -995,6 +1008,12 @@ check-aliasing: $(LIBVER_GEN)
 # What it does not check: that the stamp's own recipe records the flags this
 # rule uses. FLAGS_STAMP records CFLAGS, CXXFLAGS, LDFLAGS and INCLUDE
 # together, so a rule compiling with some fifth variable would pass.
+# The unmodelled arm anchors at the head of the recipe line. A compiler
+# named anywhere in the line also matches an echo that mentions one, and
+# chron has two: the fuzz target's "install clang" advice, and
+# check-aliasing's explanation of what clang does not implement. Counting
+# prose as an invocation puts English sentences into a pinned number, so
+# rewording a message moves a figure that is supposed to measure the build.
 define stamp-check-awk
 { L[NR] = $$0 }
 function vars(s, out,   v) {
@@ -1021,9 +1040,13 @@ END {
     if (L[i] !~ /-c \$$</) {
       if (L[i] ~ /^\t[ \t]*\043/) continue
       if (L[i] ~ /-c \$$\$$</) continue
-      if (L[i] ~ /printf/) continue
-      if (L[i] ~ /\$$\([A-Z_]*(CC|CXX)\)/ ||
-          L[i] ~ /(^|[ \t])(gcc|g\+\+|clang|clang\+\+)[ \t]/) unmodelled++
+      head = L[i]
+      sub(/^\t[ \t]*/, "", head)
+      sub(/^[-@]+[ \t]*/, "", head)
+      sub(/^if[ \t]+/, "", head)
+      sub(/^[-@]+[ \t]*/, "", head)
+      if (head ~ /^\$$\$$?\([A-Z_]*(CC|CXX)\)[ \t]/ ||
+          head ~ /^(gcc|g\+\+|clang|clang\+\+)[ \t]/) unmodelled++
       continue
     }
     total++
@@ -1088,7 +1111,7 @@ STAMP_CHECK_MAKEFILE := $(firstword $(MAKEFILE_LIST))
 # This is a pin, not a judgement. It fails when the number moves, so a new
 # compile-to-executable rule - in a library whose binaries do not happen to
 # depend on a stamped object - has to be looked at instead of passing.
-STAMP_UNMODELLED_EXPECTED := 10
+STAMP_UNMODELLED_EXPECTED := 9
 
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	@mkdir -p $(BUILD_DIR)
