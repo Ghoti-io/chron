@@ -1123,7 +1123,12 @@ check-aliasing: $(LIBVER_GEN)
 # prose as an invocation puts English sentences into a pinned number, so
 # rewording a message moves a figure that is supposed to measure the build.
 # A joined record is the right unit for reading a recipe and the wrong unit
-# for counting commands. Only the compile arm consumes its record: a compile
+# for counting commands. The two have to be separated in both directions: an
+# invocation at the head of a continuation line is counted, and it does not
+# re-read the record's variables, because the first invocation already read
+# them and the same unrecorded name would be reported once per invocation.
+# UNRECORDED is pinned at zero, so a duplicate is not a cosmetic problem: it
+# is a count of faults that is not a count of faults. Only the compile arm consumes its record: a compile
 # rule is one rule however many lines it occupies, and its marker may sit on
 # any of them. The link and unmodelled arms deliberately do not, because a
 # logical line can hold more than one compiler invocation - check-aliasing is
@@ -1171,6 +1176,7 @@ END {
     }
     rec = L[i]; e = i
     while (e < NR && L[e] ~ /\\[ \t]*$$/) { e++; rec = rec " " L[e] }
+    iscont = (i > 1 && L[i - 1] ~ /\\[ \t]*$$/)
     if (rec !~ /-c \$$</) {
       if (rec ~ /^\t[ \t]*\043/) continue
       if (rec ~ /-c \$$\$$</) continue
@@ -1184,6 +1190,7 @@ END {
       hdr = cur; j = curline
       if (hdr !~ /LINK_FLAGS_STAMP/) { unmodelled++; continue }
       linked++
+      if (iscont) continue
       match(hdr, /\$$\([A-Z_]*LINK_FLAGS_STAMP\)/)
       sn = substr(hdr, RSTART + 2, RLENGTH - 3)
       delete rv; vars(rec, rv)
@@ -1263,11 +1270,12 @@ STAMP_UNMODELLED_EXPECTED := 2
 STAMP_LINK_PREREQ_EXPECTED := 3
 
 # What the planted control must produce. Four compile recipes, one of them
-# wrapped; one with no stamp; five variables no stamp records, two of them
-# past a line break and one before it; and three compiler invocations outside
+# wrapped; one with no stamp; six variables no stamp records, three of them
+# past a line break and one before it; five stamped link invocations, two of
+# them sharing one rule; and three compiler invocations outside
 # the model, two of which share one logical line. PREREQ is deliberately
 # absent - see the note by the comparison.
-STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 3 UNRECORDED 5 LINKED 3
+STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 3 UNRECORDED 6 LINKED 5
 
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	@mkdir -p $(BUILD_DIR)
@@ -1345,6 +1353,15 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		'@if $$(CC) $$(CFLAGS) -fsyntax-only probe.c; then' \
 		'  $$(CC) $$(CFLAGS) -fsyntax-only probe2.c;' \
 		'fi' \
+		>> $(BUILD_DIR)/stamp_control.mk
+# A stamped link rule holding two invocations, with one unrecorded variable
+# past the break. It arms both halves of the split: count the record instead
+# of the commands and LINKED is short by one; let the second invocation
+# re-read the record and the one variable is reported twice.
+	@printf '%s\n\t%s \\\n\t%s\n' \
+		'$$(APP_DIR)/planted_two_invocations: planted.o $$(LINK_FLAGS_STAMP)' \
+		'g++ $$(LDFLAGS) -o $$@.a planted.o &&' \
+		'  g++ $$(LDFLAGS) $$(PLANTED_SECOND_UNRECORDED) -o $$@.b planted.o' \
 		>> $(BUILD_DIR)/stamp_control.mk
 # PREREQ is cut from the comparison rather than pinned twice. It counts the
 # link sweep's skip list, which is a constant of the sweep and not something
