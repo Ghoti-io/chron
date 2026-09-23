@@ -1144,3 +1144,145 @@ GCHRON_Result gchron_interop_to_asn1_gentime(const GCHRON_Instant * i,
   out[written + 1] = '\0';
   return GCHRON_OK;
 }
+
+/*--------------------------------------------------------------------------*
+ * struct timeval
+ *--------------------------------------------------------------------------*/
+
+GCHRON_Result gchron_interop_from_timeval(time_t tv_sec, int32_t tv_usec,
+    GCHRON_Instant * out) {
+  GCHRON_Instant built;
+  GCHRON_Result result;
+
+  if (out == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  /*
+   * An unnormalised field is a bug in whatever produced the timeval, and
+   * carrying it silently would hide that. There is no right guess: a
+   * tv_usec of 1500000 might mean 1.5 seconds or might be a truncated
+   * nanosecond count that should have been divided.
+   */
+  if (tv_usec < 0 || tv_usec > 999999) {
+    return GCHRON_ERR_INVALID;
+  }
+  result = gchron_interop_from_time_t(tv_sec, &built);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  built.nsec = tv_usec * 1000;
+  *out = built;
+  return GCHRON_OK;
+}
+
+GCHRON_Result gchron_interop_to_timeval(const GCHRON_Instant * i,
+    time_t * out_sec, int32_t * out_usec) {
+  time_t narrowed;
+  GCHRON_Result result;
+
+  if (!gchron_instant_is_valid(i)) {
+    return GCHRON_ERR_INVALID;
+  }
+  result = gchron_interop_to_time_t(i, &narrowed);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  if (out_sec != NULL) {
+    *out_sec = narrowed;
+  }
+  if (out_usec != NULL) {
+    /*
+     * Floors, because the nanoseconds are 0..999999999 with the sign already
+     * in the seconds. That is the same direction
+     * gchron_instant_to_unix_micros() takes, so the two cannot disagree
+     * about the same instant.
+     */
+    *out_usec = (int32_t)(i->nsec / 1000);
+  }
+  return GCHRON_OK;
+}
+
+/*--------------------------------------------------------------------------*
+ * Windows SYSTEMTIME
+ *--------------------------------------------------------------------------*/
+
+GCHRON_Result gchron_interop_from_systemtime(uint16_t year, uint16_t month,
+    uint16_t day, uint16_t hour, uint16_t minute, uint16_t second,
+    uint16_t milliseconds, GCHRON_DateTime * out) {
+  GCHRON_DateTime built;
+  GCHRON_Result result;
+
+  if (out == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  if (hour > 23 || minute > 59 || second > 59 || milliseconds > 999) {
+    return GCHRON_ERR_INVALID;
+  }
+  result = gchron_date_create((int32_t)year, (int)month, (int)day,
+      &built.date);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  built.time.hour = (uint8_t)hour;
+  built.time.minute = (uint8_t)minute;
+  built.time.second = (uint8_t)second;
+  built.time.nsec = (int32_t)milliseconds * 1000000;
+  *out = built;
+  return GCHRON_OK;
+}
+
+GCHRON_Result gchron_interop_to_systemtime(const GCHRON_DateTime * dt,
+    uint16_t * out_year, uint16_t * out_month, uint16_t * out_day_of_week,
+    uint16_t * out_day, uint16_t * out_hour, uint16_t * out_minute,
+    uint16_t * out_second, uint16_t * out_milliseconds) {
+  int dow = 0;
+  GCHRON_Result result;
+
+  if (!gchron_datetime_is_valid(dt)) {
+    return GCHRON_ERR_INVALID;
+  }
+  /*
+   * The range the field can hold. Windows documents SYSTEMTIME as valid from
+   * 1601, which is also where FILETIME's epoch is.
+   */
+  if (dt->date.year < 1601 || dt->date.year > 30827) {
+    return GCHRON_ERR_RANGE;
+  }
+  result = gchron_date_day_of_week(&dt->date, &dow);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+
+  if (out_year != NULL) {
+    *out_year = (uint16_t)dt->date.year;
+  }
+  if (out_month != NULL) {
+    *out_month = (uint16_t)dt->date.month;
+  }
+  if (out_day_of_week != NULL) {
+    /*
+     * The one place this library speaks Sunday-0. gchron_date_day_of_week()
+     * is ISO 8601's Monday-1..Sunday-7 everywhere else, and the conversion
+     * lives here rather than anywhere a caller might meet it by accident
+     * (design.md, mistake M7).
+     */
+    *out_day_of_week = (uint16_t)(dow % 7);
+  }
+  if (out_day != NULL) {
+    *out_day = (uint16_t)dt->date.day;
+  }
+  if (out_hour != NULL) {
+    *out_hour = (uint16_t)dt->time.hour;
+  }
+  if (out_minute != NULL) {
+    *out_minute = (uint16_t)dt->time.minute;
+  }
+  if (out_second != NULL) {
+    *out_second = (uint16_t)dt->time.second;
+  }
+  if (out_milliseconds != NULL) {
+    /* Floors, like gchron_interop_to_timeval(). */
+    *out_milliseconds = (uint16_t)(dt->time.nsec / 1000000);
+  }
+  return GCHRON_OK;
+}

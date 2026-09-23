@@ -781,3 +781,210 @@ TEST(Asn1, AYearOutsideThePivotsWindowIsRefusedNotMiswritten) {
   ASSERT_EQ(GCHRON_OK, gchron_interop_to_asn1_gentime(&i, big));
   EXPECT_EQ("20500101000000Z", std::string(big));
 }
+
+/*--------------------------------------------------------------------------*
+ * struct timeval
+ *--------------------------------------------------------------------------*/
+
+TEST(Timeval, RoundTripsOverASweptRange) {
+  const int64_t seconds[] = { 0, 1, -1, 1000000000, -1000000000,
+      2147483647, -2147483648LL };
+  const int32_t micros[] = { 0, 1, 999999, 500000 };
+
+  for (int64_t s : seconds) {
+    for (int32_t us : micros) {
+      GCHRON_Instant i{};
+      if (gchron_interop_from_timeval(static_cast<time_t>(s), us, &i)
+          != GCHRON_OK) {
+        continue;
+      }
+      EXPECT_EQ(s, i.sec);
+      EXPECT_EQ(us * 1000, i.nsec);
+
+      time_t back_s = 0;
+      int32_t back_us = 0;
+      ASSERT_EQ(GCHRON_OK, gchron_interop_to_timeval(&i, &back_s, &back_us));
+      EXPECT_EQ(s, static_cast<int64_t>(back_s));
+      EXPECT_EQ(us, back_us);
+    }
+  }
+}
+
+TEST(Timeval, TheMicrosecondDirectionFloorsAndSaysSo) {
+  GCHRON_Instant i{};
+  i.sec = 5;
+  i.nsec = 1999;  /* 1.999 microseconds */
+
+  time_t sec = 0;
+  int32_t usec = -1;
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_timeval(&i, &sec, &usec));
+  EXPECT_EQ(1, usec) << "1.999us floors to 1, it does not round to 2";
+
+  /* And it agrees with the other lossy microsecond conversion, which is the
+   * property that matters more than the direction itself. */
+  int64_t micros = 0;
+  ASSERT_EQ(GCHRON_OK, gchron_instant_to_unix_micros(&i, &micros));
+  EXPECT_EQ(micros, static_cast<int64_t>(sec) * 1000000 + usec);
+
+  /* Before the epoch too, where a truncation toward zero would disagree. */
+  i.sec = -1;
+  i.nsec = 1999;
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_timeval(&i, &sec, &usec));
+  ASSERT_EQ(GCHRON_OK, gchron_instant_to_unix_micros(&i, &micros));
+  EXPECT_EQ(micros, static_cast<int64_t>(sec) * 1000000 + usec);
+}
+
+TEST(Timeval, AnUnnormalisedFieldIsRefusedRatherThanCarried) {
+  GCHRON_Instant i{};
+
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_timeval(0, 1000000, &i))
+      << "a tv_usec of 1000000 might mean one second or might be a bug; "
+      << "there is no right guess";
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_timeval(0, -1, &i));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_timeval(0, 0, nullptr));
+
+  const GCHRON_Instant bad{1, -1};
+  time_t sec = 0;
+  int32_t usec = 0;
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_to_timeval(&bad, &sec, &usec));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_to_timeval(nullptr, &sec,
+      &usec));
+}
+
+/*--------------------------------------------------------------------------*
+ * Windows SYSTEMTIME
+ *--------------------------------------------------------------------------*/
+
+TEST(SystemTime, RoundTripsOverASweptRange) {
+  const int years[] = { 1601, 1900, 1970, 2000, 2026, 9999, 30827 };
+  const int months[] = { 1, 2, 12 };
+  const int days[] = { 1, 28 };
+
+  for (int y : years) {
+    for (int mo : months) {
+      for (int d : days) {
+        GCHRON_DateTime dt{};
+        ASSERT_EQ(GCHRON_OK, gchron_interop_from_systemtime(
+            static_cast<uint16_t>(y), static_cast<uint16_t>(mo),
+            static_cast<uint16_t>(d), 13, 45, 30, 250, &dt));
+        EXPECT_EQ(y, dt.date.year);
+        EXPECT_EQ(mo, dt.date.month);
+        EXPECT_EQ(d, dt.date.day);
+        EXPECT_EQ(250 * 1000000, dt.time.nsec);
+
+        uint16_t year = 0, month = 0, dow = 99, day = 0, hour = 0, minute = 0,
+            second = 0, ms = 0;
+        ASSERT_EQ(GCHRON_OK, gchron_interop_to_systemtime(&dt, &year, &month,
+            &dow, &day, &hour, &minute, &second, &ms));
+        EXPECT_EQ(y, year);
+        EXPECT_EQ(mo, month);
+        EXPECT_EQ(d, day);
+        EXPECT_EQ(13, hour);
+        EXPECT_EQ(45, minute);
+        EXPECT_EQ(30, second);
+        EXPECT_EQ(250, ms);
+      }
+    }
+  }
+}
+
+/*
+ * wDayOfWeek is documented by Windows as output only. A caller filling a
+ * SYSTEMTIME in by hand may well have it wrong, so it is computed from the
+ * date and never taken - which is why gchron_interop_from_systemtime() has
+ * no parameter for it at all rather than a parameter it ignores.
+ */
+TEST(SystemTime, TheDayOfWeekIsComputedAndIsSundayZero) {
+  GCHRON_DateTime dt{};
+  /* 2026-09-23 is a Wednesday: 3 in ISO numbering, 3 in Windows' too. */
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_systemtime(2026, 9, 23, 0, 0, 0, 0,
+      &dt));
+  uint16_t dow = 99;
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_systemtime(&dt, nullptr, nullptr,
+      &dow, nullptr, nullptr, nullptr, nullptr, nullptr));
+  EXPECT_EQ(3, dow);
+
+  /* Sunday is where the two numberings differ: ISO 7, Windows 0. */
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_systemtime(2026, 9, 27, 0, 0, 0, 0,
+      &dt));
+  int iso = 0;
+  ASSERT_EQ(GCHRON_OK, gchron_date_day_of_week(&dt.date, &iso));
+  EXPECT_EQ(GCHRON_SUNDAY, iso) << "2026-09-27 is a Sunday";
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_systemtime(&dt, nullptr, nullptr,
+      &dow, nullptr, nullptr, nullptr, nullptr, nullptr));
+  EXPECT_EQ(0, dow) << "Windows numbers Sunday 0 where ISO numbers it 7";
+
+  /* Saturday, the other end. */
+  ASSERT_EQ(GCHRON_OK, gchron_interop_from_systemtime(2026, 9, 26, 0, 0, 0, 0,
+      &dt));
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_systemtime(&dt, nullptr, nullptr,
+      &dow, nullptr, nullptr, nullptr, nullptr, nullptr));
+  EXPECT_EQ(6, dow);
+}
+
+TEST(SystemTime, TheMillisecondDirectionFloors) {
+  GCHRON_DateTime dt{};
+  ASSERT_EQ(GCHRON_OK, gchron_date_create(2026, 9, 23, &dt.date));
+  dt.time.hour = 1;
+  dt.time.minute = 2;
+  dt.time.second = 3;
+  dt.time.nsec = 999999999;
+
+  uint16_t ms = 0;
+  ASSERT_EQ(GCHRON_OK, gchron_interop_to_systemtime(&dt, nullptr, nullptr,
+      nullptr, nullptr, nullptr, nullptr, nullptr, &ms));
+  EXPECT_EQ(999, ms) << "999999999ns is 999ms and a remainder, not 1000";
+}
+
+TEST(SystemTime, AYearTheFieldCannotHoldIsRangeNotTruncation) {
+  GCHRON_DateTime dt{};
+  uint16_t year = 0;
+
+  ASSERT_EQ(GCHRON_OK, gchron_date_create(1600, 1, 1, &dt.date));
+  dt.time.hour = 0;
+  dt.time.minute = 0;
+  dt.time.second = 0;
+  dt.time.nsec = 0;
+  EXPECT_EQ(GCHRON_ERR_RANGE, gchron_interop_to_systemtime(&dt, &year,
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr))
+      << "1600 is before SYSTEMTIME begins";
+
+  ASSERT_EQ(GCHRON_OK, gchron_date_create(30828, 1, 1, &dt.date));
+  EXPECT_EQ(GCHRON_ERR_RANGE, gchron_interop_to_systemtime(&dt, &year,
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr));
+
+  /* Both edges that do fit. */
+  ASSERT_EQ(GCHRON_OK, gchron_date_create(1601, 1, 1, &dt.date));
+  EXPECT_EQ(GCHRON_OK, gchron_interop_to_systemtime(&dt, &year, nullptr,
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr));
+  EXPECT_EQ(1601, year);
+  ASSERT_EQ(GCHRON_OK, gchron_date_create(30827, 1, 1, &dt.date));
+  EXPECT_EQ(GCHRON_OK, gchron_interop_to_systemtime(&dt, &year, nullptr,
+      nullptr, nullptr, nullptr, nullptr, nullptr, nullptr));
+  EXPECT_EQ(30827, year);
+}
+
+TEST(SystemTime, FieldsThatAreNotADateAreRefused) {
+  GCHRON_DateTime dt{};
+
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_systemtime(2026, 13, 1, 0,
+      0, 0, 0, &dt));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_systemtime(2026, 2, 30, 0,
+      0, 0, 0, &dt));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_systemtime(2026, 9, 23,
+      24, 0, 0, 0, &dt));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_systemtime(2026, 9, 23, 0,
+      60, 0, 0, &dt));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_systemtime(2026, 9, 23, 0,
+      0, 60, 0, &dt));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_systemtime(2026, 9, 23, 0,
+      0, 0, 1000, &dt));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_systemtime(2026, 9, 23, 0,
+      0, 0, 0, nullptr));
+
+  /* A leap day in a non-leap year, which is the one a field check misses. */
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_interop_from_systemtime(2026, 2, 29, 0,
+      0, 0, 0, &dt));
+  EXPECT_EQ(GCHRON_OK, gchron_interop_from_systemtime(2024, 2, 29, 0, 0, 0, 0,
+      &dt));
+}

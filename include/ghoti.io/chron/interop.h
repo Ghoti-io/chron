@@ -405,6 +405,103 @@ GCHRON_API GCHRON_Result gchron_interop_from_exif(const char * text,
 GCHRON_API GCHRON_Result gchron_interop_to_exif(const GCHRON_DateTime * dt,
     char out[GCHRON_EXIF_DATETIME_BYTES]);
 
+/**
+ * @brief An instant from a `struct timeval`.
+ *
+ * Beside gchron_interop_from_timespec(), and microseconds rather than
+ * nanoseconds. The fields are taken separately rather than the struct,
+ * because `struct timeval` lives in `<sys/time.h>` on POSIX and in
+ * `<winsock2.h>` on Windows, and neither belongs in this header for one
+ * conversion. Pass `tv.tv_sec` and `tv.tv_usec`.
+ *
+ * @param tv_sec Seconds since 1970.
+ * @param tv_usec Microseconds, 0..999999. Anything else is
+ *   GCHRON_ERR_INVALID: a `timeval` with an unnormalised field is a bug in
+ *   whatever produced it, and guessing which way it meant to carry would
+ *   hide it.
+ * @param out Receives the instant on success; untouched on failure.
+ * @return GCHRON_OK, GCHRON_ERR_INVALID or GCHRON_ERR_RANGE.
+ */
+GCHRON_API GCHRON_Result gchron_interop_from_timeval(time_t tv_sec,
+    int32_t tv_usec, GCHRON_Instant * out);
+
+/**
+ * @brief The fields of a `struct timeval` from an instant.
+ *
+ * **Lossy in the microsecond direction, and it floors.** An instant holds
+ * nanoseconds and a `timeval` holds microseconds, so 1.9999 microseconds
+ * past a second becomes 1 - the same direction gchron_instant_to_unix_micros()
+ * takes, so that the two cannot disagree about the same instant. A caller who
+ * wants a different rounding has gchron_instant_round() to say so with.
+ *
+ * @param i A valid instant.
+ * @param out_sec Receives the seconds. May be NULL.
+ * @param out_usec Receives 0..999999. May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_RANGE when the seconds do not fit this
+ *   platform's `time_t`; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_interop_to_timeval(const GCHRON_Instant * i,
+    time_t * out_sec, int32_t * out_usec);
+
+/*--------------------------------------------------------------------------*
+ * Windows SYSTEMTIME
+ *--------------------------------------------------------------------------*/
+
+/**
+ * @brief A civil date-time from the fields of a Windows `SYSTEMTIME`.
+ *
+ * Taken as fields for the reason gchron_interop_from_filetime() takes a
+ * `uint64_t`: the struct is Windows', and this library builds and is tested
+ * everywhere.
+ *
+ * **`wDayOfWeek` is not a parameter.** Windows documents it as output only,
+ * a caller filling a `SYSTEMTIME` in by hand may well have it wrong, and the
+ * right behaviour is to compute the day of the week from the date rather
+ * than believe a field that contradicts it. gchron_date_day_of_week() is how
+ * to ask, and it numbers Monday 1 where Windows numbers Sunday 0.
+ *
+ * @param year `wYear`.
+ * @param month `wMonth`, 1..12.
+ * @param day `wDay`, 1..31.
+ * @param hour `wHour`, 0..23.
+ * @param minute `wMinute`, 0..59.
+ * @param second `wSecond`, 0..59. Windows never writes 60.
+ * @param milliseconds `wMilliseconds`, 0..999.
+ * @param out Receives the date-time on success; untouched on failure.
+ * @return GCHRON_OK, or GCHRON_ERR_INVALID for fields that are not a date.
+ */
+GCHRON_API GCHRON_Result gchron_interop_from_systemtime(uint16_t year,
+    uint16_t month, uint16_t day, uint16_t hour, uint16_t minute,
+    uint16_t second, uint16_t milliseconds, GCHRON_DateTime * out);
+
+/**
+ * @brief The fields of a Windows `SYSTEMTIME` from a civil date-time.
+ *
+ * `wDayOfWeek` is computed here rather than taken, and is Sunday-0 as Windows
+ * numbers it - the one place in this library that numbering appears, for the
+ * reason design.md gives at mistake M7.
+ *
+ * The sub-second part is milliseconds, so it is lossy and **floors**, like
+ * gchron_interop_to_timeval().
+ *
+ * @param dt A valid civil date-time whose year is 1601..30827, which is what
+ *   the field holds.
+ * @param out_year Receives `wYear`. May be NULL, as may any of the rest.
+ * @param out_month Receives `wMonth`.
+ * @param out_day_of_week Receives `wDayOfWeek`, 0..6 with Sunday 0.
+ * @param out_day Receives `wDay`.
+ * @param out_hour Receives `wHour`.
+ * @param out_minute Receives `wMinute`.
+ * @param out_second Receives `wSecond`.
+ * @param out_milliseconds Receives `wMilliseconds`.
+ * @return GCHRON_OK, GCHRON_ERR_RANGE or GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_interop_to_systemtime(
+    const GCHRON_DateTime * dt, uint16_t * out_year, uint16_t * out_month,
+    uint16_t * out_day_of_week, uint16_t * out_day, uint16_t * out_hour,
+    uint16_t * out_minute, uint16_t * out_second,
+    uint16_t * out_milliseconds);
+
 /*--------------------------------------------------------------------------*
  * ASN.1 - X.509, CMS, LDAP
  *--------------------------------------------------------------------------*/
