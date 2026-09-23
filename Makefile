@@ -1253,6 +1253,12 @@ STAMP_UNMODELLED_EXPECTED := 2
 # grow into an excuse.
 STAMP_LINK_PREREQ_EXPECTED := 3
 
+# What the planted control must produce. Four compile recipes, one of them
+# wrapped; one with no stamp; four variables no stamp records, two of them
+# past a line break. PREREQ is deliberately absent - see the note by the
+# comparison.
+STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 1 UNRECORDED 4 LINKED 3
+
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	@mkdir -p $(BUILD_DIR)
 	$(file >$(BUILD_DIR)/stamp_check.awk,$(stamp-check-awk))
@@ -1300,10 +1306,18 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		'cc $$(CFLAGS) $$(INCLUDE)' \
 		'  $$(PLANTED_WRAPC_UNRECORDED) -c $$< -o $$@' \
 		>> $(BUILD_DIR)/stamp_control.mk
+# PREREQ is cut from the comparison rather than pinned twice. It counts the
+# link sweep's skip list, which is a constant of the sweep and not something
+# the control exercises - and while it was in this string, adding a name to
+# that list failed the control first, with a message about reading rules
+# wrongly. The pin below is the one that is supposed to fail for that, and it
+# could never fire. A second check on the same fact is not redundancy: it
+# takes the first failure and reports the wrong cause.
 	@ctl=$$(awk -f $(BUILD_DIR)/stamp_check.awk \
-			$(BUILD_DIR)/stamp_control.mk | tail -1); \
-	if [ "$$ctl" != "TOTAL 4 BAD 1 UNMODELLED 1 UNRECORDED 4 LINKED 3 PREREQ 3" ]; then \
-		printf "\033[0;31mcheck-stamps: the control says '%s', not 'TOTAL 4 BAD 1 UNMODELLED 1 UNRECORDED 4 LINKED 3 PREREQ 3' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" >&2; \
+			$(BUILD_DIR)/stamp_control.mk | tail -1 \
+			| sed 's/ PREREQ [0-9]*$$//'); \
+	if [ "$$ctl" != "$(STAMP_CONTROL_EXPECTED)" ]; then \
+		printf "\033[0;31mcheck-stamps: the control says '%s', not '%s' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" "$(STAMP_CONTROL_EXPECTED)" >&2; \
 		exit 1; \
 	fi
 
