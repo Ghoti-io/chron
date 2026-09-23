@@ -249,6 +249,72 @@ GCHRON_API GCHRON_Result gchron_tick_now(GCHRON_TickSource source,
 GCHRON_API GCHRON_Result gchron_tick_since(GCHRON_Tick from, GCHRON_Tick to,
     GCHRON_Duration * out);
 
+/**
+ * @brief A deadline: a reading plus an exact duration.
+ *
+ * Without this, a caller who wants "five seconds from now" reaches into
+ * @ref GCHRON_Tick::nsec and adds to it, which loses the
+ * @ref GCHRON_Tick::source along the way - and a deadline built from one
+ * counter and later compared against the other is exactly the mistake that
+ * field exists to prevent. The source is carried through.
+ *
+ * @param t A reading whose source is not ::GCHRON_TICK_NONE.
+ * @param d An exact duration with **no calendar units**. A month has no
+ *   length on a monotonic counter, for the same reason it has none on an
+ *   instant. It may be negative, which moves the deadline earlier.
+ * @param out Receives the reading on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID when @p t has no source or @p d
+ *   carries a calendar unit; GCHRON_ERR_RANGE on overflow.
+ */
+GCHRON_API GCHRON_Result gchron_tick_add(GCHRON_Tick t, GCHRON_Duration d,
+    GCHRON_Tick * out);
+
+/**
+ * @brief How long is left until a deadline.
+ *
+ * Negative once the deadline has passed, which is the answer rather than an
+ * error: "how late am I" is a real question. It is
+ * gchron_duration_to_poll_millis() that must not hand a negative number to a
+ * wait.
+ *
+ * The two readings must come from the same counter, refused the same way
+ * gchron_tick_since() refuses them - this is not a back door into comparing
+ * a ::GCHRON_TICK_CONTINUOUS deadline against a ::GCHRON_TICK_SUSPENDING
+ * reading of the clock.
+ *
+ * @param now The current reading.
+ * @param deadline The deadline, from the same counter.
+ * @param out Receives an exact duration on success; untouched on failure.
+ * @return GCHRON_OK, GCHRON_ERR_INVALID or GCHRON_ERR_RANGE.
+ */
+GCHRON_API GCHRON_Result gchron_tick_remaining(GCHRON_Tick now,
+    GCHRON_Tick deadline, GCHRON_Duration * out);
+
+/**
+ * @brief A duration as the millisecond timeout `poll()` and friends take.
+ *
+ * `poll()`, `epoll_wait()` and `WaitForSingleObject()` all take a count of
+ * milliseconds in an `int`, and **all three read a negative as "block
+ * forever"**. A deadline that has already passed produces a negative
+ * remaining duration, and the obvious conversion hands them that number: the
+ * loop stops waking up, the timeout never fires, nothing crashes and nothing
+ * is logged. That is the whole reason this function exists rather than being
+ * left to the caller.
+ *
+ * So: a negative duration is `0`, never a negative; anything too large
+ * saturates at `INT_MAX` rather than wrapping; and a positive duration
+ * rounds **up**, because a wait that returns fractionally early sends the
+ * caller round the loop again for the remainder, while one that returns late
+ * has missed the deadline. One nanosecond is therefore 1, not 0 - a 0 would
+ * spin.
+ *
+ * @param d A valid duration with no calendar units.
+ * @param out Receives 0..INT_MAX on success; untouched on failure.
+ * @return GCHRON_OK, or GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_duration_to_poll_millis(
+    const GCHRON_Duration * d, int * out);
+
 #ifdef __cplusplus
 }
 #endif

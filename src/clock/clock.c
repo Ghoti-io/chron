@@ -35,6 +35,7 @@
 #include <ghoti.io/chron/clock.h>
 #include <ghoti.io/chron/core.h>
 #include <ghoti.io/chron/macros.h>
+#include <limits.h>
 #include <stddef.h>
 
 #include "../core/core_internal.h"
@@ -302,4 +303,127 @@ GCHRON_Result gchron_tick_since(GCHRON_Tick from, GCHRON_Tick to,
   return gchron_duration_from_exact_seconds(
       gchron_floor_div(nanos, GCHRON_NANOS_PER_SECOND),
       (int32_t)gchron_floor_mod(nanos, GCHRON_NANOS_PER_SECOND), out);
+}
+
+/*--------------------------------------------------------------------------*
+ * Deadlines
+ *--------------------------------------------------------------------------*/
+
+GCHRON_Result gchron_tick_add(GCHRON_Tick t, GCHRON_Duration d,
+    GCHRON_Tick * out) {
+  int64_t seconds;
+  int32_t nanos;
+  int64_t offset;
+  int64_t sum;
+  GCHRON_Result result;
+
+  if (out == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  /*
+   * A zeroed GCHRON_Tick has no source, and its nsec of 0 would otherwise
+   * pass for a reading taken at the origin. Refused here so that a deadline
+   * cannot be built out of one.
+   */
+  if (t.source == GCHRON_TICK_NONE) {
+    return GCHRON_ERR_INVALID;
+  }
+  /*
+   * gchron_duration_to_exact_seconds() refuses calendar units. A month has no
+   * length on a monotonic counter for the same reason it has none on the
+   * timeline, and "a month from now" on a counter with no epoch is not even
+   * a question with a wrong answer.
+   */
+  result = gchron_duration_to_exact_seconds(&d, &seconds, &nanos);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  if (!gchron_mul_i64(seconds, GCHRON_NANOS_PER_SECOND, &offset)) {
+    return GCHRON_ERR_RANGE;
+  }
+  if (!gchron_add_i64(offset, (int64_t)nanos, &offset)) {
+    return GCHRON_ERR_RANGE;
+  }
+  if (!gchron_add_i64(t.nsec, offset, &sum)) {
+    return GCHRON_ERR_RANGE;
+  }
+  out->nsec = sum;
+  /* The source travels with the value; that is what makes it a deadline on
+   * *this* counter rather than a bare number. */
+  out->source = t.source;
+  return GCHRON_OK;
+}
+
+GCHRON_Result gchron_tick_remaining(GCHRON_Tick now, GCHRON_Tick deadline,
+    GCHRON_Duration * out) {
+  /*
+   * Deliberately gchron_tick_since() with the arguments in this order: "now
+   * to deadline" is how long is left, and it inherits the refusal of a
+   * cross-counter pair rather than reimplementing it. A deadline built from
+   * GCHRON_TICK_CONTINUOUS and checked against a GCHRON_TICK_SUSPENDING
+   * reading is the mistake this whole type exists to stop, and adding a
+   * second way to spell it would be a back door into exactly that.
+   */
+  return gchron_tick_since(now, deadline, out);
+}
+
+GCHRON_Result gchron_duration_to_poll_millis(const GCHRON_Duration * d,
+    int * out) {
+  int64_t seconds;
+  int32_t nanos;
+  int64_t millis;
+  int64_t remainder;
+  GCHRON_Result result;
+
+  if (out == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  result = gchron_duration_to_exact_seconds(d, &seconds, &nanos);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+
+  /*
+   * A passed deadline is zero, never a negative. poll(), epoll_wait() and
+   * WaitForSingleObject() all read a negative as "block forever", so handing
+   * one through turns a timeout into a hang that logs nothing.
+   *
+   * The nanoseconds are 0..999999999 with the sign in the seconds, so `< 0`
+   * is the whole test: a duration of -1ns arrives here as -1 second plus
+   * 999999999 nanoseconds, and a check on the nanoseconds would call it
+   * positive.
+   */
+  if (seconds < 0) {
+    *out = 0;
+    return GCHRON_OK;
+  }
+
+  /*
+   * Saturate rather than wrap. A deadline a century away is not a caller
+   * error - it is what "effectively never" looks like - and INT_MAX
+   * milliseconds is about 24 days, which is as long as these APIs can be
+   * asked to wait.
+   */
+  if (seconds > (int64_t)INT_MAX / 1000) {
+    *out = INT_MAX;
+    return GCHRON_OK;
+  }
+  millis = seconds * 1000;
+  remainder = (int64_t)nanos;
+  millis += remainder / 1000000;
+  /*
+   * Round up. A wait that returns fractionally early sends the caller round
+   * the loop again for the remainder, which is harmless; one that returns
+   * late has missed the deadline. So one nanosecond is one millisecond - a
+   * zero here would spin.
+   */
+  if ((remainder % 1000000) != 0) {
+    millis += 1;
+  }
+  if (millis > INT_MAX) {
+    *out = INT_MAX;
+    return GCHRON_OK;
+  }
+  *out = (int)millis;
+  return GCHRON_OK;
 }
