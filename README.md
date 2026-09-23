@@ -387,10 +387,16 @@ make vectors                 # regenerate the committed vectors from their oracl
 All five phases of `documentation/design.md` §16. All four tiers are
 built: civil arithmetic; the Gregorian, Julian, hybrid and tabular calendars;
 instants, offsets and durations with their full arithmetic; the RFC 3339,
-TOML, RFC 9557 and ISO 8601 duration grammars; time zones - TZif, the POSIX
-`TZ` footer, the gap and overlap policy and the local zone; and formatting -
-LDML patterns, `strftime`, the named formats, HTTP-date and RFC 5322, with
-the thirteen interop encodings and the clock.
+TOML, RFC 9557, ISO 8601 duration and ISO 8601 interval grammars; time zones
+- TZif, the POSIX `TZ` footer, the gap and overlap policy and the local zone;
+and formatting - LDML patterns, `strftime`, the named formats, HTTP-date and
+RFC 5322, with the nineteen interop encodings and the clock.
+
+Phase 5 added the operations a consumer reaches for: rounding an instant, a
+civil date-time or a zoned one to any unit; deadlines on the monotonic
+counter with a millisecond conversion that cannot hand `poll()` a negative;
+ASN.1 `UTCTime` and `GeneralizedTime`, `struct timeval` and Windows
+`SYSTEMTIME`; and the combined interval grammar with its repeating form.
 
 Formatting is checked against ICU's `SimpleDateFormat` (3,639 comparisons,
 with three stated zone-name divergences) and against glibc's `strftime`.

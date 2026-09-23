@@ -1106,6 +1106,9 @@ written in the header beside it (M17):
 | Julian Day, Modified JD | `int64_t` / `double` | §3.3 | MJD = JD − 2,400,000.5 |
 | PNG `tIME` | 7 bytes | civil, UTC | year is 2 bytes big-endian; `image` reads it |
 | EXIF `DateTime` | 19 bytes | civil, no zone | `YYYY:MM:DD HH:MM:SS` with colons in the date; `OffsetTime` tags (EXIF 2.31) carry the offset separately |
+| `struct timeval` | | 1970, s + µs | beside `timespec`, microseconds; the conversion *to* it floors, the same way `gchron_instant_to_unix_micros()` does, so the two cannot disagree |
+| ASN.1 `UTCTime` | 13 bytes | civil + zone | `YYMMDDHHMMSSZ`; the two-digit year pivots, and the pivot is a parameter with RFC 5280 §4.1.2.5.1's 50 as the documented default rather than a constant |
+| ASN.1 `GeneralizedTime` | ≤25 bytes | civil + zone | `YYYYMMDDHHMMSS[.fff]Z`; written DER-strict - `Z` only, seconds always, no trailing zero in a fraction and no fraction at all when it would be zero - and read looser, since BER allows a comma, absent seconds and an offset |
 
 Every conversion *to* a narrower encoding returns `GCHRON_ERR_RANGE` when the
 value does not fit, and none rounds a sub-unit fraction without being asked.
@@ -1410,7 +1413,7 @@ for one engineer who knows the suite.
 | 2 **(done)** | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** - reached |
 | 3 **(done)** | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** - reached |
 | 4 **(done)** | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `notes/suite/WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** - reached for metrology; Windows needs a Windows machine, and `notes/suite/WINDOWS-TODO.md` 6b and 6c say what done is |
-| 5 | `round()` on the instant and civil types; tick deadlines and a saturating millisecond conversion; ASN.1 `UTCTime`/`GeneralizedTime`, `SYSTEMTIME` and `struct timeval`; the ISO 8601 interval grammar | S | **M6: a consumer can bucket a timestamp, expire a thing, and read a certificate** |
+| 5 **(done)** | `round()` on the instant and civil types; tick deadlines and a saturating millisecond conversion; ASN.1 `UTCTime`/`GeneralizedTime`, `SYSTEMTIME` and `struct timeval`; the ISO 8601 interval grammar | S | **M6: a consumer can bucket a timestamp, expire a thing, and read a certificate** - reached |
 
 Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz` and
 `check-symbols` clean from an empty build directory, serially and under
