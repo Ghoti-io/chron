@@ -1340,9 +1340,29 @@ STAMP_LINK_PREREQ_EXPECTED := 3
 # absent - see the note by the comparison.
 STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 2 UNRECORDED 7 LINKED 4 PROBES 3
 
+# $(file) is expanded when make expands the recipe, and make expands every
+# line of a recipe before running any of them - so writing the sweep here,
+# under an `@mkdir -p $(BUILD_DIR)` on the line above, wrote it into a
+# directory that did not exist yet. It worked everywhere except where it
+# matters: any tree that had been built once already had the directory, and
+# it persists for the life of the checkout, so the failure was visible only
+# with this gate as the FIRST command in a fresh clone. Found by a peer
+# running exactly that, and reproduced here before being believed.
+#
+# Its own rule fixes it, because make expands that recipe only when it
+# decides to run it, after the order-only directory exists. The makefile as a
+# NORMAL prerequisite is the other half: without it the sweep is written once
+# and never refreshed, so editing the awk would leave the gate running the
+# previous version - which is the staleness this gate exists to find,
+# happening to the gate.
+$(STAMP_CHECK_AWK): $(STAMP_CHECK_MAKEFILE) | $(BUILD_DIR)
+	$(file >$@,$(stamp-check-awk))
+
+$(BUILD_DIR):
+	@mkdir -p $@
+
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
-	@mkdir -p $(BUILD_DIR)
-	$(file >$(STAMP_CHECK_AWK),$(stamp-check-awk))
+check-stamps: $(STAMP_CHECK_AWK)
 # The control comes first, and is a planted pair rather than a single bad
 # rule: one stamped, one not. A sweep that has stopped matching compile
 # recipes reports nothing wrong, which is indistinguishable from a clean
