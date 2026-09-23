@@ -227,6 +227,21 @@ fail both ways, disarmed and broken-for-another-reason, and the second
 attempt found a bug in the first one's error message that only the failing
 path could show.
 
+`make check-stamps` guards the build's own incrementality. Every object rule
+names a stamp file holding the flags it was compiled with, so changing a flag
+rebuilds what it affects; a rule added without one compiles with whatever is
+in force and is then never rebuilt again, which is indistinguishable from a
+correct incremental build. Nothing in make requires the stamp, so the gate
+does - reading the makefile text rather than make's rule database, because
+the rule that was actually missing its stamp sits inside an `ifneq` and does
+not exist in this library at all. It also checks that the stamp belongs to
+the rule's own tree, since a rule copied between the release, ASan and fuzz
+trees keeps the old one and then misses exactly the changes it was there to
+catch. Its own sweep is checked against a planted pair and against an
+independent count of the same population - which promptly disagreed, because
+the comment explaining what the sweep looks for was itself counted as an
+eleventh compile rule.
+
 **The fuzzers assert invariants, not just absence of crashes**, which is why
 they found three defects the three oracles could not: a seventy-four byte TZif
 file claiming 987,654,144 transitions, and two `TZ` rules whose changeovers
@@ -243,6 +258,7 @@ make fuzz                    # text, arithmetic, durations, TZif and the TZ gram
 make check-symbols           # every exported symbol carries the version namespace
 make check-layering          # no tier includes a higher tier's header
 make check-aliasing          # the strict-aliasing warning is still armed
+make check-stamps            # every compile rule rebuilds when its flags change
 make check-oracles           # all four differentials against their oracles
 make vectors                 # regenerate the committed vectors from their oracles
 ```

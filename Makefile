@@ -413,8 +413,8 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # type, because a gate wired to a target nobody types is one that does not
 # run. It costs about a second and reports rather than fails when the input
 # a generator needs is not on the machine.
-TEST_GATES ?= check-symbols check-layering check-aliasing check-generated \
-	check-docs check-license check-counts
+TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
+	check-generated check-docs check-license check-counts
 
 #
 # A check whose tool is missing prints a line and passes, which on one
@@ -682,7 +682,7 @@ $(APP_DIR)/$(STATIC_TARGET): $(LIBOBJECTS)
 ####################################################################
 
 ifneq ($(TEST_HELPER_SRC),)
-$(TEST_HELPER_OBJ): $(TEST_HELPER_SRC)
+$(TEST_HELPER_OBJ): $(TEST_HELPER_SRC) $(FLAGS_STAMP)
 	@printf "\n### Compiling Test Helper ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -747,6 +747,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar vectors-calendars
 .PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license check-counts
+.PHONY: check-aliasing check-stamps
 .PHONY: check-oracle-temporal check-oracles test-full
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
@@ -972,6 +973,102 @@ check-aliasing: $(LIBVER_GEN)
 		exit 1; \
 	fi
 	@printf "\033[0;32mA planted type-punning violation is still refused by the library's own flags.\033[0m\n"
+
+# The flag stamps only work on the rules that name one. Nothing in make
+# requires it: a new object rule added without its stamp compiles with
+# whatever flags are in force and is then never rebuilt when they change,
+# which looks exactly like a correct incremental build. That is how
+# $(TEST_HELPER_OBJ) went unstamped - it sits inside an `ifneq`, so it does
+# not exist in this library at all and make's own rule database cannot see
+# it. The check therefore reads the makefile text, where every branch is
+# visible, rather than asking make what rules it has.
+#
+# The population is "every recipe that compiles a prerequisite", spelled as
+# the -c $< that all ten of them carry. Two things are checked per rule: that
+# some flags stamp is a prerequisite, and that it is the stamp for the tree
+# the object is built into - a rule copied between trees keeps the old
+# stamp, and then misses exactly the flag changes it was supposed to catch.
+# The tree's name is the prefix of both $(<TREE>_OBJ_DIR) and
+# $(<TREE>_FLAGS_STAMP), so that pairing is derived, not tabulated, and a
+# fourth tree needs no edit here.
+#
+# What it does not check: that the stamp's own recipe records the flags this
+# rule uses. FLAGS_STAMP records CFLAGS, CXXFLAGS, LDFLAGS and INCLUDE
+# together, so a rule compiling with some fifth variable would pass.
+define stamp-check-awk
+{ L[NR] = $$0 }
+END {
+  total = 0; bad = 0
+  for (i = 1; i <= NR; i++) {
+    if (L[i] !~ /^\t/ || L[i] !~ /-c \$$</) continue
+    total++
+    j = i - 1
+    while (j > 0 && (L[j] ~ /^\t/ || L[j] ~ /^[ \t]*$$/ || L[j] ~ /^\043/)) j--
+    hdr = L[j]
+    k = j - 1
+    while (k > 0 && L[k] ~ /\\[ \t]*$$/) { hdr = L[k] " " hdr; k-- }
+    if (hdr !~ /FLAGS_STAMP/) {
+      bad++
+      printf "  %s:%d: compiles with no flags stamp: %s\n", FILENAME, j, hdr
+      continue
+    }
+    tgt = hdr; sub(/:.*/, "", tgt)
+    if (tgt !~ /OBJ_DIR/) continue
+    tree = tgt; sub(/.*\$$\(/, "", tree); sub(/OBJ_DIR.*/, "", tree)
+    want = "$$(" tree "FLAGS_STAMP)"
+    if (index(hdr, want) == 0) {
+      bad++
+      printf "  %s:%d: stamped for another tree, wants %s: %s\n", FILENAME, j, want, hdr
+    }
+  }
+  printf "TOTAL %d BAD %d\n", total, bad
+}
+endef
+
+STAMP_CHECK_MAKEFILE := $(firstword $(MAKEFILE_LIST))
+
+check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
+	@mkdir -p $(BUILD_DIR)
+	$(file >$(BUILD_DIR)/stamp_check.awk,$(stamp-check-awk))
+# The control comes first, and is a planted pair rather than a single bad
+# rule: one stamped, one not. A sweep that has stopped matching compile
+# recipes reports nothing wrong, which is indistinguishable from a clean
+# makefile - so require it to find the planted one and only the planted one.
+	@printf '%s\n\t%s\n%s\n\t%s\n' \
+		'$$(OBJ_DIR)/%.o: src/%.c $$(FLAGS_STAMP)' \
+		'$$(CC) $$(CFLAGS) $$(INCLUDE) -c $$< -o $$@' \
+		'$$(OBJ_DIR)/planted.o: src/planted.c' \
+		'$$(CC) $$(CFLAGS) $$(INCLUDE) -c $$< -o $$@' \
+		> $(BUILD_DIR)/stamp_control.mk
+	@ctl=$$(awk -f $(BUILD_DIR)/stamp_check.awk \
+			$(BUILD_DIR)/stamp_control.mk | tail -1); \
+	if [ "$$ctl" != "TOTAL 2 BAD 1" ]; then \
+		printf "\033[0;31mcheck-stamps: the control says '%s', not 'TOTAL 2 BAD 1' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" >&2; \
+		exit 1; \
+	fi
+# Two independent counts of the same population. If the sweep silently stops
+# matching, its total falls away from grep's and the gate fails rather than
+# passing on an empty sweep. Comment lines are dropped first because the prose
+# above names the marker it is looking for, and counted itself as an eleventh
+# compile recipe the first time this ran.
+	@want=$$(grep -v '^#' $(STAMP_CHECK_MAKEFILE) \
+		| grep -cF -- '-c $$<'); \
+	out=$$(awk -f $(BUILD_DIR)/stamp_check.awk $(STAMP_CHECK_MAKEFILE)); \
+	got=$$(printf '%s\n' "$$out" | sed -n 's/^TOTAL \([0-9]*\) .*/\1/p'); \
+	bad=$$(printf '%s\n' "$$out" | sed -n 's/^TOTAL [0-9]* BAD \([0-9]*\)$$/\1/p'); \
+	if [ "$$got" != "$$want" ]; then \
+		printf "\033[0;31mcheck-stamps: the sweep saw %s compile recipes and grep found %s. One of them is wrong, so neither count can be trusted.\033[0m\n" "$$got" "$$want" >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$bad" != "0" ]; then \
+		printf "\033[0;31m\n### %s compile rules carry the wrong flags stamp, or none ###\033[0m\n" "$$bad" >&2; \
+		printf '%s\n' "$$out" | grep -v '^TOTAL ' >&2; \
+		printf "\nAn object built without its tree's stamp as a prerequisite is\n" >&2; \
+		printf "never rebuilt when the flags change, and the stale object links\n" >&2; \
+		printf "into everything downstream of it.\n" >&2; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32mAll %s compile rules carry the flags stamp for their own tree.\033[0m\n" "$$got"
 
 check-layering: ## Fail if a lower tier includes a higher tier's header
 	$(call layering-check,0,$(TIER0_FORBIDDEN),$(TIER0_FILES))
