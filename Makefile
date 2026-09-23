@@ -993,6 +993,23 @@ check-aliasing: ## Fail if the strict-aliasing warning is no longer armed
 # with flags written out beside it proves those flags work, which is not the
 # question.
 #
+# THE SHAPE OF THE CONTROL IS LOAD-BEARING. What each level diagnoses depends
+# on the violation, and only some shapes separate level 1 from the rest.
+# Measured, counts of the diagnostic at -O2:
+#
+#                                              L0  L1  L2  L3
+#   cast of a pointer PARAMETER (this control)  0   1   0   0
+#   struct-to-struct cast of a parameter        0   1   0   0
+#   (int *)&obj on a known object               0   1   1   0
+#   *(int *)&local, *(long *)&s->member         0   1   1   1
+#   punning through a void *                    0   0   0   0
+#
+# So a "simpler" control spelled *(int *)&local would be diagnosed at level 3
+# as well, and this gate would pass with the warning at 3 while asserting
+# nothing - green, and switched off. Do not simplify it. The last row is the
+# standing limit: no level catches punning through a void *, so a clean build
+# is not evidence about that class at all.
+#
 # The warning is a gcc diagnostic. clang accepts -Wstrict-aliasing=1 and
 # implements nothing, so `make CC=clang` reaches this gate with the aliasing
 # flags visible on every compile line and no aliasing coverage behind them.
@@ -1007,6 +1024,12 @@ check-aliasing: $(LIBVER_GEN)
 		'  *f = 1.0f;' \
 		'  return *p;' \
 		'}' > $(BUILD_DIR)/alias_control.c
+# qrc below is read on the same line the compiler runs on, and must stay
+# there. Any $(...) evaluated in between - including one building the very
+# message that reports the status - replaces $? with the subshell's, and the
+# clang branch stops being selected. Adding a substitution to the lines above
+# it looks like editing prose. The four-way test catches it, because the
+# clang branch is chosen by qrc alone.
 	@if $(CC) $(CFLAGS) $(INCLUDE) -fsyntax-only \
 			$(BUILD_DIR)/alias_control.c 2> $(BUILD_DIR)/alias_control.log; then \
 		qout=$$($(CC) -Q --help=warnings $(CFLAGS) 2>/dev/null); qrc=$$?; \
