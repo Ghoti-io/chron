@@ -998,11 +998,18 @@ check-aliasing: ## Fail if the strict-aliasing warning is no longer armed
 # Measured, counts of the diagnostic at -O2:
 #
 #                                              L0  L1  L2  L3
-#   cast of a pointer PARAMETER (this control)  0   1   0   0
+#   *(int *)&obj      known object, in place    0   1   1   1
+#   int *p = (int *)&obj; *p                    0   1   1   0
+#   *(int *)d         d is a PARAMETER          0   1   0   0
+#   int *p = (int *)d; *p   (this control)      0   1   0   0
 #   struct-to-struct cast of a parameter        0   1   0   0
-#   (int *)&obj on a known object               0   1   1   0
-#   *(int *)&local, *(long *)&s->member         0   1   1   1
 #   punning through a void *                    0   0   0   0
+#
+# Two axes: taking the address of an object gcc can see is what level 2
+# needs, and routing the cast through a separate pointer variable is what
+# defeats level 3. This control is a parameter cast through a variable, so
+# level 1 is the only level that reports it - which is what makes the gate
+# discriminating, and also means the gate would be VACUOUS at level 2.
 #
 # So a "simpler" control spelled *(int *)&local would be diagnosed at level 3
 # as well, and this gate would pass with the warning at 3 while asserting

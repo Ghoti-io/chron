@@ -242,15 +242,27 @@ levels. Measured at `-O2`:
 
 | violation | L0 | L1 | L2 | L3 |
 |---|---|---|---|---|
-| cast of a pointer parameter (`check-aliasing`'s control) | 0 | 1 | 0 | 0 |
+| `*(int *)&obj` - address of a known object, dereferenced in place | 0 | 1 | 1 | 1 |
+| `int *p = (int *)&obj; *p` - the same, through a pointer variable | 0 | 1 | 1 | 0 |
+| `*(int *)d` where `d` is a pointer **parameter** | 0 | 1 | 0 | 0 |
+| `int *p = (int *)d; *p` - parameter, through a variable (the control) | 0 | 1 | 0 | 0 |
 | struct-to-struct cast of a parameter | 0 | 1 | 0 | 0 |
-| `(int *)&obj` on a known object | 0 | 1 | 1 | 0 |
-| `*(int *)&local`, `*(long *)&s->member` | 0 | 1 | 1 | 1 |
 | punning through a `void *` | 0 | 0 | 0 | 0 |
 
-Level 1 dominates, but level 3 is not blind to everything - the fourth row
+Two independent things decide those columns. **Taking the address of an
+object gcc can see is what level 2 needs** - given only a pointer parameter
+it declines, whatever the cast. **Routing the cast through a separate
+pointer variable is what defeats level 3**, in-place dereference being the
+only form it reports. A local variable is a "known object" for the first
+axis, so the split is not local-versus-global; it is whether gcc has the
+object in hand and whether the deref is direct.
+
+Level 1 dominates, but level 3 is not blind to everything - the first row
 is diagnosed at every level - so "level 3 finds nothing" is true of the
-violations `libs/model` happened to have, not of the level. The last row is
+violations `libs/model` happened to have, not of the level. It also means
+the gate's level is a consequence of its control: `check-aliasing`'s is row
+four, which only level 1 reports, so this gate is armed at level 1 and would
+be **vacuous at level 2**. The last row is
 the one that bounds the whole gate: **no level diagnoses punning through a
 `void *`**, which is the shape most C reaches for, so a clean build is not
 evidence about that class and this warning should not be described as
