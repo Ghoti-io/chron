@@ -1007,9 +1007,15 @@ check-aliasing: ## Fail if the strict-aliasing warning is no longer armed
 #
 # Two axes: taking the address of an object gcc can see is what level 2
 # needs, and routing the cast through a separate pointer variable is what
-# defeats level 3. This control is a parameter cast through a variable, so
-# level 1 is the only level that reports it - which is what makes the gate
-# discriminating, and also means the gate would be VACUOUS at level 2.
+# defeats level 3.
+#
+# THE REQUIREMENT, for anyone changing the level or the control: a control
+# for a gate at level N must be caught at N and MISSED at N+1. A control
+# that survives into the weaker level still passes after the gate has
+# silently fallen back to it, which is indistinguishable from working. This
+# control is a parameter cast through a variable - caught at 1, missed at 2 -
+# so it certifies level 1 specifically. Raise the level and it must be
+# respelled, or the gate passes green while asserting nothing.
 #
 # So a "simpler" control spelled *(int *)&local would be diagnosed at level 3
 # as well, and this gate would pass with the warning at 3 while asserting

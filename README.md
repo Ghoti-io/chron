@@ -260,9 +260,12 @@ object in hand and whether the deref is direct.
 Level 1 dominates, but level 3 is not blind to everything - the first row
 is diagnosed at every level - so "level 3 finds nothing" is true of the
 violations `libs/model` happened to have, not of the level. It also means
-the gate's level is a consequence of its control: `check-aliasing`'s is row
-four, which only level 1 reports, so this gate is armed at level 1 and would
-be **vacuous at level 2**. The last row is
+the gate's level is a consequence of its control, and gives the requirement
+for changing either: **a control for a gate at level N must be caught at N
+and missed at N+1.** One that survives into the weaker level still passes
+after the gate has silently fallen back to it, which looks exactly like
+working. `check-aliasing`'s control is row four - caught at 1, missed at 2 -
+so it certifies level 1 specifically and would be **vacuous at level 2**. The last row is
 the one that bounds the whole gate: **no level diagnoses punning through a
 `void *`**, which is the shape most C reaches for, so a clean build is not
 evidence about that class and this warning should not be described as
