@@ -267,6 +267,32 @@ endif
 # changed 0 of 40 objects, where disabling it changes 24. FUZZ_CC is
 # overridable, so a fuzz tree driven by gcc would have differed; the name is
 # what makes that not matter.
+#
+# Those two figures are clang's, and the ASan tree is gcc, so here is that
+# one. Naming the flag, gcc, this library's 41 objects, comparing disassembly:
+#
+#   -O0   off vs on                      0 of 41
+#   -O1   off vs on                     11 of 41     <- the ASan and gcc-fuzz trees
+#   -O2   off vs on                      0 of 41     <- already the default
+#   -O2   -fno- vs -f  (control)        11 of 41
+#   -O1   -fno- vs -f  (control)        11 of 41
+#
+# So both shipped configurations are free - release is -O2 where it is the
+# default, debug is -O0 where it changes nothing - and the flag is load-bearing
+# codegen only at -O1, which is exactly where the sanitizer and fuzz trees sit.
+# That is deliberate and is the reason they name it, but it had no number
+# against it until a peer measured the same thing in another library and got
+# 30 of 76. Their figure does not transfer and neither does mine: measure it
+# per library, in the compiler the tree actually uses.
+#
+# Two ways to get this comparison wrong, both hit here first. Compare
+# DISASSEMBLY, not object bytes - debug info records the command line, so any
+# flag change makes every object differ. And objdump prints the file name in
+# its header, so comparing its raw output reports 41 of 41 three times, which
+# reads like a finding rather than like a broken instrument; drop the header.
+# The -O2 -fno-/-f row is not decoration - without a comparison demonstrably
+# able to see a change, the two zeros above are indistinguishable from a
+# comparison that sees nothing.
 ALIASING_ASSUME_CFLAGS := -fstrict-aliasing
 #
 # The level is named because -Wall already sets one: `gcc -Q --help=warnings
