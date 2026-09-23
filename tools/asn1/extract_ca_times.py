@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate tests/data/asn1/ca_bundle_times.txt from the system CA bundle.
+"""Regenerate tests/data/asn1/ca_bundle_times.vec from the system CA bundle.
 
 The expected instant on each line is OpenSSL's reading of the ASN.1 string,
 not this library's. That is the whole point: a corpus generated from our own
@@ -8,7 +8,7 @@ two-digit year is exactly where to make one.
 
 Needs `openssl` on PATH and a PEM bundle; Debian's is the default.
 
-    tools/asn1/extract_ca_times.py [bundle.pem] > tests/data/asn1/ca_bundle_times.txt
+    tools/asn1/extract_ca_times.py [bundle.pem] > tests/data/asn1/ca_bundle_times.vec
 """
 
 import calendar

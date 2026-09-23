@@ -507,7 +507,7 @@ struct Asn1Vector {
  */
 std::vector<Asn1Vector> LoadAsn1Vectors() {
   std::vector<Asn1Vector> out;
-  std::ifstream in(GCHRON_TEST_DATA "/asn1/ca_bundle_times.txt");
+  std::ifstream in(GCHRON_TEST_DATA "/asn1/ca_bundle_times.vec");
   std::string line;
 
   while (std::getline(in, line)) {
