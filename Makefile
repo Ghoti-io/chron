@@ -349,6 +349,15 @@ LDFLAGS := -L /usr/lib -lstdc++ -lm $(EXTRA_LDFLAGS)
 # have the problem, because its own link records libm as a dependency, which
 # is why this only ever shows up in a test, an example or an oracle driver.
 STATIC_LINK_LIBS := -lm
+ifeq ($(OS_NAME), Windows)
+# clock.c's QueryInterruptTimePrecise and QueryUnbiasedInterruptTimePrecise are
+# in none of the kernel32 import libraries MinGW ships: they live in the
+# api-ms-win-core-realtime-l1-1-1 API set, which libmincore.a names. Needed on
+# the static links as well, for the same reason -lm is.
+WINDOWS_LIBS := -lmincore
+LDFLAGS += $(WINDOWS_LIBS)
+STATIC_LINK_LIBS += $(WINDOWS_LIBS)
+endif
 ifdef PREFIX
 # So that a library, a test or an example finds its Ghoti.io dependencies in the
 # prefix at run time without LD_LIBRARY_PATH.
@@ -455,6 +464,16 @@ SOURCES := $(sort $(shell find src -type f -name '*.c') $(EMBEDDED_TZDATA))
 # asked for a zone it does not have.
 #
 TZDATA_DIR ?=
+# Under MSYS2 there is a zoneinfo tree after all: the mingw-w64 tzdata package
+# installs one beside the toolchain, and it is an ordinary pacman dependency
+# that can be pinned like the compiler. Found from here rather than by the
+# generator because the generator is a native Python, which reads POSIX paths
+# as relative to the current drive and would look in C:\usr\share\zoneinfo.
+ifeq ($(OS_NAME), Windows)
+ifeq ($(TZDATA_DIR),)
+TZDATA_DIR := $(if $(wildcard $(MINGW_PREFIX)/share/zoneinfo/UTC),$(shell cygpath -m $(MINGW_PREFIX)/share/zoneinfo))
+endif
+endif
 
 
 # Convert each source file path to an object file path.

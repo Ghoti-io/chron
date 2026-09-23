@@ -241,6 +241,9 @@ GCHRON_Result gchron_zonedb_local(GCHRON_ZoneDb * db,
     char name[128];
     const char * id;
 
+    /* Only the POSIX path reads a file, so only it allocates. */
+    (void)allocator;
+
     if (GetDynamicTimeZoneInformation(&info) == TIME_ZONE_ID_INVALID) {
       return GCHRON_ERR_IO;
     }
