@@ -1009,10 +1009,16 @@ check-aliasing: $(LIBVER_GEN)
 		'}' > $(BUILD_DIR)/alias_control.c
 	@if $(CC) $(CFLAGS) $(INCLUDE) -fsyntax-only \
 			$(BUILD_DIR)/alias_control.c 2> $(BUILD_DIR)/alias_control.log; then \
-		lvl=$$($(CC) -Q --help=warnings $(CFLAGS) 2>/dev/null \
+		qout=$$($(CC) -Q --help=warnings $(CFLAGS) 2>/dev/null); qrc=$$?; \
+		lvl=$$(printf '%s\n' "$$qout" \
 			| awk '/-Wstrict-aliasing=<0,3>/ { print $$2 }'); \
 		printf "\033[0;31mcheck-aliasing: %s accepted a planted type-punning violation, so this build has no aliasing coverage.\033[0m\n" "$$($(CC) --version 2>/dev/null | head -1)" >&2; \
-		if [ -z "$$lvl" ]; then \
+		if [ -z "$$lvl" ] && [ "$$qrc" = "0" ]; then \
+			printf '%s\n' \
+				'  -Q --help=warnings succeeded and named no -Wstrict-aliasing level at all, which is' \
+				'  neither compiler behaviour seen here. Do NOT read this as the clang case: check what' \
+				'  CFLAGS was actually passed before concluding anything about the warning.' >&2; \
+		elif [ -z "$$lvl" ]; then \
 			printf '%s\n' \
 				'  This compiler would not report an effective -Wstrict-aliasing level, which gcc gives' \
 				'  through -Q --help=warnings. Expect clang: it accepts -fstrict-aliasing' \
