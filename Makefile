@@ -275,12 +275,24 @@ ALIASING_ASSUME_CFLAGS := -fstrict-aliasing
 # -fstrict-aliasing the optimisation with no warning behind it - the
 # assumption armed and the guard absent.
 #
-# This makes the ORDER in CFLAGS load-bearing: $(ALIASING_CFLAGS) has to come
-# after -Wall, because the last level named wins. Moving it earlier disarms
-# the warning while leaving every flag present and every description of them
-# true. check-aliasing is what notices, since it compiles its planted
+# Precedence is not positional against -Wall. An explicit level beats -Wall's
+# implicit 3 from either side, so where $(ALIASING_CFLAGS) sits relative to
+# -Wall does not matter; "last one wins" holds only between two EXPLICIT
+# levels. Measured both ways, -Q and a planted violation at -O2:
+#
+#   -Wall                                     3   silent
+#   -Wall -Wstrict-aliasing=1                 1   warns
+#   -Wstrict-aliasing=1 -Wall                 1   warns
+#   -Wall -Wstrict-aliasing=1 ...=3           3   silent
+#   -Wall -Wstrict-aliasing=3 ...=1           1   warns
+#
+# So the disarm vector is a later explicit level, and CFLAGS ends with
+# $(EXTRA_CFLAGS): `make EXTRA_CFLAGS=-Wstrict-aliasing=3` builds at level 3
+# with every flag still present and every sentence describing them still
+# true. check-aliasing catches exactly that, because it compiles its planted
 # violation with the real $(CFLAGS) and so sees the resolved level rather
-# than the spelling. Read the level with -Q rather than off the flag list.
+# than the spelling - verified by running it that way. Read the level with
+# -Q; the flag list cannot be interpreted by eye.
 #
 # Level 1 rather than 3 costs nothing here only because chron does not build
 # on a common first member: all 41 objects compile clean at level 1 under

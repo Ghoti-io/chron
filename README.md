@@ -217,10 +217,15 @@ it on by default from `-O2`. A gate resting on that proxy goes silent the
 moment somebody changes an `-O`. Level 1 rather than the level 3 `-Wall`
 implies: on `libs/model`'s eleven real violations, level 3 found none and
 level 1 found all eleven. `-Wall` is not neutral here - it *sets* the level
-to 3, so naming level 1 after it is what arms the warning at all, and the
-order in `CFLAGS` is load-bearing: move `$(ALIASING_CFLAGS)` before `-Wall`
-and the warning is gone with every flag still present. Read the effective
-level with `gcc -Q --help=warnings <flags>` rather than off the flag list.
+to 3, so naming level 1 is what arms the warning at all. Precedence is not
+positional: an explicit level beats `-Wall`'s implicit 3 from either side,
+and "last one wins" holds only between two explicit levels. The disarm
+vector is therefore a later *explicit* level, and `CFLAGS` ends with
+`$(EXTRA_CFLAGS)` - `make EXTRA_CFLAGS=-Wstrict-aliasing=3` builds at level
+3 with every flag still present and every sentence here still true.
+`make check-aliasing` catches that, because it compiles its planted
+violation with the real `$(CFLAGS)`. Read the effective level with
+`gcc -Q --help=warnings <flags>` rather than off the flag list.
 Level 1 is free here only because chron does not build on a common first
 member - all 41 objects compile clean at it under `-Werror`, where
 `libs/ctang` measures 669 diagnostics across 48 of 62 translation units for
