@@ -174,8 +174,10 @@ PKG_CONFIG_LOOKUP_PATH := $(if $(PKG_CONFIG_PATH_ENV),$(PKG_CONFIG_PATH_ENV):)$(
 # that cannot be read in a debugger is a release build nobody can diagnose,
 # and the symbols cost only file size.
 #
-# The sanitizer build puts its own -O1 after this one (see ASAN_UBSAN_FLAGS)
-# and `make coverage` its own -O0, both by appending, since the last -O wins.
+# The sanitizer builds put $(SAN_OPT_CFLAGS) after this one and `make
+# coverage` its own -O0, both by appending, since the last -O wins. That the
+# gate does not simply inherit this level is a decision with a reason, and the
+# reason is written beside SAN_OPT_CFLAGS rather than here.
 ifeq ($(BUILD),debug)
 OPT_CFLAGS := -O0
 else
@@ -323,8 +325,8 @@ TESTFLAGS := `PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs --cfla
 # type, because a gate wired to a target nobody types is one that does not
 # run. It costs about a second and reports rather than fails when the input
 # a generator needs is not on the machine.
-TEST_GATES ?= check-symbols check-layering check-generated check-docs \
-	check-license check-counts
+TEST_GATES ?= check-symbols check-layering check-aliasing check-generated \
+	check-docs check-license check-counts
 
 #
 # A check whose tool is missing prints a line and passes, which on one
@@ -852,6 +854,67 @@ define layering-check
 
 endef
 
+check-aliasing: ## Fail on a type-punning violation, or if the sweep cannot see one
+# The one undefined-behaviour class with no runtime gate anywhere in this
+# suite. Measured on gcc 14.2: ASan and UBSan catch a strict-aliasing
+# violation at NO optimization level, so `test-asan` and the fuzzers are blind
+# to it however they are compiled, and the only instrument left is the
+# compiler's own static warning. It is partial - it will not follow a
+# violation laundered through a function boundary - and partial is what there
+# is.
+#
+# -Wstrict-aliasing=1 is the aggressive level, chosen because the library
+# scores zero under it today and that is the strongest statement available.
+# A future false positive is a finding to explain in a comment, not a level
+# to lower quietly.
+#
+# THE CONTROL IS THE POINT. A sweep for something that is not there returns
+# clean whether it looked or not, and this one has several ways to stop
+# looking: -Wstrict-aliasing needs the optimizer, so a lost -O makes it
+# silent; a later compiler may stop reporting under -fsyntax-only; a broken
+# -I makes every file fail to parse, and errors on stderr are not warnings.
+# So a planted violation is compiled FIRST, with the identical flags, and the
+# gate fails if the warning does not appear. A clean sweep only means
+# anything after the instrument has been seen to fire.
+check-aliasing: $(LIBVER_GEN)
+	@mkdir -p $(BUILD_DIR)
+	@printf '%s\n' \
+		'#include <stdint.h>' \
+		'int32_t gchron_alias_control(float * f) {' \
+		'  int32_t * p = (int32_t *)f;' \
+		'  *f = 1.0f;' \
+		'  return *p;' \
+		'}' > $(BUILD_DIR)/alias_control.c
+	@if ! $(CC) -std=c17 -O2 -Wstrict-aliasing=1 $(INCLUDE) -fsyntax-only \
+			$(BUILD_DIR)/alias_control.c 2>&1 | grep -q 'strict-aliasing'; then \
+		printf "\033[0;31mcheck-aliasing: the sweep is blind - a planted type-punning violation drew no warning, so a clean result would mean nothing. Fix the instrument before trusting it.\033[0m\n" >&2; \
+		exit 1; \
+	fi
+	@found=0; unread=0; swept=0; \
+	for f in $(SOURCES); do \
+		if out=`$(CC) -std=c17 -O2 -Wstrict-aliasing=1 $(INCLUDE) -fsyntax-only $$f 2>&1`; then \
+			swept=$$((swept + 1)); \
+			if printf '%s' "$$out" | grep -q 'strict-aliasing'; then \
+				printf '%s\n' "$$out" >&2; found=1; \
+			fi; \
+		else \
+			printf '%s\n' "$$out" >&2; unread=1; \
+		fi; \
+	done; \
+	if [ $$unread -ne 0 ]; then \
+		printf "\033[0;31mcheck-aliasing: a source would not compile, so the sweep did not look at it. That is 'could not look', not 'found nothing'.\033[0m\n" >&2; \
+		exit 1; \
+	fi; \
+	if [ $$swept -eq 0 ]; then \
+		printf "\033[0;31mcheck-aliasing: swept no files at all. SOURCES is empty and a clean result means nothing.\033[0m\n" >&2; \
+		exit 1; \
+	fi; \
+	if [ $$found -ne 0 ]; then \
+		printf "\033[0;31mcheck-aliasing: a type-punning violation, which no sanitizer in this toolchain would catch at any level.\033[0m\n" >&2; \
+		exit 1; \
+	fi; \
+	printf "\033[0;32mNo strict-aliasing violation in %d sources, and the sweep was seen to catch a planted one.\033[0m\n" "$$swept"
+
 check-layering: ## Fail if a lower tier includes a higher tier's header
 	$(call layering-check,0,$(TIER0_FORBIDDEN),$(TIER0_FILES))
 	$(call layering-check,1,$(TIER1_FORBIDDEN),$(TIER1_FILES))
@@ -1203,9 +1266,36 @@ endif
 # that records an infinity.
 UBSAN_CHECKS := undefined,float-cast-overflow
 
+# The optimization level both sanitizer builds compile at, for the same reason
+# the checks list above is one variable: spelled separately in two places, the
+# two builds drift and nobody notices until a finding will not reproduce.
+#
+# -O1 rather than the -O2 the release ships, chosen on what was measured
+# across the suite rather than on the usual folklore:
+#
+#   - It is not about detection. On gcc 14.2, heap-use-after-free,
+#     stack-buffer-overflow, signed overflow and float-to-int overflow are all
+#     caught at -O1 and at -O2 alike. Strict aliasing is caught at neither, at
+#     any level, by any sanitizer in this toolchain - so "the optimizer
+#     exploits aliasing at -O2" is a true statement about the optimizer and
+#     says nothing about what the gate would see. chron has no aliasing
+#     exposure to lose either way: every big-endian read is byte-at-a-time
+#     (tzif.c), there are no punning unions, and `make check-aliasing` sweeps
+#     for it with a planted control.
+#
+#   - It is about the gate and the fuzzers landing on one codegen. `test-asan`
+#     and the ten fuzz harnesses ask overlapping questions, and a finding from
+#     one has to reproduce under the other. Different levels would make a
+#     difference in codegen indistinguishable from a difference in the input.
+#
+#   - And it does not move when the release level does. An ASan build that
+#     inherits $(OPT_CFLAGS) changes fidelity as a side effect of a decision
+#     about shipping speed, which is a change to the gate that nobody chose.
+SAN_OPT_CFLAGS := -O1
+
 ASAN_UBSAN_FLAGS := -fsanitize=address,$(UBSAN_CHECKS) \
 	-fno-sanitize-recover=$(UBSAN_CHECKS) \
-	-fno-omit-frame-pointer -g -O1
+	-fno-omit-frame-pointer -g $(SAN_OPT_CFLAGS)
 ASAN_BUILD_DIR := ./build/$(BUILD)-asan
 ASAN_OBJ_DIR := $(ASAN_BUILD_DIR)/objects
 ASAN_APP_DIR := $(ASAN_BUILD_DIR)/apps
@@ -1302,7 +1392,7 @@ FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
 # that the two builds are checking the same thing whoever reads them.
 FUZZ_SAN := -fsanitize=address,$(UBSAN_CHECKS) \
 	-fno-sanitize-recover=$(UBSAN_CHECKS) \
-	-fno-omit-frame-pointer -g -O1
+	-fno-omit-frame-pointer -g $(SAN_OPT_CFLAGS)
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
 FUZZ_DIR := $(BUILD_DIR)/fuzz

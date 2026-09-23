@@ -208,6 +208,18 @@ The gates are themselves checked. `make check-layering` was verified by adding
 an include of `instant.h` to a tier-0 source and watching the build fail - it
 did not, the first time, and `design.md` §13 records why.
 
+`make check-aliasing` is the newest of them and the one with the least margin,
+because it is a sweep for something that is usually absent - the kind that
+returns clean whether or not it looked. So it compiles a planted violation
+first, with the flags the sweep uses, and fails if that draws no warning. It
+was verified four ways: a violation added to a real source, the optimizer the
+warning needs taken away, the include path broken so no source parses, and the
+file list emptied. Each produces a different message, and "could not look" is
+never spelled like "found nothing". It exists because a strict-aliasing
+violation is caught by **no sanitizer in this toolchain at any optimization
+level** - ASan, UBSan and the fuzzers are all blind to it, so a static warning
+is the only instrument there is.
+
 **The fuzzers assert invariants, not just absence of crashes**, which is why
 they found three defects the three oracles could not: a seventy-four byte TZif
 file claiming 987,654,144 transitions, and two `TZ` rules whose changeovers
@@ -223,6 +235,7 @@ make test-asan               # ASan + UBSan; the UBSan half proves no signed ove
 make fuzz                    # text, arithmetic, durations, TZif and the TZ grammar
 make check-symbols           # every exported symbol carries the version namespace
 make check-layering          # no tier includes a higher tier's header
+make check-aliasing          # no type punning, and the sweep proves it can see
 make check-oracles           # all four differentials against their oracles
 make vectors                 # regenerate the committed vectors from their oracles
 ```
