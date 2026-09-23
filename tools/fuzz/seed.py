@@ -14,10 +14,32 @@ many git objects for input that the next run would find again anyway, and
 `cutil`'s six megabytes of tracked Doxygen output is the cautionary tale this
 suite already has.
 
-Running it is idempotent; it clears each directory first, so a corpus that has
-grown during a campaign comes back to the seed set.
+Running it is idempotent in the sense that matters: every seed is named by the
+SHA-1 of its own bytes, so a second run on the same machine rewrites the same
+names.  It is **not** reproducible across machines, and that is the whole
+reason for the two modes below.
 
-    tools/fuzz/seed.py
+Two of the seeders - seed_zones() and seed_zonedir() - read the machine's own
+time-zone database, so what they produce depends on how much of tzdata is
+installed.  This script used to clear every directory before writing, which
+meant running it on a machine with a thinner zoneinfo silently deleted the
+seeds generated on a fuller one: here that was 2,286 seeds written against
+3,759 committed, showing up as 1,545 deletions that looked exactly like the
+intended "clear it first" behaviour.
+
+So by default nothing is deleted.  Files this run did not write are kept and
+counted, and because the names are content hashes, "did not write" is exact
+rather than a guess.  A corpus can only grow, which is the right default for
+a fuzzing corpus: an extra input costs a few bytes, and a deleted one may be
+the only witness to a branch nobody has reached since.
+
+    tools/fuzz/seed.py              # additive; keeps what it did not write
+    tools/fuzz/seed.py --prune      # also delete those, and say how many
+
+`--prune` is the old behaviour and is what sheds the thousands of units a
+libFuzzer campaign leaves behind.  Run it only on a machine whose zoneinfo is
+at least as complete as the committed corpus was built from, and check
+`git status` before staging.
 
 Copyright 2026 by Corey Pennycuff
 """
@@ -58,17 +80,48 @@ def unescape(text):
     return bytes(out)
 
 
+WRITTEN = {}
+
+
 def reset(name):
+    """Make sure the directory exists, and start recording what we write.
+
+    It no longer empties the directory.  The name is kept because every
+    seeder calls it and what it means - "this run owns this directory from
+    here" - has not changed.
+    """
     path = CORPUS / name
     path.mkdir(parents=True, exist_ok=True)
-    for entry in path.iterdir():
-        if entry.is_file() and entry.name != ".gitignore":
-            entry.unlink()
+    WRITTEN.setdefault(path, set())
     return path
 
 
 def write(path, blob):
-    (path / hashlib.sha1(blob).hexdigest()).write_bytes(blob)
+    name = hashlib.sha1(blob).hexdigest()
+    WRITTEN.setdefault(path, set()).add(name)
+    (path / name).write_bytes(blob)
+
+
+def sweep(path, prune):
+    """Return (written, kept), deleting the kept ones when asked.
+
+    A file is "kept" when this run did not write it: a unit from a campaign,
+    or a seed written on a machine with more of tzdata installed than this
+    one has.  The two are indistinguishable from here, which is exactly why
+    the default is to leave them alone.
+    """
+    mine = WRITTEN.get(path, set())
+    kept = 0
+    for entry in sorted(path.iterdir()):
+        if not entry.is_file() or entry.name == ".gitignore":
+            continue
+        if entry.name in mine:
+            continue
+        if prune:
+            entry.unlink()
+        else:
+            kept += 1
+    return len(mine), kept
 
 
 def seed_parse():
@@ -414,6 +467,13 @@ def seed_zonedir():
 
 
 def main():
+    prune = "--prune" in sys.argv[1:]
+    unknown = [a for a in sys.argv[1:] if a != "--prune"]
+    if unknown:
+        sys.stderr.write("seed.py: unrecognised argument %s\n" % unknown[0])
+        sys.stderr.write("usage: seed.py [--prune]\n")
+        return 2
+
     parse = seed_parse()
     arith = seed_arith()
     tzif, posix = seed_zones()
@@ -423,11 +483,26 @@ def main():
     scan = seed_scan()
     textfmt = seed_textfmt()
     zonedir = seed_zonedir()
+    total_kept = 0
     for path in (parse, arith, tzif, posix, duration, fmt, leap, scan,
                  textfmt, zonedir):
-        count = len([p for p in path.iterdir() if p.is_file()
-                     and p.name != ".gitignore"])
-        print("%-34s %5d seeds" % (path.relative_to(ROOT), count))
+        written, kept = sweep(path, prune)
+        total_kept += kept
+        note = ""
+        if kept:
+            note = ", %d kept" % kept
+        print("%-34s %5d written%s" % (path.relative_to(ROOT), written, note))
+
+    if prune:
+        print("\n--prune: anything this run did not write has been deleted.")
+        print("Check `git status` before staging: on a machine with less of")
+        print("tzdata installed than the committed corpus was built from,")
+        print("those deletions are seeds, not campaign units.")
+    elif total_kept:
+        print("\n%d files were already there and this run did not write"
+              % total_kept)
+        print("them - campaign units, or seeds from a machine with more of")
+        print("tzdata installed. Kept. Use --prune to delete them.")
     return 0
 
 
