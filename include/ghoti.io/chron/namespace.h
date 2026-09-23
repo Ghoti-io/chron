@@ -327,6 +327,7 @@
 #define gchron_zoned_from_instant GHOTIIO_CHRON(gchron_zoned_from_instant)
 #define gchron_zoned_identical GHOTIIO_CHRON(gchron_zoned_identical)
 #define gchron_zoned_info GHOTIIO_CHRON(gchron_zoned_info)
+#define gchron_zoned_round GHOTIIO_CHRON(gchron_zoned_round)
 #define gchron_zoned_start_of_day GHOTIIO_CHRON(gchron_zoned_start_of_day)
 #define gchron_zoned_to_civil GHOTIIO_CHRON(gchron_zoned_to_civil)
 #define gchron_zoned_to_offset GHOTIIO_CHRON(gchron_zoned_to_offset)

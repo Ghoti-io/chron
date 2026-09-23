@@ -879,3 +879,259 @@ TEST(ZoneDb, ADirectoryWithNoZonesListsNothingWithoutUndefinedBehaviour) {
 
   gchron_zonedb_destroy(db);
 }
+
+/*--------------------------------------------------------------------------*
+ * Rounding a zoned date-time
+ *--------------------------------------------------------------------------*/
+
+namespace {
+
+class ZonedRound : public Zones {
+protected:
+  GCHRON_ZonedDateTime At(const char * zone_id, int32_t y, int mo, int d,
+      int h, int mi, int s) {
+    GCHRON_DateTime civil{};
+    EXPECT_EQ(GCHRON_OK, gchron_date_create(y, mo, d, &civil.date));
+    civil.time.hour = static_cast<uint8_t>(h);
+    civil.time.minute = static_cast<uint8_t>(mi);
+    civil.time.second = static_cast<uint8_t>(s);
+    civil.time.nsec = 0;
+
+    GCHRON_ZonedDateTime z{};
+    EXPECT_EQ(GCHRON_OK, gchron_zoned_from_civil(civil, zone(zone_id),
+        GCHRON_RESOLVE_COMPATIBLE, &z));
+    return z;
+  }
+
+  std::string Local(const GCHRON_ZonedDateTime & z) {
+    GCHRON_DateTime civil{};
+    EXPECT_EQ(GCHRON_OK, gchron_zoned_to_civil(&z, &civil));
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%04d-%02d-%02dT%02d:%02d:%02d",
+        civil.date.year, civil.date.month, civil.date.day, civil.time.hour,
+        civil.time.minute, civil.time.second);
+    return buf;
+  }
+};
+
+} // namespace
+
+/*
+ * The vector the phase-5 note names. 2026-11-01 in America/New_York is the
+ * fall-back: the local day runs 25 hours, because 01:00-02:00 happens twice.
+ *
+ * Every assertion here is about that hour. Rounding the underlying instant
+ * instead of the local boundaries puts every one of them an hour out, which
+ * is what the arm below the test does on purpose.
+ */
+TEST_F(ZonedRound, ADayIsTwentyFiveHoursOnTheAmericanFallBack) {
+  const GCHRON_ZonedDateTime noon = At("America/New_York", 2026, 11, 1,
+      12, 0, 0);
+  GCHRON_ZonedDateTime got{};
+
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&noon, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-11-01T00:00:00", Local(got))
+      << "FLOOR must give the local day's own start";
+
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&noon, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_CEIL, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-11-02T00:00:00", Local(got));
+
+  /*
+   * The midpoint of this day is local 11:30, not noon, and working out why is
+   * the whole point of the function. The day starts at 00:00 EDT = 04:00Z and
+   * ends at 00:00 EST = 05:00Z the next day, which is 25 hours; half of that
+   * is 16:30Z, and by then the zone is on EST, so it reads 11:30 locally.
+   *
+   * The transition happens in the morning, so local noon is *thirteen* hours
+   * into the day rather than twelve - past the midpoint, not short of it. The
+   * first version of this test asserted the opposite, on the assumption that
+   * a longer day moves its midpoint later in the local day. Checked against
+   * Python's zoneinfo, which gives 2026-11-01 16:30Z for the midpoint of
+   * both this day and the spring-forward one below.
+   */
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&noon, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_HALF_EXPAND, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-11-02T00:00:00", Local(got))
+      << "local noon is 13 hours into a 25-hour day, which is past half";
+
+  const GCHRON_ZonedDateTime before_mid = At("America/New_York", 2026, 11, 1,
+      11, 29, 0);
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&before_mid, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_HALF_EXPAND, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-11-01T00:00:00", Local(got))
+      << "11:29 is a minute short of this day's midpoint";
+
+  const GCHRON_ZonedDateTime at_mid = At("America/New_York", 2026, 11, 1,
+      11, 30, 0);
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&at_mid, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_HALF_EXPAND, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-11-02T00:00:00", Local(got))
+      << "11:30 is exactly the midpoint of this 25-hour day, and a tie "
+      << "goes up";
+
+  /* An ordinary 24-hour day in the same zone, for contrast. */
+  const GCHRON_ZonedDateTime ordinary = At("America/New_York", 2026, 11, 8,
+      12, 0, 0);
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&ordinary, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_HALF_EXPAND, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-11-09T00:00:00", Local(got))
+      << "on a 24-hour day local noon is exactly half, so the tie goes up";
+}
+
+/*
+ * The spring-forward day is 23 hours: 00:00 EST = 05:00Z to 00:00 EDT =
+ * 04:00Z the next day. Half of that is again 16:30Z, which on EDT reads
+ * 12:30 - so the shorter day's midpoint is *later* on the local clock than
+ * the longer day's, which is the opposite of what the shape suggests and is
+ * why both are written out rather than reasoned about.
+ */
+TEST_F(ZonedRound, ADayIsTwentyThreeHoursOnTheAmericanSpringForward) {
+  GCHRON_ZonedDateTime got{};
+
+  const GCHRON_ZonedDateTime before = At("America/New_York", 2026, 3, 8,
+      12, 29, 0);
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&before, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_HALF_EXPAND, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-03-08T00:00:00", Local(got));
+
+  const GCHRON_ZonedDateTime after = At("America/New_York", 2026, 3, 8,
+      12, 31, 0);
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&after, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_HALF_EXPAND, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-03-09T00:00:00", Local(got))
+      << "12:30 is the midpoint of this 23-hour day, so 12:31 is past it";
+
+  /* Noon is short of the midpoint here, where on the fall-back day it is
+   * past it. Same local reading, same zone, opposite answers. */
+  const GCHRON_ZonedDateTime noon = At("America/New_York", 2026, 3, 8,
+      12, 0, 0);
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&noon, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_HALF_EXPAND, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-03-08T00:00:00", Local(got));
+}
+
+/*
+ * The first instant of a day is not always midnight. America/Sao_Paulo on
+ * 2018-11-04 went from 23:59:59 to 01:00:00, so there is no 00:00 to land on
+ * and a resolve policy has to say what happens - which is the same reason
+ * gchron_zoned_start_of_day() exists.
+ */
+TEST_F(ZonedRound, AMidnightThatDoesNotExistNeedsAResolvePolicy) {
+  const GCHRON_ZonedDateTime midday = At("America/Sao_Paulo", 2018, 11, 4,
+      12, 0, 0);
+  GCHRON_ZonedDateTime got{};
+
+  EXPECT_EQ(GCHRON_ERR_GAP, gchron_zoned_round(&midday, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_REJECT, &got))
+      << "the zero value refuses rather than guessing which midnight";
+
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&midday, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_LATER, &got));
+  EXPECT_EQ("2018-11-04T01:00:00", Local(got))
+      << "the first instant of that day is after the gap, not before it";
+
+  /* Which is the same answer gchron_zoned_start_of_day() gives. */
+  GCHRON_ZonedDateTime start{};
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_start_of_day(&midday, &start));
+  EXPECT_EQ(Local(start), Local(got));
+}
+
+TEST_F(ZonedRound, SubDayUnitsRoundOnTheLocalClock) {
+  const GCHRON_ZonedDateTime in = At("Asia/Kathmandu", 2026, 9, 23, 14, 37,
+      29);
+  GCHRON_ZonedDateTime got{};
+
+  /*
+   * Kathmandu is +05:45, so its local hour and minute boundaries are not the
+   * same instants as UTC's. Rounding to the hour has to land on a local hour.
+   */
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&in, GCHRON_UNIT_HOUR, 1,
+      GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-09-23T14:00:00", Local(got));
+
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&in, GCHRON_UNIT_MINUTE, 15,
+      GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-09-23T14:30:00", Local(got));
+}
+
+TEST_F(ZonedRound, CalendarUnitsLandOnLocalCalendarBoundaries) {
+  const GCHRON_ZonedDateTime in = At("Europe/Paris", 2026, 9, 23, 14, 0, 0);
+  GCHRON_ZonedDateTime got{};
+
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&in, GCHRON_UNIT_MONTH, 1,
+      GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-09-01T00:00:00", Local(got));
+
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&in, GCHRON_UNIT_YEAR, 1,
+      GCHRON_ROUND_CEIL, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2027-01-01T00:00:00", Local(got));
+
+  /* 2026-09-23 is a Wednesday; the week floors to Monday the 21st. */
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&in, GCHRON_UNIT_WEEK, 1,
+      GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ("2026-09-21T00:00:00", Local(got));
+}
+
+TEST_F(ZonedRound, IsIdempotentAcrossATransition) {
+  const char * ids[] = { "America/New_York", "Europe/Paris",
+      "Australia/Lord_Howe" };
+  const GCHRON_Unit units[] = { GCHRON_UNIT_MINUTE, GCHRON_UNIT_HOUR,
+      GCHRON_UNIT_DAY, GCHRON_UNIT_MONTH };
+  const GCHRON_Rounding modes[] = { GCHRON_ROUND_FLOOR, GCHRON_ROUND_CEIL,
+      GCHRON_ROUND_HALF_EXPAND, GCHRON_ROUND_HALF_EVEN };
+
+  for (const char * id : ids) {
+    for (int hour = 0; hour < 24; ++hour) {
+      /* Across both 2026 transitions in the northern zones. */
+      for (const auto & day : {std::make_pair(3, 8), std::make_pair(11, 1)}) {
+        GCHRON_DateTime civil{};
+        ASSERT_EQ(GCHRON_OK, gchron_date_create(2026, day.first, day.second,
+            &civil.date));
+        civil.time.hour = static_cast<uint8_t>(hour);
+        civil.time.minute = 30;
+        civil.time.second = 0;
+        civil.time.nsec = 0;
+
+        GCHRON_ZonedDateTime z{};
+        if (gchron_zoned_from_civil(civil, zone(id),
+            GCHRON_RESOLVE_COMPATIBLE, &z) != GCHRON_OK) {
+          continue;
+        }
+        for (GCHRON_Unit unit : units) {
+          for (GCHRON_Rounding mode : modes) {
+            GCHRON_ZonedDateTime once{};
+            GCHRON_ZonedDateTime twice{};
+            if (gchron_zoned_round(&z, unit, 1, mode,
+                GCHRON_RESOLVE_COMPATIBLE, &once) != GCHRON_OK) {
+              continue;
+            }
+            ASSERT_EQ(GCHRON_OK, gchron_zoned_round(&once, unit, 1, mode,
+                GCHRON_RESOLVE_COMPATIBLE, &twice));
+            EXPECT_EQ(0, gchron_instant_compare(&once.instant,
+                &twice.instant))
+                << id << " " << gchron_unit_string(unit) << " mode " << mode
+                << " at " << Local(z) << ": " << Local(once) << " then "
+                << Local(twice);
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(ZonedRound, RejectsNullAndInvalidInput) {
+  const GCHRON_ZonedDateTime in = At("Europe/Paris", 2026, 9, 23, 0, 0, 0);
+  GCHRON_ZonedDateTime got{};
+
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_zoned_round(nullptr, GCHRON_UNIT_DAY,
+      1, GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_zoned_round(&in, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_COMPATIBLE, nullptr));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_zoned_round(&in,
+      GCHRON_UNIT_UNSPECIFIED, 1, GCHRON_ROUND_FLOOR,
+      GCHRON_RESOLVE_COMPATIBLE, &got));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_zoned_round(&in, GCHRON_UNIT_MINUTE, 7,
+      GCHRON_ROUND_FLOOR, GCHRON_RESOLVE_COMPATIBLE, &got));
+}

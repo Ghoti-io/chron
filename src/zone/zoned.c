@@ -33,8 +33,10 @@
 #include <ghoti.io/chron/zone.h>
 #include <ghoti.io/chron/zoned.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "../core/core_internal.h"
+#include "../core/round_internal.h"
 #include "zone_internal.h"
 
 GCHRON_Result gchron_zoned_from_instant(GCHRON_Instant instant,
@@ -390,4 +392,225 @@ void gchron_zoned_dump(const GCHRON_ZonedDateTime * zoned, FILE * stream) {
       info.abbreviation, info.is_dst ? " dst" : "",
       gchron_zone_id(zoned->zone) ? gchron_zone_id(zoned->zone)
                                   : "<anonymous>");
+}
+
+/*--------------------------------------------------------------------------*
+ * Rounding
+ *--------------------------------------------------------------------------*/
+
+/** One bucket of @p smallest, as a duration to step a boundary forward by. */
+static GCHRON_Result bucket_duration(GCHRON_Unit smallest, int64_t increment,
+    GCHRON_Duration * out) {
+  GCHRON_Duration d;
+
+  memset(&d, 0, sizeof d);
+  switch (smallest) {
+    case GCHRON_UNIT_NANOSECOND:
+    case GCHRON_UNIT_MICROSECOND:
+    case GCHRON_UNIT_MILLISECOND: {
+      const int64_t per = smallest == GCHRON_UNIT_NANOSECOND ? 1
+          : (smallest == GCHRON_UNIT_MICROSECOND ? 1000 : 1000000);
+      /*
+       * Below a second the bucket is always a proper fraction of a second -
+       * the increment has to divide its unit's next step up - so this never
+       * needs to carry into seconds.
+       */
+      d.nsec = (int32_t)(per * increment);
+      break;
+    }
+    case GCHRON_UNIT_SECOND: d.seconds = increment; break;
+    case GCHRON_UNIT_MINUTE: d.minutes = increment; break;
+    case GCHRON_UNIT_HOUR: d.hours = increment; break;
+    case GCHRON_UNIT_DAY: d.days = increment; break;
+    case GCHRON_UNIT_WEEK: d.weeks = increment; break;
+    case GCHRON_UNIT_MONTH: d.months = increment; break;
+    case GCHRON_UNIT_YEAR: d.years = increment; break;
+    default: return GCHRON_ERR_INVALID;
+  }
+  *out = d;
+  return GCHRON_OK;
+}
+
+/**
+ * Which bucket a local boundary is, for GCHRON_ROUND_HALF_EVEN.
+ *
+ * Counted in local terms, because the boundaries are local: the day a zoned
+ * value falls on is the local date, not whatever UTC calls it.
+ */
+static GCHRON_Result local_bucket(const GCHRON_DateTime * boundary,
+    GCHRON_Unit smallest, int64_t increment, int64_t * out) {
+  int64_t epoch_day;
+  GCHRON_Result result;
+
+  switch (smallest) {
+    case GCHRON_UNIT_YEAR:
+      *out = (int64_t)boundary->date.year;
+      return GCHRON_OK;
+    case GCHRON_UNIT_MONTH:
+      *out = (int64_t)boundary->date.year * 12 + (boundary->date.month - 1);
+      return GCHRON_OK;
+    case GCHRON_UNIT_WEEK:
+      result = gchron_date_to_epoch_day(&boundary->date, &epoch_day);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      *out = gchron_floor_div(epoch_day, 7);
+      return GCHRON_OK;
+    default: {
+      int64_t seconds;
+      int64_t scale;
+
+      result = gchron_date_to_epoch_day(&boundary->date, &epoch_day);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      if (!gchron_mul_i64(epoch_day, GCHRON_SECONDS_PER_DAY, &seconds)) {
+        return GCHRON_ERR_RANGE;
+      }
+      seconds += (int64_t)boundary->time.hour * GCHRON_SECONDS_PER_HOUR
+          + (int64_t)boundary->time.minute * 60
+          + (int64_t)boundary->time.second;
+      if (smallest < GCHRON_UNIT_SECOND) {
+        /* Sub-second buckets: count them within the second we landed on. */
+        const int64_t per = smallest == GCHRON_UNIT_NANOSECOND ? 1
+            : (smallest == GCHRON_UNIT_MICROSECOND ? 1000 : 1000000);
+        *out = (int64_t)boundary->time.nsec / (per * increment);
+        return GCHRON_OK;
+      }
+      switch (smallest) {
+        case GCHRON_UNIT_SECOND: scale = increment; break;
+        case GCHRON_UNIT_MINUTE: scale = 60 * increment; break;
+        case GCHRON_UNIT_HOUR:
+          scale = GCHRON_SECONDS_PER_HOUR * increment;
+          break;
+        case GCHRON_UNIT_DAY: scale = GCHRON_SECONDS_PER_DAY * increment;
+          break;
+        default: return GCHRON_ERR_INVALID;
+      }
+      *out = gchron_floor_div(seconds, scale);
+      return GCHRON_OK;
+    }
+  }
+}
+
+/** Nanoseconds from @p from to @p to, refusing anything that will not fit. */
+static GCHRON_Result instant_gap_nanos(GCHRON_Instant from, GCHRON_Instant to,
+    int64_t * out) {
+  int64_t seconds;
+  int64_t nanos;
+
+  if (!gchron_sub_i64(to.sec, from.sec, &seconds)) {
+    return GCHRON_ERR_RANGE;
+  }
+  if (!gchron_mul_i64(seconds, GCHRON_NANOS_PER_SECOND, &nanos)) {
+    return GCHRON_ERR_RANGE;
+  }
+  if (!gchron_add_i64(nanos, (int64_t)to.nsec - (int64_t)from.nsec, &nanos)) {
+    return GCHRON_ERR_RANGE;
+  }
+  *out = nanos;
+  return GCHRON_OK;
+}
+
+GCHRON_Result gchron_zoned_round(const GCHRON_ZonedDateTime * in,
+    GCHRON_Unit smallest, int64_t increment, GCHRON_Rounding mode,
+    GCHRON_Resolve resolve, GCHRON_ZonedDateTime * out) {
+  GCHRON_DateTime civil;
+  GCHRON_DateTime lower_civil;
+  GCHRON_DateTime upper_civil;
+  GCHRON_Duration step;
+  GCHRON_ZonedDateTime lower;
+  GCHRON_ZonedDateTime upper;
+  GCHRON_Result result;
+  int64_t frac;
+  int64_t whole;
+  int64_t bucket;
+  bool moves_up;
+  bool ok;
+
+  if (out == NULL || in == NULL || in->zone == NULL
+      || !gchron_instant_is_valid(&in->instant)) {
+    return GCHRON_ERR_INVALID;
+  }
+  result = gchron_zoned_to_civil(in, &civil);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+
+  /*
+   * The lower boundary is a *local* one, found with civil arithmetic. This is
+   * the step that makes the answer different from rounding the instant: on a
+   * 25-hour local day the civil floor is that day's midnight, and the instant
+   * 24 hours before the day ends is an hour into it.
+   *
+   * gchron_datetime_round() also does the argument checking - the unit, the
+   * increment and its tiling rule - so a bad argument is refused here with
+   * the same code it would get on a civil value.
+   */
+  result = gchron_datetime_round(&civil, smallest, increment,
+      GCHRON_ROUND_FLOOR, NULL, &lower_civil);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  result = bucket_duration(smallest, increment, &step);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  result = gchron_datetime_add(&lower_civil, &step, NULL,
+      GCHRON_OVERFLOW_CONSTRAIN, &upper_civil);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+
+  /*
+   * Both boundaries come back through the zone, and both can fail: a local
+   * midnight that falls in a gap does not exist, and one in an overlap
+   * happens twice. That is what the GCHRON_Resolve parameter is for, and why
+   * this function can fail where gchron_instant_round() cannot.
+   */
+  result = gchron_zoned_from_civil(lower_civil, in->zone, resolve, &lower);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  result = gchron_zoned_from_civil(upper_civil, in->zone, resolve, &upper);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+
+  result = instant_gap_nanos(lower.instant, in->instant, &frac);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  if (frac == 0) {
+    *out = *in;
+    return GCHRON_OK;
+  }
+  /*
+   * Measured in absolute time between the two absolute instants the local
+   * boundaries name, so a 25-hour day's midpoint is 12.5 hours after it
+   * starts rather than at local noon.
+   */
+  result = instant_gap_nanos(lower.instant, upper.instant, &whole);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  if (whole <= 0 || frac >= whole) {
+    /*
+     * The value is not inside the span its own floor named. Nothing in a sane
+     * zone does this; it would mean the two boundaries resolved across each
+     * other, and guessing which one was meant is worse than saying so.
+     */
+    return GCHRON_ERR_INTERNAL;
+  }
+  result = local_bucket(&lower_civil, smallest, increment, &bucket);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  moves_up = gchron_round_moves_up(frac, whole, in->instant.sec < 0,
+      (bucket & 1) == 0, mode, &ok);
+  if (!ok) {
+    return gchron_round_refusal(mode);
+  }
+  *out = moves_up ? upper : lower;
+  return GCHRON_OK;
 }

@@ -165,6 +165,42 @@ GCHRON_API GCHRON_Result gchron_zoned_start_of_day(
     const GCHRON_ZonedDateTime * zoned, GCHRON_ZonedDateTime * out);
 
 /**
+ * @brief Round a zoned date-time to a multiple of a unit, in its own zone.
+ *
+ * The boundaries are local ones - local midnight, the local hour - and the
+ * value's position between them is measured in absolute time, which is the
+ * only combination that is right on the two days a year when they disagree.
+ *
+ * On the American fall-back the local day is 25 hours. Its midpoint is 12.5
+ * hours after it starts, not 12; rounding the underlying instant instead
+ * would put the boundary an hour out and land the result in the previous
+ * day. That is the bug this function exists to stop a caller writing, so it
+ * is worth saying what it costs: this is two civil-to-instant conversions and
+ * they can fail, where gchron_instant_round() is arithmetic that cannot.
+ *
+ * @param in A valid zoned date-time.
+ * @param smallest The unit to round to, nanosecond through year, with the
+ *   same tiling rule the other two have.
+ * @param increment How many of @p smallest one bucket is; the calendar units
+ *   take 1 only.
+ * @param mode What to do with a value between two boundaries. Toward zero
+ *   means toward the epoch, as it does for the other two.
+ * @param resolve What to do when a boundary does not exist or happens twice.
+ *   A local midnight can fall in a gap - America/Sao_Paulo on 2018-11-04 has
+ *   no 00:00 - and then the first instant of that day is the one after the
+ *   gap, which is what GCHRON_RESOLVE_LATER gives. The zero value refuses
+ *   both, so a caller who did not think about it is told rather than guessed
+ *   at.
+ * @param out Receives the value on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID; GCHRON_ERR_GAP or
+ *   GCHRON_ERR_AMBIGUOUS when a boundary needs @p resolve and it refuses;
+ *   GCHRON_ERR_RANGE on overflow or under GCHRON_ROUND_REJECT.
+ */
+GCHRON_API GCHRON_Result gchron_zoned_round(const GCHRON_ZonedDateTime * in,
+    GCHRON_Unit smallest, int64_t increment, GCHRON_Rounding mode,
+    GCHRON_Resolve resolve, GCHRON_ZonedDateTime * out);
+
+/**
  * @brief The same moment, read in a different zone.
  *
  * @param zoned A valid zoned date-time.
