@@ -755,17 +755,17 @@ endif
 
 # Test sources live in tests/ and tests/unit/; the object name comes from the
 # basename either way, so the executable name matches.
-$(OBJ_DIR)/tests/%.o: tests/%.cpp $(FLAGS_STAMP)
+$(OBJ_DIR)/tests/%.o: tests/%.cpp $(FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
-$(OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(FLAGS_STAMP)
+$(OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
-$(OBJ_DIR)/tests/%.o: tests/conformance/%.cpp $(FLAGS_STAMP)
+$(OBJ_DIR)/tests/%.o: tests/conformance/%.cpp $(FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -1286,6 +1286,7 @@ END {
 endef
 
 STAMP_CHECK_MAKEFILE := $(firstword $(MAKEFILE_LIST))
+STAMP_CHECK_AWK := $(BUILD_DIR)/stamp_check.awk
 
 # What this gate does NOT model, pinned so the set cannot grow in silence.
 # The stamp invariant is about object rules that compile $< incrementally, and
@@ -1341,7 +1342,7 @@ STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 2 UNRECORDED 7 LINKED 4 PROBE
 
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	@mkdir -p $(BUILD_DIR)
-	$(file >$(BUILD_DIR)/stamp_check.awk,$(stamp-check-awk))
+	$(file >$(STAMP_CHECK_AWK),$(stamp-check-awk))
 # The control comes first, and is a planted pair rather than a single bad
 # rule: one stamped, one not. A sweep that has stopped matching compile
 # recipes reports nothing wrong, which is indistinguishable from a clean
@@ -1477,7 +1478,7 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 # wrongly. The pin below is the one that is supposed to fail for that, and it
 # could never fire. A second check on the same fact is not redundancy: it
 # takes the first failure and reports the wrong cause.
-	@ctl=$$(awk -f $(BUILD_DIR)/stamp_check.awk \
+	@ctl=$$(awk -f $(STAMP_CHECK_AWK) \
 			$(BUILD_DIR)/stamp_control.mk | tail -1 \
 			| sed 's/ PREREQ [0-9]*$$//'); \
 	if [ "$$ctl" != "$(STAMP_CONTROL_EXPECTED)" ]; then \
@@ -1501,7 +1502,7 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 # compile recipe the first time this ran.
 	@want=$$(grep -v '^#' $(STAMP_CHECK_MAKEFILE) \
 		| grep -cF -- '-c $$<'); \
-	out=$$(awk -f $(BUILD_DIR)/stamp_check.awk $(STAMP_CHECK_MAKEFILE)); \
+	out=$$(awk -f $(STAMP_CHECK_AWK) $(STAMP_CHECK_MAKEFILE)); \
 	got=$$(printf '%s\n' "$$out" | sed -n 's/^TOTAL \([0-9]*\) .*/\1/p'); \
 	bad=$$(printf '%s\n' "$$out" | sed -n 's/^TOTAL [0-9]* BAD \([0-9]*\) .*/\1/p'); \
 	unmodelled=$$(printf '%s\n' "$$out" | sed -n 's/.* UNMODELLED \([0-9]*\) .*/\1/p'); \
@@ -1944,7 +1945,7 @@ ifeq ($(UNAME_S), Linux)
 	ASAN_CFLAGS += -fPIC
 endif
 
-$(ASAN_OBJ_DIR)/%.o: src/%.c $(ASAN_FLAGS_STAMP)
+$(ASAN_OBJ_DIR)/%.o: src/%.c $(ASAN_FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling (ASan+UBSan): $< ###\n"
 	@mkdir -p $(@D)
 	$(CC) $(ASAN_CFLAGS) $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -1954,17 +1955,17 @@ $(ASAN_APP_DIR)/$(ASAN_TARGET): $(ASAN_LIBOBJECTS) $(ASAN_LINK_FLAGS_STAMP)
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) -shared -o $@ $(ASAN_LIBOBJECTS) $(ASAN_LDFLAGS) $(CUTIL_LIBS)
 
-$(ASAN_OBJ_DIR)/tests/%.o: tests/%.cpp $(ASAN_FLAGS_STAMP)
+$(ASAN_OBJ_DIR)/tests/%.o: tests/%.cpp $(ASAN_FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
-$(ASAN_OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(ASAN_FLAGS_STAMP)
+$(ASAN_OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(ASAN_FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
-$(ASAN_OBJ_DIR)/tests/%.o: tests/conformance/%.cpp $(ASAN_FLAGS_STAMP)
+$(ASAN_OBJ_DIR)/tests/%.o: tests/conformance/%.cpp $(ASAN_FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling ASan Test: $* ###\n"
 	@mkdir -p $(@D)
 	$(CXX) $(ASAN_CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
@@ -2055,7 +2056,7 @@ ASAN_DEPFILES := $(ASAN_LIBOBJECTS:.o=.d) \
 # A smoke-test length by default; for a real campaign: make fuzz FUZZ_TIME=3600
 FUZZ_TIME ?= 60
 
-$(FUZZ_OBJ_DIR)/%.o: src/%.c $(FUZZ_FLAGS_STAMP)
+$(FUZZ_OBJ_DIR)/%.o: src/%.c $(FUZZ_FLAGS_STAMP) | $(LIBVER_GEN)
 	@mkdir -p $(@D)
 	@$(FUZZ_CC) $(FUZZ_LIB_FLAGS) -std=c17 -w $(INCLUDE) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
