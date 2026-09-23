@@ -1321,6 +1321,23 @@ STAMP_CHECK_AWK := $(BUILD_DIR)/stamp_check.awk
 # This is a pin, not a judgement. It fails when the number moves, so a new
 # compile-to-executable rule - in a library whose binaries do not happen to
 # depend on a stamped object - has to be looked at instead of passing.
+#
+# What this gate does not check, stated because BAD 0 is easy to read as more
+# than it is: whether a rule names the GENERATED headers its source includes.
+# It asks only about flags stamps. Eight rules here compiled sources that
+# include libver_gen.h without naming it and scored BAD 0 throughout, and the
+# fresh-clone habit is what found them, not this sweep. A rule-level check
+# looks tractable - every recipe compiling a source that transitively includes
+# a generated header should name it order-only - but the transitive part needs
+# the .d files, which exist only after a build, which is the wrong end. Left
+# unguarded deliberately rather than half-built; a peer reached the same
+# conclusion independently about the same gap in their copy.
+#
+# The practice that does cover it: build one object per rule as the FIRST
+# command in a never-built clone, `rm -rf build` between each. Eleven targets
+# here, across every reachable rule including the fuzz tree. `make -n` is not
+# a substitute - it resolves the graph without compiling, so a missing
+# order-only prerequisite cannot show up.
 STAMP_UNMODELLED_EXPECTED := 1
 
 # Gate probes: compiler invocations that produce nothing. check-aliasing's
