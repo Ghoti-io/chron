@@ -1298,6 +1298,16 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 # that exercises nothing. It has to sit past the backslash - and for the
 # compile rule, on the same line as the -c $< that makes the rule visible at
 # all, so that dropping the join loses the variable and the rule together.
+#
+# One correction to the commit that added this. It said chron has no wrapped
+# compile or link recipe, so the defect was latent here. chron has exactly
+# one wrapped compiler invocation - the fuzz harness build below, whose
+# arguments continue onto a second line. It is in the unmodelled arm, which
+# reads only the head of the recipe, so no count moved and the fingerprint is
+# identical before and after the fix; that part was right for the wrong
+# reason. What is true is narrower: no rule in either *stamped* population
+# wraps today. The same sweep in a library that does have one reads a
+# naturally-occurring compile rule out of its population entirely.
 	@printf '%s\n\t%s \\\n\t%s\n%s\n\t%s \\\n\t%s\n' \
 		'$$(APP_DIR)/planted_link_wrap: planted.o $$(LINK_FLAGS_STAMP)' \
 		'g++ $$(LDFLAGS) -o $$@ planted.o' \
