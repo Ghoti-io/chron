@@ -1169,7 +1169,7 @@ BEGIN {
   for (x = 1; x <= PREREQ_N; x++) PREREQ[pa[x]] = 1
 }
 END {
-  total = 0; bad = 0; unmodelled = 0; unrecorded = 0; linked = 0
+  total = 0; bad = 0; unmodelled = 0; unrecorded = 0; linked = 0; probes = 0
   for (i = 1; i <= NR; i++) {
     if (L[i] !~ /^\$$\([A-Z_]*FLAGS_STAMP\):/) continue
     name = L[i]; sub(/^\$$\(/, "", name); sub(/\).*/, "", name)
@@ -1208,7 +1208,10 @@ END {
       if (head !~ /^\$$\$$?\([A-Z_]*(CC|CXX)\)[ \t]/ &&
           head !~ /^(cc|c\+\+|gcc|g\+\+|clang|clang\+\+)[ \t]/) continue
       hdr = cur; j = curline
-      if (hdr !~ /LINK_FLAGS_STAMP/) { unmodelled++; continue }
+      if (hdr !~ /LINK_FLAGS_STAMP/) {
+        if (rec ~ /-fsyntax-only/) probes++; else unmodelled++
+        continue
+      }
       if (iscont) continue
       linked++
       match(hdr, /\$$\([A-Z_]*LINK_FLAGS_STAMP\)/)
@@ -1252,7 +1255,7 @@ END {
       }
     }
   }
-  printf "TOTAL %d BAD %d UNMODELLED %d UNRECORDED %d LINKED %d PREREQ %d\n", total, bad, unmodelled, unrecorded, linked, PREREQ_N
+  printf "TOTAL %d BAD %d UNMODELLED %d UNRECORDED %d LINKED %d PROBES %d PREREQ %d\n", total, bad, unmodelled, unrecorded, linked, probes, PREREQ_N
 }
 endef
 
@@ -1260,12 +1263,21 @@ STAMP_CHECK_MAKEFILE := $(firstword $(MAKEFILE_LIST))
 
 # What this gate does NOT model, pinned so the set cannot grow in silence.
 # The stamp invariant is about object rules that compile $< incrementally, and
-# that is a narrower population than "every compile". Ten other recipe lines
-# invoke a compiler: two shared-library links and two test-binary links, which
-# consume stamped objects; three rules that compile a source straight to an
-# executable (the examples, the oracle drivers, the ICU oracle); the fuzz
-# harness build; check-aliasing's own -fsyntax-only control; and an echo that
-# names $(FUZZ_CXX).
+# that is a narrower population than "every compile". Two recipe lines invoke
+# a compiler outside it, and they are excused for different reasons, so they
+# are counted separately: the fuzz harness build, which is a build rule and
+# carries no stamp, and check-aliasing's -fsyntax-only control, which is a
+# probe. The enumeration that stood here listed ten and described the state
+# before the link stamps existed - the shared-library links, the test-binary
+# links and the three compile-to-executable rules have all been in LINKED
+# since then. A comment is not checked by anything, so it went on being read
+# as the gate's own account of itself while the number beside it moved.
+#
+# Splitting them is a peer's adaptation, taken because the same conflation
+# showed up here: one pin covering two exclusions, with a message describing
+# only one of them. A probe produces nothing that can go stale, so its count
+# should not rise when a build rule escapes the model, and the unmodelled pin
+# should not rise every time a gate compiles a control.
 #
 # The compile-to-executable rules are the ones that could go stale on their
 # own, and here they do not: each names $(APP_DIR)/$(STATIC_TARGET) as a normal
@@ -1282,7 +1294,11 @@ STAMP_CHECK_MAKEFILE := $(firstword $(MAKEFILE_LIST))
 # This is a pin, not a judgement. It fails when the number moves, so a new
 # compile-to-executable rule - in a library whose binaries do not happen to
 # depend on a stamped object - has to be looked at instead of passing.
-STAMP_UNMODELLED_EXPECTED := 2
+STAMP_UNMODELLED_EXPECTED := 1
+
+# Gate probes: compiler invocations that produce nothing. check-aliasing's
+# -fsyntax-only control is the only one.
+STAMP_PROBES_EXPECTED := 1
 
 # Names the link sweep skips because the rule already lists them as file
 # prerequisites, where mtime is the real check. Pinned so the list cannot
@@ -1295,7 +1311,7 @@ STAMP_LINK_PREREQ_EXPECTED := 3
 # holding two invocations; and five compiler invocations outside
 # the model, two of which share one logical line. PREREQ is deliberately
 # absent - see the note by the comparison.
-STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 5 UNRECORDED 7 LINKED 4
+STAMP_CONTROL_EXPECTED := TOTAL 4 BAD 1 UNMODELLED 2 UNRECORDED 7 LINKED 4 PROBES 3
 
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	@mkdir -p $(BUILD_DIR)
@@ -1442,9 +1458,15 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	unmodelled=$$(printf '%s\n' "$$out" | sed -n 's/.* UNMODELLED \([0-9]*\) .*/\1/p'); \
 	unrecorded=$$(printf '%s\n' "$$out" | sed -n 's/.* UNRECORDED \([0-9]*\) .*/\1/p'); \
 	linked=$$(printf '%s\n' "$$out" | sed -n 's/.* LINKED \([0-9]*\) .*/\1/p'); \
+	probes=$$(printf '%s\n' "$$out" | sed -n 's/.* PROBES \([0-9]*\) .*/\1/p'); \
 	prereq=$$(printf '%s\n' "$$out" | sed -n 's/.* PREREQ \([0-9]*\)$$/\1/p'); \
 	if [ "$$got" != "$$want" ]; then \
 		printf "\033[0;31mcheck-stamps: the sweep saw %s compile recipes and grep found %s. One of them is wrong, so neither count can be trusted.\033[0m\n" "$$got" "$$want" >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$probes" != "$(STAMP_PROBES_EXPECTED)" ]; then \
+		printf "\033[0;31mcheck-stamps: %s compiler invocations are gate probes, not the %s it is pinned to. A probe produces nothing that can go stale, so it is excused for a different reason than a build rule is; if a build rule has started to look like one, the exclusion is wrong.\033[0m\n" \
+			"$$probes" "$(STAMP_PROBES_EXPECTED)" >&2; \
 		exit 1; \
 	fi; \
 	if [ "$$unmodelled" != "$(STAMP_UNMODELLED_EXPECTED)" ]; then \
@@ -1473,7 +1495,7 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		printf "into everything downstream of it.\n" >&2; \
 		exit 1; \
 	fi; \
-	printf "\033[0;32mAll %s compile rules carry the flags stamp for their own tree and %s link rules carry their tree's link stamp, every variable either recorded or a file prerequisite; %s compiler invocations are outside the model, as pinned.\033[0m\n" "$$got" "$$linked" "$$unmodelled"
+	printf "\033[0;32mAll %s compile rules carry the flags stamp for their own tree and %s link rules carry their tree's link stamp, every variable either recorded or a file prerequisite; of the compiler invocations outside the model, %s build rules and %s gate probes, as pinned.\033[0m\n" "$$got" "$$linked" "$$unmodelled" "$$probes"
 
 check-layering: ## Fail if a lower tier includes a higher tier's header
 	$(call layering-check,0,$(TIER0_FORBIDDEN),$(TIER0_FILES))
