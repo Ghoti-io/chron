@@ -268,6 +268,26 @@ endif
 # overridable, so a fuzz tree driven by gcc would have differed; the name is
 # what makes that not matter.
 ALIASING_ASSUME_CFLAGS := -fstrict-aliasing
+#
+# The level is named because -Wall already sets one: `gcc -Q --help=warnings
+# -Wall` reports -Wstrict-aliasing=3, and level 3 is silent on a plain
+# type-punned dereference that level 1 rejects. So -Wall at -O2 gives
+# -fstrict-aliasing the optimisation with no warning behind it - the
+# assumption armed and the guard absent.
+#
+# This makes the ORDER in CFLAGS load-bearing: $(ALIASING_CFLAGS) has to come
+# after -Wall, because the last level named wins. Moving it earlier disarms
+# the warning while leaving every flag present and every description of them
+# true. check-aliasing is what notices, since it compiles its planted
+# violation with the real $(CFLAGS) and so sees the resolved level rather
+# than the spelling. Read the level with -Q rather than off the flag list.
+#
+# Level 1 rather than 3 costs nothing here only because chron does not build
+# on a common first member: all 41 objects compile clean at level 1 under
+# -Werror. libs/ctang measured 669 diagnostics across 48 of 62 TUs at the
+# same level, every one a downcast to a struct's initial member that
+# C17 6.7.2.1p15 makes well defined. Where that is the architecture this gate
+# cannot be coverage, only a statement that gcc's level 1 still works.
 ALIASING_WARN_CFLAGS := -Wstrict-aliasing=1
 ALIASING_CFLAGS := $(ALIASING_ASSUME_CFLAGS) $(ALIASING_WARN_CFLAGS)
 

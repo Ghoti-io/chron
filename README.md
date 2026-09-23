@@ -216,7 +216,15 @@ the `-O` level, because what arms the warning is the option and gcc only turns
 it on by default from `-O2`. A gate resting on that proxy goes silent the
 moment somebody changes an `-O`. Level 1 rather than the level 3 `-Wall`
 implies: on `libs/model`'s eleven real violations, level 3 found none and
-level 1 found all eleven.
+level 1 found all eleven. `-Wall` is not neutral here - it *sets* the level
+to 3, so naming level 1 after it is what arms the warning at all, and the
+order in `CFLAGS` is load-bearing: move `$(ALIASING_CFLAGS)` before `-Wall`
+and the warning is gone with every flag still present. Read the effective
+level with `gcc -Q --help=warnings <flags>` rather than off the flag list.
+Level 1 is free here only because chron does not build on a common first
+member - all 41 objects compile clean at it under `-Werror`, where
+`libs/ctang` measures 669 diagnostics across 48 of 62 translation units for
+downcasts C17 6.7.2.1p15 makes well defined.
 
 Being in `CFLAGS` under `-Werror` is the point - a violation fails the build,
 so there is no separate sweep that could fail to look. `make check-aliasing`
