@@ -236,6 +236,29 @@ member - all 41 objects compile clean at it under `-Werror`, where
 `libs/ctang` measures 669 diagnostics across 48 of 62 translation units for
 downcasts C17 6.7.2.1p15 makes well defined.
 
+**What a clean build here does not say.** What each level diagnoses depends
+on the violation's shape, so these are claims about probes as much as about
+levels. Measured at `-O2`:
+
+| violation | L0 | L1 | L2 | L3 |
+|---|---|---|---|---|
+| cast of a pointer parameter (`check-aliasing`'s control) | 0 | 1 | 0 | 0 |
+| struct-to-struct cast of a parameter | 0 | 1 | 0 | 0 |
+| `(int *)&obj` on a known object | 0 | 1 | 1 | 0 |
+| `*(int *)&local`, `*(long *)&s->member` | 0 | 1 | 1 | 1 |
+| punning through a `void *` | 0 | 0 | 0 | 0 |
+
+Level 1 dominates, but level 3 is not blind to everything - the fourth row
+is diagnosed at every level - so "level 3 finds nothing" is true of the
+violations `libs/model` happened to have, not of the level. The last row is
+the one that bounds the whole gate: **no level diagnoses punning through a
+`void *`**, which is the shape most C reaches for, so a clean build is not
+evidence about that class and this warning should not be described as
+aliasing coverage without that qualifier. The first two rows are the only
+ones that separate level 1 from the rest, which is why `check-aliasing`'s
+control is a pointer-parameter cast and must stay one; spelled the obvious
+way it would pass at level 3 while asserting nothing.
+
 Being in `CFLAGS` under `-Werror` is the point - a violation fails the build,
 so there is no separate sweep that could fail to look. `make check-aliasing`
 is what `CFLAGS` cannot prove about itself: it compiles a planted violation
