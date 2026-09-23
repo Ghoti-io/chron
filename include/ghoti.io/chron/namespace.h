@@ -147,6 +147,7 @@
 #define gchron_datetime_dump GHOTIIO_CHRON(gchron_datetime_dump)
 #define gchron_datetime_is_valid GHOTIIO_CHRON(gchron_datetime_is_valid)
 #define gchron_datetime_subtract GHOTIIO_CHRON(gchron_datetime_subtract)
+#define gchron_datetime_round GHOTIIO_CHRON(gchron_datetime_round)
 #define gchron_datetime_until GHOTIIO_CHRON(gchron_datetime_until)
 #define gchron_diag_string GHOTIIO_CHRON(gchron_diag_string)
 #define gchron_duration_balance GHOTIIO_CHRON(gchron_duration_balance)

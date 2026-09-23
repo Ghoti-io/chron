@@ -494,3 +494,267 @@ int main(int argc, char ** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+/*--------------------------------------------------------------------------*
+ * Rounding a civil date-time
+ *--------------------------------------------------------------------------*/
+
+namespace {
+
+GCHRON_DateTime Civil(int32_t y, int mo, int d, int h, int mi, int s,
+    int32_t ns) {
+  GCHRON_DateTime dt{};
+  EXPECT_EQ(GCHRON_OK, gchron_date_create(y, mo, d, &dt.date));
+  dt.time.hour = static_cast<uint8_t>(h);
+  dt.time.minute = static_cast<uint8_t>(mi);
+  dt.time.second = static_cast<uint8_t>(s);
+  dt.time.nsec = ns;
+  return dt;
+}
+
+std::string Show(const GCHRON_DateTime & dt) {
+  char buf[64];
+  std::snprintf(buf, sizeof buf, "%04d-%02d-%02dT%02d:%02d:%02d.%09d",
+      dt.date.year, dt.date.month, dt.date.day, dt.time.hour, dt.time.minute,
+      dt.time.second, dt.time.nsec);
+  return buf;
+}
+
+const GCHRON_Rounding kModes[] = {
+  GCHRON_ROUND_REJECT, GCHRON_ROUND_TRUNCATE, GCHRON_ROUND_FLOOR,
+  GCHRON_ROUND_CEIL, GCHRON_ROUND_HALF_EXPAND, GCHRON_ROUND_HALF_EVEN
+};
+
+const GCHRON_Unit kAllUnits[] = {
+  GCHRON_UNIT_NANOSECOND, GCHRON_UNIT_MICROSECOND, GCHRON_UNIT_MILLISECOND,
+  GCHRON_UNIT_SECOND, GCHRON_UNIT_MINUTE, GCHRON_UNIT_HOUR,
+  GCHRON_UNIT_DAY, GCHRON_UNIT_WEEK, GCHRON_UNIT_MONTH, GCHRON_UNIT_YEAR
+};
+
+} // namespace
+
+TEST(DateTimeRound, IsIdempotentForEveryUnitAndMode) {
+  const GCHRON_DateTime samples[] = {
+    Civil(2026, 9, 23, 14, 37, 29, 123456789),
+    Civil(1969, 12, 31, 23, 59, 59, 999999999),
+    Civil(1970, 1, 1, 0, 0, 0, 0),
+    Civil(2000, 2, 29, 12, 0, 0, 0),
+    Civil(1900, 1, 1, 0, 0, 0, 1)
+  };
+
+  for (GCHRON_Unit unit : kAllUnits) {
+    for (GCHRON_Rounding mode : kModes) {
+      for (const GCHRON_DateTime & in : samples) {
+        GCHRON_DateTime once{};
+        GCHRON_DateTime twice{};
+
+        if (gchron_datetime_round(&in, unit, 1, mode, nullptr, &once)
+            != GCHRON_OK) {
+          continue;
+        }
+        ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&once, unit, 1, mode,
+            nullptr, &twice));
+        EXPECT_EQ(0, gchron_datetime_compare(&once, &twice))
+            << gchron_unit_string(unit) << " mode " << mode << ": "
+            << Show(once) << " rounded again gives " << Show(twice);
+      }
+    }
+  }
+}
+
+TEST(DateTimeRound, FloorNeverMovesForwardAndCeilNeverMovesBack) {
+  const GCHRON_DateTime samples[] = {
+    Civil(2026, 9, 23, 14, 37, 29, 123456789),
+    Civil(1969, 3, 7, 1, 2, 3, 4),
+    Civil(1900, 1, 1, 0, 0, 0, 1)
+  };
+
+  for (GCHRON_Unit unit : kAllUnits) {
+    for (const GCHRON_DateTime & in : samples) {
+      GCHRON_DateTime down{};
+      GCHRON_DateTime up{};
+
+      ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, unit, 1,
+          GCHRON_ROUND_FLOOR, nullptr, &down));
+      ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, unit, 1,
+          GCHRON_ROUND_CEIL, nullptr, &up));
+
+      EXPECT_LE(gchron_datetime_compare(&down, &in), 0)
+          << "FLOOR moved " << Show(in) << " forward at "
+          << gchron_unit_string(unit) << " (to " << Show(down) << ")";
+      EXPECT_GE(gchron_datetime_compare(&up, &in), 0)
+          << "CEIL moved " << Show(in) << " back at "
+          << gchron_unit_string(unit) << " (to " << Show(up) << ")";
+    }
+  }
+}
+
+TEST(DateTimeRound, CalendarUnitsLandOnCalendarBoundaries) {
+  /* 2026-09-23 is a Wednesday. */
+  const GCHRON_DateTime in = Civil(2026, 9, 23, 14, 37, 29, 5);
+  GCHRON_DateTime got{};
+
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_FLOOR, nullptr, &got));
+  EXPECT_EQ("2026-09-23T00:00:00.000000000", Show(got));
+
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_WEEK, 1,
+      GCHRON_ROUND_FLOOR, nullptr, &got));
+  EXPECT_EQ("2026-09-21T00:00:00.000000000", Show(got))
+      << "a week floors to Monday, ISO 8601's first day";
+  int dow = 0;
+  ASSERT_EQ(GCHRON_OK, gchron_date_day_of_week(&got.date, &dow));
+  EXPECT_EQ(GCHRON_MONDAY, dow);
+
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_MONTH, 1,
+      GCHRON_ROUND_FLOOR, nullptr, &got));
+  EXPECT_EQ("2026-09-01T00:00:00.000000000", Show(got));
+
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_YEAR, 1,
+      GCHRON_ROUND_FLOOR, nullptr, &got));
+  EXPECT_EQ("2026-01-01T00:00:00.000000000", Show(got));
+
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_MONTH, 1,
+      GCHRON_ROUND_CEIL, nullptr, &got));
+  EXPECT_EQ("2026-10-01T00:00:00.000000000", Show(got));
+
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_YEAR, 1,
+      GCHRON_ROUND_CEIL, nullptr, &got));
+  EXPECT_EQ("2027-01-01T00:00:00.000000000", Show(got));
+}
+
+/*
+ * A month is not a fixed length, so "nearest" cannot be a division. February
+ * is the case that proves the boundaries are being found rather than a
+ * 30-day approximation used: half of a 28-day February is the 15th at
+ * midnight, which a 30-day divisor would put on the 16th.
+ */
+TEST(DateTimeRound, NearestMonthUsesTheMonthsOwnLength) {
+  GCHRON_DateTime got{};
+
+  /* 2026-02-15T00:00 is exactly half of a 28-day February: the tie goes up. */
+  const GCHRON_DateTime tie = Civil(2026, 2, 15, 0, 0, 0, 0);
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&tie, GCHRON_UNIT_MONTH, 1,
+      GCHRON_ROUND_HALF_EXPAND, nullptr, &got));
+  EXPECT_EQ("2026-03-01T00:00:00.000000000", Show(got));
+
+  /* One nanosecond earlier is below half, so it goes down. */
+  const GCHRON_DateTime under = Civil(2026, 2, 14, 23, 59, 59, 999999999);
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&under, GCHRON_UNIT_MONTH, 1,
+      GCHRON_ROUND_HALF_EXPAND, nullptr, &got));
+  EXPECT_EQ("2026-02-01T00:00:00.000000000", Show(got));
+
+  /* A leap February is 29 days, so its midpoint is half a day later. */
+  const GCHRON_DateTime leap_tie = Civil(2024, 2, 15, 12, 0, 0, 0);
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&leap_tie, GCHRON_UNIT_MONTH, 1,
+      GCHRON_ROUND_HALF_EXPAND, nullptr, &got));
+  EXPECT_EQ("2024-03-01T00:00:00.000000000", Show(got));
+
+  const GCHRON_DateTime leap_under = Civil(2024, 2, 15, 11, 59, 59, 999999999);
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&leap_under, GCHRON_UNIT_MONTH, 1,
+      GCHRON_ROUND_HALF_EXPAND, nullptr, &got));
+  EXPECT_EQ("2024-02-01T00:00:00.000000000", Show(got));
+}
+
+TEST(DateTimeRound, ACivilDayIsAlwaysTwentyFourHours) {
+  /*
+   * 2026-11-01 is the American DST fall-back, where the local day is 25 hours
+   * long. A civil reading has no zone, so it is 24 here - and that is the
+   * whole reason gchron_zoned_round() is a separate function rather than this
+   * one applied to the underlying instant.
+   */
+  const GCHRON_DateTime in = Civil(2026, 11, 1, 12, 0, 0, 0);
+  GCHRON_DateTime down{};
+  GCHRON_DateTime up{};
+
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_FLOOR, nullptr, &down));
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_CEIL, nullptr, &up));
+  EXPECT_EQ("2026-11-01T00:00:00.000000000", Show(down));
+  EXPECT_EQ("2026-11-02T00:00:00.000000000", Show(up));
+
+  /* Noon is exactly half of a 24-hour day, so the tie goes up. */
+  GCHRON_DateTime got{};
+  ASSERT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_HALF_EXPAND, nullptr, &got));
+  EXPECT_EQ("2026-11-02T00:00:00.000000000", Show(got));
+}
+
+TEST(DateTimeRound, CalendarUnitsTakeAnIncrementOfOneOnly) {
+  const GCHRON_DateTime in = Civil(2026, 9, 23, 14, 0, 0, 0);
+  GCHRON_DateTime got{};
+
+  for (GCHRON_Unit unit : {GCHRON_UNIT_WEEK, GCHRON_UNIT_MONTH,
+       GCHRON_UNIT_YEAR}) {
+    EXPECT_EQ(GCHRON_OK, gchron_datetime_round(&in, unit, 1,
+        GCHRON_ROUND_FLOOR, nullptr, &got));
+    EXPECT_EQ(GCHRON_ERR_INVALID, gchron_datetime_round(&in, unit, 2,
+        GCHRON_ROUND_FLOOR, nullptr, &got))
+        << gchron_unit_string(unit) << " does not tile the unit above it, so "
+        << "an increment of 2 names boundaries that exist in no calendar";
+  }
+  /* A day is a divisor here, but still has no next unit to tile. */
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_datetime_round(&in, GCHRON_UNIT_DAY, 2,
+      GCHRON_ROUND_FLOOR, nullptr, &got));
+  /* Below a day, the tiling rule is the same as an instant's. */
+  EXPECT_EQ(GCHRON_OK, gchron_datetime_round(&in, GCHRON_UNIT_MINUTE, 15,
+      GCHRON_ROUND_FLOOR, nullptr, &got));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_datetime_round(&in, GCHRON_UNIT_MINUTE,
+      7, GCHRON_ROUND_FLOOR, nullptr, &got));
+}
+
+TEST(DateTimeRound, AgreesWithInstantRoundOnTheSameReading) {
+  /*
+   * A civil reading treated as UTC and the instant it names must round to the
+   * same wall clock for every exact unit, including before the epoch - which
+   * is what pins the two functions to one definition of "toward zero".
+   */
+  const GCHRON_DateTime samples[] = {
+    Civil(2026, 9, 23, 14, 37, 29, 123456789),
+    Civil(1969, 3, 7, 1, 2, 3, 4)
+  };
+  const GCHRON_Unit exact[] = {
+    GCHRON_UNIT_SECOND, GCHRON_UNIT_MINUTE, GCHRON_UNIT_HOUR, GCHRON_UNIT_DAY
+  };
+
+  for (const GCHRON_DateTime & in : samples) {
+    GCHRON_Instant as_instant{};
+    ASSERT_EQ(GCHRON_OK, gchron_instant_from_utc(&in, &as_instant));
+
+    for (GCHRON_Unit unit : exact) {
+      for (GCHRON_Rounding mode : kModes) {
+        GCHRON_DateTime civil_out{};
+        GCHRON_Instant instant_out{};
+        const GCHRON_Result a = gchron_datetime_round(&in, unit, 1, mode,
+            nullptr, &civil_out);
+        const GCHRON_Result b = gchron_instant_round(&as_instant, unit, 1,
+            mode, &instant_out);
+
+        ASSERT_EQ(a, b) << "the two disagreed about whether this is roundable";
+        if (a != GCHRON_OK) {
+          continue;
+        }
+        GCHRON_DateTime back{};
+        ASSERT_EQ(GCHRON_OK, gchron_instant_to_utc(&instant_out, &back));
+        EXPECT_EQ(Show(civil_out), Show(back))
+            << gchron_unit_string(unit) << " mode " << mode
+            << ": civil and instant rounding disagree";
+      }
+    }
+  }
+}
+
+TEST(DateTimeRound, RejectsNullAndInvalidInput) {
+  const GCHRON_DateTime in = Civil(2026, 9, 23, 0, 0, 0, 0);
+  GCHRON_DateTime got{};
+
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_datetime_round(nullptr,
+      GCHRON_UNIT_DAY, 1, GCHRON_ROUND_FLOOR, nullptr, &got));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_datetime_round(&in, GCHRON_UNIT_DAY, 1,
+      GCHRON_ROUND_FLOOR, nullptr, nullptr));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_datetime_round(&in,
+      GCHRON_UNIT_UNSPECIFIED, 1, GCHRON_ROUND_FLOOR, nullptr, &got));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_datetime_round(&in, GCHRON_UNIT_DAY, 0,
+      GCHRON_ROUND_FLOOR, nullptr, &got));
+}

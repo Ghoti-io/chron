@@ -39,6 +39,7 @@
 #include <string.h>
 
 #include "../core/core_internal.h"
+#include "../core/round_internal.h"
 
 /** Nanoseconds in a day, as an exact count. */
 #define NANOS_PER_DAY (GCHRON_SECONDS_PER_DAY * GCHRON_NANOS_PER_SECOND)
@@ -894,4 +895,216 @@ GCHRON_Result gchron_duration_round(const GCHRON_Duration * d,
       (int32_t)gchron_floor_mod(nanos, GCHRON_NANOS_PER_SECOND),
       GCHRON_UNIT_HOUR, out);
   return GCHRON_OK;
+}
+
+/*--------------------------------------------------------------------------*
+ * Rounding a civil date-time
+ *--------------------------------------------------------------------------*/
+
+/** Midnight on a date, as a civil date-time. */
+static GCHRON_DateTime midnight_on(GCHRON_Date date) {
+  GCHRON_DateTime dt;
+
+  dt.date = date;
+  dt.time.hour = 0;
+  dt.time.minute = 0;
+  dt.time.second = 0;
+  dt.time.nsec = 0;
+  return dt;
+}
+
+/**
+ * The two calendar boundaries a civil date-time sits between, and which
+ * bucket the lower one is.
+ *
+ * A month is 28 to 31 days and a year is 365 or 366, so there is no divisor
+ * to round by - the only way to round to a unit with no fixed length is to
+ * find the marks on either side and place the value between them, which is
+ * what gchron_duration_round() does for the same reason.
+ */
+static GCHRON_Result calendar_bounds(const GCHRON_DateTime * in,
+    GCHRON_Unit smallest, GCHRON_Date * lower, GCHRON_Date * upper,
+    int64_t * bucket) {
+  GCHRON_Result result;
+
+  switch (smallest) {
+    case GCHRON_UNIT_WEEK: {
+      int dow = 0;
+      int64_t day;
+      int64_t monday;
+
+      result = gchron_date_day_of_week(&in->date, &dow);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      result = gchron_date_to_epoch_day(&in->date, &day);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      /* ISO 8601: the week starts on Monday, which is 1 here. */
+      monday = day - (int64_t)(dow - GCHRON_MONDAY);
+      result = gchron_date_from_epoch_day(monday, lower);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      result = gchron_date_from_epoch_day(monday + 7, upper);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      *bucket = gchron_floor_div(monday, 7);
+      return GCHRON_OK;
+    }
+    case GCHRON_UNIT_MONTH: {
+      const int32_t year = in->date.year;
+      const int month = (int)in->date.month;
+
+      result = gchron_date_create(year, month, 1, lower);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      if (month == 12) {
+        result = gchron_date_create(year + 1, 1, 1, upper);
+      }
+      else {
+        result = gchron_date_create(year, month + 1, 1, upper);
+      }
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      *bucket = (int64_t)year * 12 + (month - 1);
+      return GCHRON_OK;
+    }
+    case GCHRON_UNIT_YEAR: {
+      result = gchron_date_create(in->date.year, 1, 1, lower);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      result = gchron_date_create(in->date.year + 1, 1, 1, upper);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      *bucket = (int64_t)in->date.year;
+      return GCHRON_OK;
+    }
+    default:
+      return GCHRON_ERR_INVALID;
+  }
+}
+
+/** Seconds of the day a civil time reads. */
+static int64_t seconds_of_day(GCHRON_Time t) {
+  return (int64_t)t.hour * GCHRON_SECONDS_PER_HOUR + (int64_t)t.minute * 60
+      + (int64_t)t.second;
+}
+
+GCHRON_Result gchron_datetime_round(const GCHRON_DateTime * in,
+    GCHRON_Unit smallest, int64_t increment, GCHRON_Rounding mode,
+    const GCHRON_Calendar * calendar, GCHRON_DateTime * out) {
+  int64_t epoch_day;
+  GCHRON_Result result;
+
+  (void)calendar;
+  if (out == NULL || !gchron_datetime_is_valid(in)) {
+    return GCHRON_ERR_INVALID;
+  }
+  if (smallest <= GCHRON_UNIT_UNSPECIFIED || smallest >= GCHRON_UNIT_COUNT) {
+    return GCHRON_ERR_INVALID;
+  }
+  if (increment <= 0) {
+    return GCHRON_ERR_INVALID;
+  }
+  result = gchron_date_to_epoch_day(&in->date, &epoch_day);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+
+  if (smallest <= GCHRON_UNIT_DAY) {
+    int64_t seconds;
+    int64_t rounded_sec;
+    int64_t rounded_nsec;
+    int64_t day;
+    int64_t sod;
+    GCHRON_Date date;
+    GCHRON_DateTime built;
+
+    if (!gchron_mul_i64(epoch_day, GCHRON_SECONDS_PER_DAY, &seconds)) {
+      return GCHRON_ERR_RANGE;
+    }
+    if (!gchron_add_i64(seconds, seconds_of_day(in->time), &seconds)) {
+      return GCHRON_ERR_RANGE;
+    }
+    result = gchron_round_exact(seconds, in->time.nsec, smallest, increment,
+        mode, &rounded_sec, &rounded_nsec);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    day = gchron_floor_div(rounded_sec, GCHRON_SECONDS_PER_DAY);
+    sod = rounded_sec - day * GCHRON_SECONDS_PER_DAY;
+    result = gchron_date_from_epoch_day(day, &date);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    built.date = date;
+    built.time.hour = (uint8_t)(sod / GCHRON_SECONDS_PER_HOUR);
+    built.time.minute = (uint8_t)((sod / 60) % 60);
+    built.time.second = (uint8_t)(sod % 60);
+    built.time.nsec = (int32_t)rounded_nsec;
+    *out = built;
+    return GCHRON_OK;
+  }
+
+  /*
+   * A calendar unit. The increment is 1 only: a month is 28 to 31 days and a
+   * week does not tile either a month or a year, so "every 3 weeks" names
+   * boundaries that exist in no calendar.
+   */
+  if (increment != 1) {
+    return GCHRON_ERR_INVALID;
+  }
+  {
+    GCHRON_Date lower;
+    GCHRON_Date upper;
+    int64_t bucket;
+    int64_t lower_day;
+    int64_t upper_day;
+    int64_t frac;
+    int64_t whole;
+    bool moves_up;
+    bool ok;
+
+    result = calendar_bounds(in, smallest, &lower, &upper, &bucket);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    result = gchron_date_to_epoch_day(&lower, &lower_day);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    result = gchron_date_to_epoch_day(&upper, &upper_day);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    /*
+     * Both spans are small - a year is under 3.2e16 nanoseconds - so these
+     * fit with room to spare, unlike the epoch-relative arithmetic in
+     * gchron_round_exact() which has to stay in seconds.
+     */
+    frac = ((epoch_day - lower_day) * GCHRON_SECONDS_PER_DAY
+        + seconds_of_day(in->time)) * GCHRON_NANOS_PER_SECOND
+        + (int64_t)in->time.nsec;
+    whole = (upper_day - lower_day) * GCHRON_SECONDS_PER_DAY
+        * GCHRON_NANOS_PER_SECOND;
+
+    if (frac == 0) {
+      *out = *in;
+      return GCHRON_OK;
+    }
+    moves_up = gchron_round_moves_up(frac, whole, epoch_day < 0,
+        (bucket & 1) == 0, mode, &ok);
+    if (!ok) {
+      return gchron_round_refusal(mode);
+    }
+    *out = midnight_on(moves_up ? upper : lower);
+    return GCHRON_OK;
+  }
 }

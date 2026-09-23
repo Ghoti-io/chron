@@ -35,6 +35,7 @@
 #include <stdio.h>
 
 #include "../core/core_internal.h"
+#include "../core/round_internal.h"
 
 GCHRON_Result gchron_instant_create(int64_t sec, int32_t nsec,
     GCHRON_Instant * out) {
@@ -345,209 +346,26 @@ void gchron_instant_dump(const GCHRON_Instant * i, FILE * stream) {
  * Rounding
  *--------------------------------------------------------------------------*/
 
-/** How many seconds one of the exact units at or above a second is worth. */
-static int64_t seconds_per_unit(GCHRON_Unit unit) {
-  switch (unit) {
-    case GCHRON_UNIT_SECOND: return 1;
-    case GCHRON_UNIT_MINUTE: return 60;
-    case GCHRON_UNIT_HOUR: return GCHRON_SECONDS_PER_HOUR;
-    case GCHRON_UNIT_DAY: return GCHRON_SECONDS_PER_DAY;
-    default: return 0;
-  }
-}
-
-/** How many nanoseconds one of the sub-second units is worth. */
-static int64_t subsecond_nanos(GCHRON_Unit unit) {
-  switch (unit) {
-    case GCHRON_UNIT_NANOSECOND: return 1;
-    case GCHRON_UNIT_MICROSECOND: return 1000;
-    case GCHRON_UNIT_MILLISECOND: return 1000000;
-    default: return 0;
-  }
-}
-
-/**
- * How many of @p unit make up the next unit above it.
- *
- * This is what makes an increment legal or not. Buckets have to tile the unit
- * above them or the boundary the caller is imagining does not exist: asking
- * for "every 7 minutes" describes marks that drift through every hour, so
- * two callers rounding the same timestamp with the same arguments would agree
- * while both being somewhere the caller never meant. GCHRON_UNIT_DAY has no
- * next unit here - a week is a calendar's business and an instant has no
- * calendar - so it returns 1 and admits only an increment of 1.
- */
-static int64_t next_unit_ratio(GCHRON_Unit unit) {
-  switch (unit) {
-    case GCHRON_UNIT_NANOSECOND: return 1000;
-    case GCHRON_UNIT_MICROSECOND: return 1000;
-    case GCHRON_UNIT_MILLISECOND: return 1000;
-    case GCHRON_UNIT_SECOND: return 60;
-    case GCHRON_UNIT_MINUTE: return 60;
-    case GCHRON_UNIT_HOUR: return 24;
-    case GCHRON_UNIT_DAY: return 1;
-    default: return 0;
-  }
-}
-
-/**
- * Decide whether a value strictly between two boundaries moves up to the
- * upper one.
- *
- * The caller has already put the value into floor form: @p frac is how far it
- * sits past the lower boundary, @p whole is the distance between the two, and
- * @p frac is strictly between zero and @p whole. In that form FLOOR is "stay"
- * and CEIL is "move" with no sign analysis at all, which is the reason for
- * decomposing this way - the sign only re-enters for the two modes that are
- * defined in terms of zero rather than in terms of the timeline.
- *
- * @param negative Whether the value being rounded is before the epoch.
- * @param lower_is_even Parity of the lower boundary's bucket number, for
- *   GCHRON_ROUND_HALF_EVEN.
- * @return `true` to move up, `false` to stay, and `false` with @p ok cleared
- *   for GCHRON_ROUND_REJECT.
- */
-static bool round_moves_up(int64_t frac, int64_t whole, bool negative,
-    bool lower_is_even, GCHRON_Rounding mode, bool * ok) {
-  /*
-   * Compared as `frac` against `whole - frac` rather than `2 * frac` against
-   * `whole`, because doubling overflows: `whole` can be a whole day in
-   * nanoseconds and `frac` is very nearly that.
-   */
-  const int64_t rest = whole - frac;
-
-  *ok = true;
-  switch (mode) {
-    case GCHRON_ROUND_REJECT:
-      *ok = false;
-      return false;
-    case GCHRON_ROUND_TRUNCATE:
-      /* Toward zero: down above the epoch, up below it. */
-      return negative;
-    case GCHRON_ROUND_FLOOR:
-      return false;
-    case GCHRON_ROUND_CEIL:
-      return true;
-    case GCHRON_ROUND_HALF_EXPAND:
-      if (frac != rest) {
-        return frac > rest;
-      }
-      /* A tie goes away from zero, which is down when before the epoch. */
-      return !negative;
-    case GCHRON_ROUND_HALF_EVEN:
-      if (frac != rest) {
-        return frac > rest;
-      }
-      return !lower_is_even;
-    default:
-      *ok = false;
-      return false;
-  }
-}
-
 GCHRON_Result gchron_instant_round(const GCHRON_Instant * in,
     GCHRON_Unit smallest, int64_t increment, GCHRON_Rounding mode,
     GCHRON_Instant * out) {
-  int64_t ratio;
-  bool negative;
-  bool moves_up;
-  bool ok;
+  int64_t seconds;
+  int64_t nanos;
+  GCHRON_Result result;
 
   if (out == NULL || !gchron_instant_is_valid(in)) {
     return GCHRON_ERR_INVALID;
   }
-  if (smallest <= GCHRON_UNIT_UNSPECIFIED || smallest > GCHRON_UNIT_DAY) {
-    /*
-     * A week, a month and a year are refused rather than approximated. The
-     * note this was written from is explicit that they must not fall through
-     * to a nanosecond count: a caller who asks an instant to round to a month
-     * has asked a question with no answer, and 30 days is not it.
-     */
-    return GCHRON_ERR_INVALID;
+  /*
+   * A week, a month and a year are refused rather than approximated, by
+   * gchron_round_check_exact() inside the call below. A caller who asks an
+   * instant to round to a month has asked a question with no answer - which
+   * month, and in whose calendar - and thirty days is not it.
+   */
+  result = gchron_round_exact(in->sec, in->nsec, smallest, increment, mode,
+      &seconds, &nanos);
+  if (result != GCHRON_OK) {
+    return result;
   }
-  if (increment <= 0) {
-    return GCHRON_ERR_INVALID;
-  }
-  ratio = next_unit_ratio(smallest);
-  if (ratio <= 0 || increment > ratio || (ratio % increment) != 0) {
-    return GCHRON_ERR_INVALID;
-  }
-
-  /* `nsec` is always 0..999999999, so the sign lives entirely in `sec`. */
-  negative = in->sec < 0;
-
-  if (smallest < GCHRON_UNIT_SECOND) {
-    const int64_t scale = subsecond_nanos(smallest) * increment;
-    const int64_t bucket = (int64_t)in->nsec / scale;
-    const int64_t frac = (int64_t)in->nsec - bucket * scale;
-    int64_t nanos;
-
-    if (frac == 0) {
-      *out = *in;
-      return GCHRON_OK;
-    }
-    /*
-     * The bucket number counts from the epoch, not from this second, so its
-     * parity has to include the seconds. `per_second` is exact because the
-     * increment divides its unit and the unit divides a second.
-     */
-    {
-      const int64_t per_second = GCHRON_NANOS_PER_SECOND / scale;
-      const bool lower_is_even =
-          (((in->sec & 1) & (per_second & 1)) ^ (bucket & 1)) == 0;
-
-      moves_up = round_moves_up(frac, scale, negative, lower_is_even, mode,
-          &ok);
-    }
-    if (!ok) {
-      return mode == GCHRON_ROUND_REJECT ? GCHRON_ERR_RANGE
-                                         : GCHRON_ERR_INVALID;
-    }
-    nanos = (bucket + (moves_up ? 1 : 0)) * scale;
-    return gchron_instant_normalize(in->sec, nanos, out);
-  }
-
-  {
-    const int64_t unit_seconds = seconds_per_unit(smallest);
-    int64_t scale;
-    int64_t bucket;
-    int64_t rem;
-    int64_t frac;
-    int64_t whole;
-    int64_t seconds;
-
-    if (!gchron_mul_i64(unit_seconds, increment, &scale)) {
-      return GCHRON_ERR_RANGE;
-    }
-    /*
-     * `frac` is measured in nanoseconds, so the bucket has to be small enough
-     * that a whole one fits in an int64. Every legal increment here is far
-     * inside this; the check is for the arithmetic, not for the caller.
-     */
-    if (scale > INT64_MAX / GCHRON_NANOS_PER_SECOND) {
-      return GCHRON_ERR_RANGE;
-    }
-    whole = scale * GCHRON_NANOS_PER_SECOND;
-
-    bucket = gchron_floor_div(in->sec, scale);
-    rem = in->sec - bucket * scale;
-    frac = rem * GCHRON_NANOS_PER_SECOND + (int64_t)in->nsec;
-    if (frac == 0) {
-      *out = *in;
-      return GCHRON_OK;
-    }
-    moves_up = round_moves_up(frac, whole, negative, (bucket & 1) == 0, mode,
-        &ok);
-    if (!ok) {
-      return mode == GCHRON_ROUND_REJECT ? GCHRON_ERR_RANGE
-                                         : GCHRON_ERR_INVALID;
-    }
-    if (!gchron_add_i64(bucket, moves_up ? 1 : 0, &bucket)) {
-      return GCHRON_ERR_RANGE;
-    }
-    if (!gchron_mul_i64(bucket, scale, &seconds)) {
-      return GCHRON_ERR_RANGE;
-    }
-    return gchron_instant_normalize(seconds, 0, out);
-  }
+  return gchron_instant_normalize(seconds, nanos, out);
 }

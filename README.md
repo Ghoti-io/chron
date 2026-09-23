@@ -363,7 +363,7 @@ lookup disagreed with each other. `design.md` §16 has the detail. All three
 needed input no real database contains.
 
 ```bash
-make test                    # 389 tests in 30 suites, the conformance runners included
+make test                    # 397 tests in 30 suites, the conformance runners included
 make test-full               # the same, with every gate and differential required
 make test-valgrind           # the same, clean
 make test-asan               # ASan + UBSan; the UBSan half proves no signed overflow

@@ -356,6 +356,41 @@ GCHRON_API GCHRON_Result gchron_duration_round(const GCHRON_Duration * d,
     GCHRON_Duration * out);
 
 /**
+ * @brief Round a civil date-time to a multiple of a unit.
+ *
+ * A civil day is exactly 24 hours, because a civil reading has no zone and
+ * therefore no transitions. gchron_zoned_round() is the one where a day is 23
+ * or 25 hours twice a year, and the two give different answers for half the
+ * year - which is exactly the bug a caller writes for themselves by rounding
+ * the underlying instant and calling it a local day.
+ *
+ * @param in A valid civil date-time.
+ * @param smallest The unit to round to. Every unit is legal here:
+ *   GCHRON_UNIT_WEEK rounds to a Monday, ISO 8601's first day of the week and
+ *   the one numbering this library uses everywhere; GCHRON_UNIT_MONTH to the
+ *   first of a month; GCHRON_UNIT_YEAR to the first of January.
+ * @param increment How many of @p smallest one bucket is. It must divide the
+ *   next unit up, so 15 minutes is legal and 7 is not. The calendar units -
+ *   day, week, month and year - take 1 only, because months are not all the
+ *   same length and weeks do not tile either a month or a year, so a larger
+ *   increment would describe boundaries that do not exist.
+ * @param mode What to do with a value between two boundaries. Toward zero,
+ *   for GCHRON_ROUND_TRUNCATE and a GCHRON_ROUND_HALF_EXPAND tie, means
+ *   toward 1970-01-01T00:00 - the same direction gchron_instant_round() takes
+ *   for the same reading, so the two agree about which side of a boundary a
+ *   value is on.
+ * @param calendar The calendar the month and year boundaries are in. NULL
+ *   means Gregorian. Ignored for units below a month.
+ * @param out Receives the value on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID for a bad argument or an increment
+ *   that does not tile its unit; GCHRON_ERR_RANGE on overflow, or when the
+ *   value is not already exact and @p mode refuses.
+ */
+GCHRON_API GCHRON_Result gchron_datetime_round(const GCHRON_DateTime * in,
+    GCHRON_Unit smallest, int64_t increment, GCHRON_Rounding mode,
+    const GCHRON_Calendar * calendar, GCHRON_DateTime * out);
+
+/**
  * @brief Write a human-readable description of a duration to a stream.
  *
  * For debugging and for tests; not a grammar. parse.h writes RFC 3339.
