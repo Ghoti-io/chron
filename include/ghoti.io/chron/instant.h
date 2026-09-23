@@ -209,6 +209,43 @@ GCHRON_API GCHRON_Result gchron_instant_until(const GCHRON_Instant * from,
     const GCHRON_Instant * to, GCHRON_Duration * out);
 
 /*--------------------------------------------------------------------------*
+ * Rounding
+ *--------------------------------------------------------------------------*/
+
+/**
+ * @brief Round an instant to a multiple of a unit, measured from the epoch.
+ *
+ * "The nearest 15 minutes", "the second this fell in", "the start of the UTC
+ * day" - bucketing a timestamp, which every caller writes for themselves and
+ * writes as integer division that is wrong for negative times.
+ *
+ * The buckets are laid out from the Unix epoch, so they tile the timeline
+ * without a gap and a value already on a boundary is returned unchanged.
+ *
+ * @param in A valid instant.
+ * @param smallest The unit to round to. GCHRON_UNIT_NANOSECOND through
+ *   GCHRON_UNIT_DAY only: a week, a month and a year have no length an
+ *   instant can be divided by - a month is 28 to 31 days and which one
+ *   depends on a calendar this type does not have - so they are
+ *   GCHRON_ERR_INVALID here rather than a nanosecond count that pretends
+ *   otherwise. gchron_datetime_round() and gchron_zoned_round() take them.
+ * @param increment How many of @p smallest one bucket is; 1 is the plain
+ *   case. It must divide the next unit up evenly - 15 minutes is legal, 7 is
+ *   not, because 7-minute buckets do not tile an hour and the boundary the
+ *   caller is imagining does not exist. GCHRON_UNIT_DAY takes 1 only.
+ * @param mode What to do with a value between two boundaries.
+ *   GCHRON_ROUND_REJECT, the zero value, returns GCHRON_ERR_RANGE rather than
+ *   an answer the caller did not ask for.
+ * @param out Receives the instant on success; untouched on failure.
+ * @return GCHRON_OK; GCHRON_ERR_INVALID for a bad argument, a unit above
+ *   GCHRON_UNIT_DAY, or an increment that does not tile its unit;
+ *   GCHRON_ERR_RANGE on overflow or under GCHRON_ROUND_REJECT.
+ */
+GCHRON_API GCHRON_Result gchron_instant_round(const GCHRON_Instant * in,
+    GCHRON_Unit smallest, int64_t increment, GCHRON_Rounding mode,
+    GCHRON_Instant * out);
+
+/*--------------------------------------------------------------------------*
  * Foreign integer encodings of Unix time
  *--------------------------------------------------------------------------*/
 

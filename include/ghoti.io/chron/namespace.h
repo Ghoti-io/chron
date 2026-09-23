@@ -184,6 +184,7 @@
 #define gchron_instant_from_utc GHOTIIO_CHRON(gchron_instant_from_utc)
 #define gchron_instant_is_valid GHOTIIO_CHRON(gchron_instant_is_valid)
 #define gchron_instant_normalize GHOTIIO_CHRON(gchron_instant_normalize)
+#define gchron_instant_round GHOTIIO_CHRON(gchron_instant_round)
 #define gchron_instant_subtract GHOTIIO_CHRON(gchron_instant_subtract)
 #define gchron_instant_to_epoch_day GHOTIIO_CHRON(gchron_instant_to_epoch_day)
 #define gchron_instant_to_unix_micros GHOTIIO_CHRON(gchron_instant_to_unix_micros)
