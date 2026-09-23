@@ -1142,7 +1142,9 @@ END {
     name = L[i]; sub(/^\$$\(/, "", name); sub(/\).*/, "", name)
     for (j = i + 1; j <= NR && j < i + 8; j++) {
       if (L[j] !~ /printf/) continue
-      delete tmp; vars(L[j], tmp)
+      pf = L[j]; pe = j
+      while (pe < NR && L[pe] ~ /\\[ \t]*$$/) { pe++; pf = pf " " L[pe] }
+      delete tmp; vars(pf, tmp)
       for (v in tmp) if (v != "") SV[name "|" v] = 1
       break
     }
@@ -1158,10 +1160,13 @@ END {
       }
       continue
     }
-    if (L[i] !~ /-c \$$</) {
-      if (L[i] ~ /^\t[ \t]*\043/) continue
-      if (L[i] ~ /-c \$$\$$</) continue
-      head = L[i]
+    rec = L[i]; e = i
+    while (e < NR && L[e] ~ /\\[ \t]*$$/) { e++; rec = rec " " L[e] }
+    skipto = e
+    if (rec !~ /-c \$$</) {
+      if (rec ~ /^\t[ \t]*\043/) continue
+      if (rec ~ /-c \$$\$$</) continue
+      head = rec
       sub(/^\t[ \t]*/, "", head)
       sub(/^[-@]+[ \t]*/, "", head)
       sub(/^if[ \t]+/, "", head)
@@ -1173,7 +1178,7 @@ END {
       linked++
       match(hdr, /\$$\([A-Z_]*LINK_FLAGS_STAMP\)/)
       sn = substr(hdr, RSTART + 2, RLENGTH - 3)
-      delete rv; vars(L[i], rv)
+      delete rv; vars(rec, rv)
       for (v in rv) {
         if (v == "" || v in PREREQ) continue
         if (!((sn "|" v) in SV)) {
@@ -1202,7 +1207,7 @@ END {
     }
     match(hdr, /\$$\([A-Z_]*FLAGS_STAMP\)/)
     sn = substr(hdr, RSTART + 2, RLENGTH - 3)
-    delete rv; vars(L[i], rv)
+    delete rv; vars(rec, rv)
     for (v in rv) {
       if (v == "" || !((sn "|" v) in SV)) {
         if (v == "") continue
@@ -1255,9 +1260,10 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 # rule: one stamped, one not. A sweep that has stopped matching compile
 # recipes reports nothing wrong, which is indistinguishable from a clean
 # makefile - so require it to find the planted one and only the planted one.
-	@printf '%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n' \
+	@printf '%s\n\t%s \\\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n' \
 		'$$(FLAGS_STAMP): force-flags' \
-		"@printf '%s' '\$$(CFLAGS) \$$(INCLUDE)' > \$$@.new" \
+		"@printf '%s' '\$$(CFLAGS)" \
+		"  \$$(INCLUDE)' > \$$@.new" \
 		'$$(OBJ_DIR)/%.o: src/%.c $$(FLAGS_STAMP)' \
 		'cc $$(CFLAGS) $$(INCLUDE) -c $$< -o $$@' \
 		'$$(OBJ_DIR)/planted_nostamp.o: src/planted.c' \
@@ -1273,10 +1279,31 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		'$$(APP_DIR)/planted_link_unrec: planted.o $$(LINK_FLAGS_STAMP)' \
 		'g++ $$(LDFLAGS) $$(PLANTED_LINK_UNRECORDED) -o $$@ planted.o' \
 		> $(BUILD_DIR)/stamp_control.mk
+# Three of the planted rules wrap, because every read of a recipe used to take
+# one physical line and a wrapped recipe hid everything past the backslash.
+# Each shape returned a clean answer for the half it could not see, and a
+# correct makefile prints the same fingerprint either way - so without a
+# wrapped rule in the control the fix is not demonstrable and the bug comes
+# back the next time this is edited.
+#
+# Where the planted variable sits is the whole test. The first version of
+# these two rules put it before the break, where the unjoined read still
+# found it: the control passed with the joining removed, which is a control
+# that exercises nothing. It has to sit past the backslash - and for the
+# compile rule, on the same line as the -c $< that makes the rule visible at
+# all, so that dropping the join loses the variable and the rule together.
+	@printf '%s\n\t%s \\\n\t%s\n%s\n\t%s \\\n\t%s\n' \
+		'$$(APP_DIR)/planted_link_wrap: planted.o $$(LINK_FLAGS_STAMP)' \
+		'g++ $$(LDFLAGS) -o $$@ planted.o' \
+		'  $$(PLANTED_WRAP_UNRECORDED)' \
+		'$$(OBJ_DIR)/planted_wrapc.o: src/planted3.c $$(FLAGS_STAMP)' \
+		'cc $$(CFLAGS) $$(INCLUDE)' \
+		'  $$(PLANTED_WRAPC_UNRECORDED) -c $$< -o $$@' \
+		>> $(BUILD_DIR)/stamp_control.mk
 	@ctl=$$(awk -f $(BUILD_DIR)/stamp_check.awk \
 			$(BUILD_DIR)/stamp_control.mk | tail -1); \
-	if [ "$$ctl" != "TOTAL 3 BAD 1 UNMODELLED 1 UNRECORDED 2 LINKED 2 PREREQ 3" ]; then \
-		printf "\033[0;31mcheck-stamps: the control says '%s', not 'TOTAL 3 BAD 1 UNMODELLED 1 UNRECORDED 2 LINKED 2 PREREQ 3' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" >&2; \
+	if [ "$$ctl" != "TOTAL 4 BAD 1 UNMODELLED 1 UNRECORDED 4 LINKED 3 PREREQ 3" ]; then \
+		printf "\033[0;31mcheck-stamps: the control says '%s', not 'TOTAL 4 BAD 1 UNMODELLED 1 UNRECORDED 4 LINKED 3 PREREQ 3' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" >&2; \
 		exit 1; \
 	fi
 
