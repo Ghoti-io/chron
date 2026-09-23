@@ -1017,6 +1017,15 @@ check-aliasing: ## Fail if the strict-aliasing warning is no longer armed
 # so it certifies level 1 specifically. Raise the level and it must be
 # respelled, or the gate passes green while asserting nothing.
 #
+# Which row to respell it to, if that day comes: the SECOND row, the known
+# object through a pointer variable, is the only shape that certifies "2 and
+# not 3". The first row is useless as a probe at any level - it fires from 1
+# upward and so distinguishes nothing, which is the trap, because it is also
+# the most natural way to write a type pun. libs/model's probe is the same
+# row as this one, measured, so both gates in the suite certify level 1 and
+# both would be vacuous at 2; it is one limitation twice, not a difference
+# between them.
+#
 # So a "simpler" control spelled *(int *)&local would be diagnosed at level 3
 # as well, and this gate would pass with the warning at 3 while asserting
 # nothing - green, and switched off. Do not simplify it. The last row is the
