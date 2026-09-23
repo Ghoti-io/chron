@@ -997,10 +997,35 @@ check-aliasing: $(LIBVER_GEN)
 # together, so a rule compiling with some fifth variable would pass.
 define stamp-check-awk
 { L[NR] = $$0 }
+function vars(s, out,   v) {
+  while (match(s, /\$$\([A-Za-z0-9_]+\)/)) {
+    v = substr(s, RSTART + 2, RLENGTH - 3)
+    out[v] = 1
+    s = substr(s, RSTART + RLENGTH)
+  }
+}
 END {
-  total = 0; bad = 0
+  total = 0; bad = 0; unmodelled = 0; unrecorded = 0
   for (i = 1; i <= NR; i++) {
-    if (L[i] !~ /^\t/ || L[i] !~ /-c \$$</) continue
+    if (L[i] !~ /^\$$\([A-Z_]*FLAGS_STAMP\):/) continue
+    name = L[i]; sub(/^\$$\(/, "", name); sub(/\).*/, "", name)
+    for (j = i + 1; j <= NR && j < i + 8; j++) {
+      if (L[j] !~ /printf/) continue
+      delete tmp; vars(L[j], tmp)
+      for (v in tmp) if (v != "") SV[name "|" v] = 1
+      break
+    }
+  }
+  for (i = 1; i <= NR; i++) {
+    if (L[i] !~ /^\t/) continue
+    if (L[i] !~ /-c \$$</) {
+      if (L[i] ~ /^\t[ \t]*\043/) continue
+      if (L[i] ~ /-c \$$\$$</) continue
+      if (L[i] ~ /printf/) continue
+      if (L[i] ~ /\$$\([A-Z_]*(CC|CXX)\)/ ||
+          L[i] ~ /(^|[ \t])(gcc|g\+\+|clang|clang\+\+)[ \t]/) unmodelled++
+      continue
+    }
     total++
     j = i - 1
     while (j > 0 && (L[j] ~ /^\t/ || L[j] ~ /^[ \t]*$$/ || L[j] ~ /^\043/)) j--
@@ -1013,19 +1038,57 @@ END {
       continue
     }
     tgt = hdr; sub(/:.*/, "", tgt)
-    if (tgt !~ /OBJ_DIR/) continue
-    tree = tgt; sub(/.*\$$\(/, "", tree); sub(/OBJ_DIR.*/, "", tree)
-    want = "$$(" tree "FLAGS_STAMP)"
-    if (index(hdr, want) == 0) {
-      bad++
-      printf "  %s:%d: stamped for another tree, wants %s: %s\n", FILENAME, j, want, hdr
+    if (tgt ~ /OBJ_DIR/) {
+      tree = tgt; sub(/.*\$$\(/, "", tree); sub(/OBJ_DIR.*/, "", tree)
+      want = "$$(" tree "FLAGS_STAMP)"
+      if (index(hdr, want) == 0) {
+        bad++
+        printf "  %s:%d: stamped for another tree, wants %s: %s\n", FILENAME, j, want, hdr
+        continue
+      }
+    }
+    match(hdr, /\$$\([A-Z_]*FLAGS_STAMP\)/)
+    sn = substr(hdr, RSTART + 2, RLENGTH - 3)
+    delete rv; vars(L[i], rv)
+    for (v in rv) {
+      if (v == "" || !((sn "|" v) in SV)) {
+        if (v == "") continue
+        unrecorded++
+        printf "  %s:%d: recipe expands $$(%s), which %s does not record\n", FILENAME, i, v, sn
+      }
     }
   }
-  printf "TOTAL %d BAD %d\n", total, bad
+  printf "TOTAL %d BAD %d UNMODELLED %d UNRECORDED %d\n", total, bad, unmodelled, unrecorded
 }
 endef
 
 STAMP_CHECK_MAKEFILE := $(firstword $(MAKEFILE_LIST))
+
+# What this gate does NOT model, pinned so the set cannot grow in silence.
+# The stamp invariant is about object rules that compile $< incrementally, and
+# that is a narrower population than "every compile". Ten other recipe lines
+# invoke a compiler: two shared-library links and two test-binary links, which
+# consume stamped objects; three rules that compile a source straight to an
+# executable (the examples, the oracle drivers, the ICU oracle); the fuzz
+# harness build; check-aliasing's own -fsyntax-only control; and an echo that
+# names $(FUZZ_CXX).
+#
+# The compile-to-executable rules are the ones that could go stale on their
+# own, and here they do not: each names $(APP_DIR)/$(STATIC_TARGET) as a normal
+# prerequisite, so a flag change moves the stamp, rebuilds the objects,
+# rebuilds the archive and relinks them. Measured rather than reasoned, because
+# a rule can lose that prerequisite without anything failing: EXTRA_CFLAGS=-O1
+# rebuilt the example and moved its DW_AT_producer from "-O2" to "-O1 -O2".
+#
+# The first probe was -DPROBE_STAMP and showed nothing, which read as "the
+# binary is stale" and was really "a macro nothing reads compiles to identical
+# bytes, and -D does not appear in the producer string at all". Probe with
+# something the artifact records.
+#
+# This is a pin, not a judgement. It fails when the number moves, so a new
+# compile-to-executable rule - in a library whose binaries do not happen to
+# depend on a stamped object - has to be looked at instead of passing.
+STAMP_UNMODELLED_EXPECTED := 10
 
 check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 	@mkdir -p $(BUILD_DIR)
@@ -1034,18 +1097,23 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 # rule: one stamped, one not. A sweep that has stopped matching compile
 # recipes reports nothing wrong, which is indistinguishable from a clean
 # makefile - so require it to find the planted one and only the planted one.
-	@printf '%s\n\t%s\n%s\n\t%s\n' \
+	@printf '%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n%s\n\t%s\n' \
+		'$$(FLAGS_STAMP): force-flags' \
+		"@printf '%s' '\$$(CFLAGS) \$$(INCLUDE)' > \$$@.new" \
 		'$$(OBJ_DIR)/%.o: src/%.c $$(FLAGS_STAMP)' \
-		'$$(CC) $$(CFLAGS) $$(INCLUDE) -c $$< -o $$@' \
-		'$$(OBJ_DIR)/planted.o: src/planted.c' \
-		'$$(CC) $$(CFLAGS) $$(INCLUDE) -c $$< -o $$@' \
+		'cc $$(CFLAGS) $$(INCLUDE) -c $$< -o $$@' \
+		'$$(OBJ_DIR)/planted_nostamp.o: src/planted.c' \
+		'cc $$(CFLAGS) $$(INCLUDE) -c $$< -o $$@' \
+		'$$(OBJ_DIR)/planted_unrecorded.o: src/planted2.c $$(FLAGS_STAMP)' \
+		'cc $$(CFLAGS) $$(PLANTED_UNRECORDED) $$(INCLUDE) -c $$< -o $$@' \
 		> $(BUILD_DIR)/stamp_control.mk
 	@ctl=$$(awk -f $(BUILD_DIR)/stamp_check.awk \
 			$(BUILD_DIR)/stamp_control.mk | tail -1); \
-	if [ "$$ctl" != "TOTAL 2 BAD 1" ]; then \
-		printf "\033[0;31mcheck-stamps: the control says '%s', not 'TOTAL 2 BAD 1' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" >&2; \
+	if [ "$$ctl" != "TOTAL 3 BAD 1 UNMODELLED 0 UNRECORDED 1" ]; then \
+		printf "\033[0;31mcheck-stamps: the control says '%s', not 'TOTAL 3 BAD 1 UNMODELLED 0 UNRECORDED 1' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" >&2; \
 		exit 1; \
 	fi
+
 # Two independent counts of the same population. If the sweep silently stops
 # matching, its total falls away from grep's and the gate fails rather than
 # passing on an empty sweep. Comment lines are dropped first because the prose
@@ -1055,9 +1123,24 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		| grep -cF -- '-c $$<'); \
 	out=$$(awk -f $(BUILD_DIR)/stamp_check.awk $(STAMP_CHECK_MAKEFILE)); \
 	got=$$(printf '%s\n' "$$out" | sed -n 's/^TOTAL \([0-9]*\) .*/\1/p'); \
-	bad=$$(printf '%s\n' "$$out" | sed -n 's/^TOTAL [0-9]* BAD \([0-9]*\)$$/\1/p'); \
+	bad=$$(printf '%s\n' "$$out" | sed -n 's/^TOTAL [0-9]* BAD \([0-9]*\) .*/\1/p'); \
+	unmodelled=$$(printf '%s\n' "$$out" | sed -n 's/.* UNMODELLED \([0-9]*\) .*/\1/p'); \
+	unrecorded=$$(printf '%s\n' "$$out" | sed -n 's/.* UNRECORDED \([0-9]*\)$$/\1/p'); \
 	if [ "$$got" != "$$want" ]; then \
 		printf "\033[0;31mcheck-stamps: the sweep saw %s compile recipes and grep found %s. One of them is wrong, so neither count can be trusted.\033[0m\n" "$$got" "$$want" >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$unmodelled" != "$(STAMP_UNMODELLED_EXPECTED)" ]; then \
+		printf "\033[0;31mcheck-stamps: %s compiler invocations are outside what this gate models, not the %s it is pinned to. A rule that compiles a source straight to an executable goes stale on its own unless it depends on a stamped object; this gate does not check that, so the change needs a look.\033[0m\n" \
+			"$$unmodelled" "$(STAMP_UNMODELLED_EXPECTED)" >&2; \
+		exit 1; \
+	fi; \
+	if [ "$$unrecorded" != "0" ]; then \
+		printf "\033[0;31m\n### %s compile recipes expand a variable their stamp does not record ###\033[0m\n" "$$unrecorded" >&2; \
+		printf '%s\n' "$$out" | grep 'does not record' >&2; \
+		printf "\nNaming the right stamp is not enough: the stamp only moves when the\n" >&2; \
+		printf "variables inside its own printf change. A flag that lives only in a\n" >&2; \
+		printf "variable the stamp omits rebuilds nothing at all.\n" >&2; \
 		exit 1; \
 	fi; \
 	if [ "$$bad" != "0" ]; then \
@@ -1068,7 +1151,7 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		printf "into everything downstream of it.\n" >&2; \
 		exit 1; \
 	fi; \
-	printf "\033[0;32mAll %s compile rules carry the flags stamp for their own tree.\033[0m\n" "$$got"
+	printf "\033[0;32mAll %s compile rules carry the flags stamp for their own tree; %s compiler invocations are outside the model, as pinned.\033[0m\n" "$$got" "$$unmodelled"
 
 check-layering: ## Fail if a lower tier includes a higher tier's header
 	$(call layering-check,0,$(TIER0_FORBIDDEN),$(TIER0_FILES))
@@ -1948,15 +2031,15 @@ help: ## Display this help
 
 $(FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(LIB_CFLAGS) $(CFLAGS) $(CXXFLAGS) $(LDFLAGS) $(INCLUDE) $(TEST_DATA)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(ASAN_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(ASAN_CFLAGS) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(INCLUDE)' > $@.new
+	@printf '%s\n' '$(CC) $(CXX) $(ASAN_CFLAGS) $(ASAN_CXXFLAGS) $(ASAN_LDFLAGS) $(INCLUDE) $(TEST_DATA)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@
 
 $(FUZZ_FLAGS_STAMP): force-flags
 	@mkdir -p $(@D)
-	@printf '%s\n' '$(FUZZ_SAN) $(FUZZ_LIB_FLAGS) $(FUZZ_BIN_FLAGS) $(INCLUDE)' > $@.new
+	@printf '%s\n' '$(FUZZ_CC) $(FUZZ_SAN) $(FUZZ_LIB_FLAGS) $(FUZZ_BIN_FLAGS) $(INCLUDE)' > $@.new
 	@cmp -s $@.new $@ 2>/dev/null && rm -f $@.new || mv -f $@.new $@

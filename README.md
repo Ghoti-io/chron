@@ -237,10 +237,25 @@ the rule that was actually missing its stamp sits inside an `ifneq` and does
 not exist in this library at all. It also checks that the stamp belongs to
 the rule's own tree, since a rule copied between the release, ASan and fuzz
 trees keeps the old one and then misses exactly the changes it was there to
-catch. Its own sweep is checked against a planted pair and against an
-independent count of the same population - which promptly disagreed, because
-the comment explaining what the sweep looks for was itself counted as an
-eleventh compile rule.
+catch. And it checks that each stamp *records* the variables its own recipes
+expand, which is the failure the first two arms cannot see: chron's library
+objects compile with `$(LIB_CFLAGS)` while the stamp recorded `$(CFLAGS)`, so
+changing `-fvisibility=hidden` - a flag that lives only in the former -
+rebuilt 0 of 41 objects. It now rebuilds 43, and the null result was armed
+before being believed: built with `default` the library exports 287 symbols
+against 240 for `hidden`, so the flag was genuinely an input and the 0 was
+staleness rather than a no-op.
+
+Its own sweep is checked three ways. A planted fragment carrying one
+unstamped rule and one whose recipe uses a variable the stamp omits must come
+back as exactly those two findings. An independent count of the same
+population must agree with the sweep's - which promptly disagreed, because the
+comment explaining what the sweep looks for was itself counted as an eleventh
+compile rule. And the compiler invocations the gate does *not* model - links,
+and the three rules that compile a source straight to an executable - are
+pinned at ten, so that set cannot grow in silence; those three are safe here
+only because each depends on the static archive, which is measured rather than
+assumed.
 
 **The fuzzers assert invariants, not just absence of crashes**, which is why
 they found three defects the three oracles could not: a seventy-four byte TZif
