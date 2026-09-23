@@ -178,16 +178,97 @@ PKG_CONFIG_LOOKUP_PATH := $(if $(PKG_CONFIG_PATH_ENV),$(PKG_CONFIG_PATH_ENV):)$(
 # coverage` its own -O0, both by appending, since the last -O wins. That the
 # gate does not simply inherit this level is a decision with a reason, and the
 # reason is written beside SAN_OPT_CFLAGS rather than here.
+# The C++ level tracks it, for the tests and nothing else - no shipped object
+# is compiled by $(CXX). It is a separate variable because the two answers
+# differ: the release C++ is -O1, not -O2, because gtest at -O2 costs build
+# time for test code whose speed nobody ships.
+#
+# Measured before choosing, on the exhaustive civil sweep (73,048,866 days,
+# the dominant test in the suite):
+#
+#          runtime   breakpoint in the loop body   locals readable
+#   -O0    17.39 s   fires                         5
+#   -O1     6.66 s   set, never fires              -
+#   -Og     6.93 s   set, never fires              -
+#
+# -Og is the level documented for debugging and it buys nothing here: same
+# speed as -O1 and the same dead breakpoint. The line tables are near-identical
+# at all three (375/377/377 distinct lines), so the usual "you cannot set a
+# breakpoint" is not the failure - the failure is subtler and worse, that gdb
+# accepts the breakpoint and the address it picks never executes.
+#
+# So -O0 for debug, paying 2.6x on the one build whose entire purpose is
+# stepping through something, and nothing on the release build everybody runs.
+# GCHRON_CIVIL_SWEEP_YEARS narrows the sweep when even that is too slow.
 ifeq ($(BUILD),debug)
 OPT_CFLAGS := -O0
+OPT_CXXFLAGS := -O0
 else
 OPT_CFLAGS := -O2
+OPT_CXXFLAGS := -O1
 endif
 
+# Strict aliasing, named rather than inherited from the -O level, and armed in
+# every build rather than swept for separately.
+#
+# Measured on gcc 14.2, planted violation, counting findings:
+#
+#   -fsyntax-only                 0     -O1 -c                        0
+#   -O0 -c                        0     -O1 -fstrict-aliasing -c      1
+#   -O0 -fstrict-aliasing -c      1     -O2 -c                        1
+#
+# What arms the warning is -fstrict-aliasing, which gcc turns on from -O2 and
+# not before. "It needs the optimizer" describes gcc's default, not the
+# mechanism, and a gate resting on that proxy goes silent the moment somebody
+# changes an -O for an unrelated reason. Named explicitly, the level stops
+# mattering: it warns at -O0 too.
+#
+# Level 1 rather than the level 3 -Wall implies: on libs/model's eleven real
+# violations, level 3 found ZERO and levels 1 and 2 found all eleven, with
+# level 1 additionally catching a minimal pair level 2 misses. Level 1 or
+# nothing. A future false positive is a finding to explain here, not a level
+# to lower quietly.
+#
+# In CFLAGS rather than in a sweep of its own, which is libs/model's placement
+# and better than the one this library had: a flag under -Werror has no
+# separate green light to give. A sweep can fail to look - a broken include
+# path yields errors rather than warnings, and finding no warnings then reads
+# as finding no violations - and every such hole has to be tested for
+# separately. Here a source that will not compile fails the build. What is
+# left for check-aliasing is the one thing CFLAGS cannot prove about itself:
+# that the flags are still armed.
+#
+# This is the one undefined-behaviour class with no runtime gate at all: ASan
+# and UBSan catch a strict-aliasing violation at NO optimization level, so the
+# sanitizer build and the fuzzers are blind to it however they are compiled.
+# A static warning is the only instrument there is, and it is partial - it
+# will not follow a violation laundered through a function boundary.
+# Split, because the two halves travel to different places. The assumption
+# belongs in every tree that compiles the library; the diagnostic belongs where
+# somebody will read it. The fuzz line carries -w and is not a warning gate.
+#
+# Naming the assumption is worth doing even where it changes nothing, because
+# the DEFAULT differs between the two compilers these Makefiles drive, and it
+# appeared on no command line:
+#
+#   gcc 14.2     -O0 off   -O1 off   -O2 ON
+#   clang 19.1.7 -O0 off   -O1 ON    -O2 ON
+#
+# Measured by diffing emitted code for a minimal pair, not read off a manual
+# page. So the ASan build - gcc at -O1 - was compiling the library WITHOUT the
+# assumption the shipped -O2 library is built under, and now does not. The
+# fuzz tree is clang at -O1 and was already under it: naming the flag there
+# changed 0 of 40 objects, where disabling it changes 24. FUZZ_CC is
+# overridable, so a fuzz tree driven by gcc would have differed; the name is
+# what makes that not matter.
+ALIASING_ASSUME_CFLAGS := -fstrict-aliasing
+ALIASING_WARN_CFLAGS := -Wstrict-aliasing=1
+ALIASING_CFLAGS := $(ALIASING_ASSUME_CFLAGS) $(ALIASING_WARN_CFLAGS)
+
 CXX := g++
-CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 -O1 -g $(EXTRA_CXXFLAGS)
+CXXFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c++20 $(OPT_CXXFLAGS) -g $(EXTRA_CXXFLAGS)
 CC := cc
-CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) -g $(EXTRA_CFLAGS)
+CFLAGS := -pedantic-errors -Wall -Wextra -Werror -Wno-error=unused-function -Wfatal-errors -std=c17 $(OPT_CFLAGS) $(ALIASING_CFLAGS) -g $(EXTRA_CFLAGS)
 # Library-specific compile flags (export symbols on Windows, PIC on Linux)
 # GCHRON_BUILD enables DLL export on Windows (checked by GCHRON_API macro)
 # GCHRON_TEST_BUILD enables export of internal functions for testing (checked by GCHRON_INTERNAL_API macro)
@@ -854,28 +935,16 @@ define layering-check
 
 endef
 
-check-aliasing: ## Fail on a type-punning violation, or if the sweep cannot see one
-# The one undefined-behaviour class with no runtime gate anywhere in this
-# suite. Measured on gcc 14.2: ASan and UBSan catch a strict-aliasing
-# violation at NO optimization level, so `test-asan` and the fuzzers are blind
-# to it however they are compiled, and the only instrument left is the
-# compiler's own static warning. It is partial - it will not follow a
-# violation laundered through a function boundary - and partial is what there
-# is.
+check-aliasing: ## Fail if the strict-aliasing warning is no longer armed
+# $(ALIASING_CFLAGS) detects the violations; this proves it can still detect
+# one. The flags live in CFLAGS under -Werror, so a real violation fails the
+# build and no sweep is needed - but a disarmed warning fails nothing and
+# looks exactly like a clean library. So compile a planted violation with the
+# library's OWN flags and fail if it is accepted.
 #
-# -Wstrict-aliasing=1 is the aggressive level, chosen because the library
-# scores zero under it today and that is the strongest statement available.
-# A future false positive is a finding to explain in a comment, not a level
-# to lower quietly.
-#
-# THE CONTROL IS THE POINT. A sweep for something that is not there returns
-# clean whether it looked or not, and this one has several ways to stop
-# looking: -Wstrict-aliasing needs the optimizer, so a lost -O makes it
-# silent; a later compiler may stop reporting under -fsyntax-only; a broken
-# -I makes every file fail to parse, and errors on stderr are not warnings.
-# So a planted violation is compiled FIRST, with the identical flags, and the
-# gate fails if the warning does not appear. A clean sweep only means
-# anything after the instrument has been seen to fire.
+# It is deliberately the real $(CFLAGS) and not a copy: a control compiled
+# with flags written out beside it proves those flags work, which is not the
+# question.
 check-aliasing: $(LIBVER_GEN)
 	@mkdir -p $(BUILD_DIR)
 	@printf '%s\n' \
@@ -885,35 +954,17 @@ check-aliasing: $(LIBVER_GEN)
 		'  *f = 1.0f;' \
 		'  return *p;' \
 		'}' > $(BUILD_DIR)/alias_control.c
-	@if ! $(CC) -std=c17 -O2 -Wstrict-aliasing=1 $(INCLUDE) -fsyntax-only \
-			$(BUILD_DIR)/alias_control.c 2>&1 | grep -q 'strict-aliasing'; then \
-		printf "\033[0;31mcheck-aliasing: the sweep is blind - a planted type-punning violation drew no warning, so a clean result would mean nothing. Fix the instrument before trusting it.\033[0m\n" >&2; \
+	@if $(CC) $(CFLAGS) $(INCLUDE) -fsyntax-only \
+			$(BUILD_DIR)/alias_control.c 2> $(BUILD_DIR)/alias_control.log; then \
+		printf "\033[0;31mcheck-aliasing: the build accepted a planted type-punning violation. ALIASING_CFLAGS is no longer armed, and a clean build proves nothing about aliasing.\033[0m\n" >&2; \
 		exit 1; \
 	fi
-	@found=0; unread=0; swept=0; \
-	for f in $(SOURCES); do \
-		if out=`$(CC) -std=c17 -O2 -Wstrict-aliasing=1 $(INCLUDE) -fsyntax-only $$f 2>&1`; then \
-			swept=$$((swept + 1)); \
-			if printf '%s' "$$out" | grep -q 'strict-aliasing'; then \
-				printf '%s\n' "$$out" >&2; found=1; \
-			fi; \
-		else \
-			printf '%s\n' "$$out" >&2; unread=1; \
-		fi; \
-	done; \
-	if [ $$unread -ne 0 ]; then \
-		printf "\033[0;31mcheck-aliasing: a source would not compile, so the sweep did not look at it. That is 'could not look', not 'found nothing'.\033[0m\n" >&2; \
+	@if ! grep -q 'strict-aliasing' $(BUILD_DIR)/alias_control.log; then \
+		printf "\033[0;31mcheck-aliasing: the control failed to compile, but not for aliasing - so this says nothing about whether the warning is armed:\033[0m\n" >&2; \
+		cat $(BUILD_DIR)/alias_control.log >&2; \
 		exit 1; \
-	fi; \
-	if [ $$swept -eq 0 ]; then \
-		printf "\033[0;31mcheck-aliasing: swept no files at all. SOURCES is empty and a clean result means nothing.\033[0m\n" >&2; \
-		exit 1; \
-	fi; \
-	if [ $$found -ne 0 ]; then \
-		printf "\033[0;31mcheck-aliasing: a type-punning violation, which no sanitizer in this toolchain would catch at any level.\033[0m\n" >&2; \
-		exit 1; \
-	fi; \
-	printf "\033[0;32mNo strict-aliasing violation in %d sources, and the sweep was seen to catch a planted one.\033[0m\n" "$$swept"
+	fi
+	@printf "\033[0;32mA planted type-punning violation is still refused by the library's own flags.\033[0m\n"
 
 check-layering: ## Fail if a lower tier includes a higher tier's header
 	$(call layering-check,0,$(TIER0_FORBIDDEN),$(TIER0_FILES))
@@ -1392,7 +1443,7 @@ FUZZ_CC_OK := $(shell which $(FUZZ_CC) 2>/dev/null)
 # that the two builds are checking the same thing whoever reads them.
 FUZZ_SAN := -fsanitize=address,$(UBSAN_CHECKS) \
 	-fno-sanitize-recover=$(UBSAN_CHECKS) \
-	-fno-omit-frame-pointer -g $(SAN_OPT_CFLAGS)
+	-fno-omit-frame-pointer -g $(SAN_OPT_CFLAGS) $(ALIASING_ASSUME_CFLAGS)
 FUZZ_LIB_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer-no-link
 FUZZ_BIN_FLAGS := $(FUZZ_SAN) -fsanitize=fuzzer
 FUZZ_DIR := $(BUILD_DIR)/fuzz
