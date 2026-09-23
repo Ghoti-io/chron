@@ -188,6 +188,12 @@ typedef enum {
   GCHRON_DIAG_INPUT_TOO_LONG,          ///< Past GCHRON_Limits::max_parse_length.
   GCHRON_DIAG_BUFFER_TOO_SMALL,        ///< An output buffer could not hold it.
 
+
+  /* ISO 8601 intervals. */
+  GCHRON_DIAG_INTERVAL_SEPARATOR,      ///< An interval needs exactly one `/`.
+  GCHRON_DIAG_INTERVAL_REPEAT_COUNT,   ///< The `Rn` count does not fit.
+  GCHRON_DIAG_INTERVAL_END_BEFORE_START,///< The end resolves before the start.
+
   GCHRON_DIAG_COUNT
 } GCHRON_Diag;
 

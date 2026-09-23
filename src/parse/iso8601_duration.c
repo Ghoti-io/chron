@@ -472,3 +472,200 @@ GCHRON_Result gchron_write_iso8601_duration(const GCHRON_Duration * d,
   memcpy(buf, scratch, at + 1);
   return GCHRON_OK;
 }
+
+/*--------------------------------------------------------------------------*
+ * ISO 8601 intervals
+ *--------------------------------------------------------------------------*/
+
+/** Where the next `/` is, or @p len when there is none. */
+static size_t interval_slash(const char * text, size_t from, size_t len) {
+  size_t at = from;
+
+  while (at < len && text[at] != '/') {
+    at += 1;
+  }
+  return at;
+}
+
+/**
+ * Move an offset date-time by a duration, keeping the offset it was written
+ * with.
+ *
+ * A duration with calendar units has no length in seconds, so it is applied
+ * to the civil reading rather than to the instant: `P1M` after 2026-01-31 is
+ * a month in the calendar, which lands on a different number of days
+ * depending where in the year it starts. The offset the text carried is what
+ * says which clock that calendar belongs to, so it is kept across the move
+ * and reapplied.
+ */
+static GCHRON_Result interval_shift(const GCHRON_OffsetDateTime * from,
+    const GCHRON_Duration * d, bool backwards, GCHRON_Instant * out) {
+  GCHRON_Duration applied = *d;
+  GCHRON_OffsetDateTime moved = *from;
+  GCHRON_Result result;
+
+  if (backwards) {
+    applied.years = -applied.years;
+    applied.months = -applied.months;
+    applied.weeks = -applied.weeks;
+    applied.days = -applied.days;
+    applied.hours = -applied.hours;
+    applied.minutes = -applied.minutes;
+    applied.seconds = -applied.seconds;
+    /*
+     * The nanoseconds carry the same sign as the seconds in a valid
+     * duration, and negating a field-by-field copy has to negate them with
+     * it - otherwise "minus one and a half seconds" becomes "minus one plus
+     * half".
+     */
+    if (applied.nsec != 0) {
+      applied.seconds -= 1;
+      applied.nsec = (int32_t)(GCHRON_NANOS_PER_SECOND - applied.nsec);
+    }
+  }
+  result = gchron_datetime_add(&moved.civil, &applied, NULL,
+      GCHRON_OVERFLOW_CONSTRAIN, &moved.civil);
+  if (result != GCHRON_OK) {
+    return result;
+  }
+  return gchron_offset_to_instant(&moved, out);
+}
+
+GCHRON_Result gchron_parse_iso8601_interval(const char * text, size_t len,
+    const GCHRON_ParseOptions * opts, GCHRON_IntervalSpec * out,
+    GCHRON_ParseInfo * info, GCHRON_Error * err) {
+  GCHRON_IntervalSpec spec;
+  GCHRON_OffsetDateTime left_time;
+  GCHRON_OffsetDateTime right_time;
+  GCHRON_Instant start;
+  GCHRON_Instant end;
+  GCHRON_Result result;
+  size_t at = 0;
+  size_t cut;
+  bool left_is_duration;
+
+  if (text == NULL || out == NULL) {
+    return GCHRON_ERR_INVALID;
+  }
+  memset(&spec, 0, sizeof spec);
+
+  /*
+   * The repeating prefix. `R` with no digits is unbounded, which ISO 8601
+   * spells exactly that way and which a count of zero could not express -
+   * zero occurrences is a thing a caller might legitimately write.
+   */
+  if (len > 0 && (text[0] == 'R' || text[0] == 'r')) {
+    size_t digits = 0;
+    int64_t count = 0;
+
+    at = 1;
+    while (at < len && text[at] >= '0' && text[at] <= '9') {
+      if (!gchron_mul_i64(count, 10, &count)
+          || !gchron_add_i64(count, text[at] - '0', &count)) {
+        return gchron_fail(err, GCHRON_ERR_RANGE,
+            GCHRON_DIAG_INTERVAL_REPEAT_COUNT, at, 1);
+      }
+      at += 1;
+      digits += 1;
+    }
+    if (at >= len || text[at] != '/') {
+      return gchron_fail(err, GCHRON_ERR_FORMAT,
+          GCHRON_DIAG_INTERVAL_SEPARATOR, at, 1);
+    }
+    spec.repetitions = digits == 0 ? GCHRON_INTERVAL_UNBOUNDED : count;
+    at += 1;
+  }
+
+  cut = interval_slash(text, at, len);
+  if (cut >= len) {
+    /* One half is not an interval; the separator is what makes it one. */
+    return gchron_fail(err, GCHRON_ERR_FORMAT, GCHRON_DIAG_INTERVAL_SEPARATOR,
+        len, 0);
+  }
+  if (interval_slash(text, cut + 1, len) != len) {
+    return gchron_fail(err, GCHRON_ERR_FORMAT, GCHRON_DIAG_INTERVAL_SEPARATOR,
+        interval_slash(text, cut + 1, len), 1);
+  }
+
+  left_is_duration = (cut > at) && (text[at] == 'P' || text[at] == 'p');
+
+  if (left_is_duration) {
+    /* <duration>/<end> */
+    result = gchron_parse_iso8601_duration(text + at, cut - at, opts,
+        &spec.duration, NULL, err);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    result = gchron_parse_rfc3339_date_time(text + cut + 1,
+        len - cut - 1, opts, &right_time, info, err);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    result = gchron_offset_to_instant(&right_time, &end);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    result = interval_shift(&right_time, &spec.duration, true, &start);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    spec.form = GCHRON_INTERVAL_DURATION_END;
+    spec.start_offset_sec = right_time.offset_sec;
+    spec.end_offset_sec = right_time.offset_sec;
+  }
+  else {
+    result = gchron_parse_rfc3339_date_time(text + at, cut - at, opts,
+        &left_time, info, err);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    result = gchron_offset_to_instant(&left_time, &start);
+    if (result != GCHRON_OK) {
+      return result;
+    }
+    spec.start_offset_sec = left_time.offset_sec;
+
+    if (cut + 1 < len && (text[cut + 1] == 'P' || text[cut + 1] == 'p')) {
+      /* <start>/<duration> */
+      result = gchron_parse_iso8601_duration(text + cut + 1, len - cut - 1,
+          opts, &spec.duration, NULL, err);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      result = interval_shift(&left_time, &spec.duration, false, &end);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      spec.form = GCHRON_INTERVAL_START_DURATION;
+      spec.end_offset_sec = left_time.offset_sec;
+    }
+    else {
+      /* <start>/<end> */
+      result = gchron_parse_rfc3339_date_time(text + cut + 1, len - cut - 1,
+          opts, &right_time, NULL, err);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      result = gchron_offset_to_instant(&right_time, &end);
+      if (result != GCHRON_OK) {
+        return result;
+      }
+      spec.form = GCHRON_INTERVAL_START_END;
+      spec.end_offset_sec = right_time.offset_sec;
+    }
+  }
+
+  result = gchron_interval_create(&start, &end, &spec.interval);
+  if (result != GCHRON_OK) {
+    /*
+     * An end before its start. gchron_interval_create() calls that
+     * GCHRON_ERR_INVALID because for a caller building one it is a bad
+     * argument; here the argument was a document, so it is a range error in
+     * the text rather than a mistake by whoever called this.
+     */
+    return gchron_fail(err, GCHRON_ERR_RANGE,
+        GCHRON_DIAG_INTERVAL_END_BEFORE_START, 0, len);
+  }
+  *out = spec;
+  return GCHRON_OK;
+}

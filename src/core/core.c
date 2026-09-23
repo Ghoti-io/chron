@@ -129,6 +129,12 @@ static const char * const DIAG_STRINGS[GCHRON_DIAG_COUNT] = {
       "a leap-seconds.list with no expiry line",
   [GCHRON_DIAG_INPUT_TOO_LONG] = "input longer than the limit",
   [GCHRON_DIAG_BUFFER_TOO_SMALL] = "the output buffer is too small",
+  [GCHRON_DIAG_INTERVAL_SEPARATOR] =
+      "an interval needs exactly one '/' separator",
+  [GCHRON_DIAG_INTERVAL_REPEAT_COUNT] =
+      "the repetition count is too large to hold",
+  [GCHRON_DIAG_INTERVAL_END_BEFORE_START] =
+      "the interval ends before it starts",
 };
 
 static const char * const UNIT_STRINGS[GCHRON_UNIT_COUNT] = {

@@ -758,3 +758,175 @@ TEST(DateTimeRound, RejectsNullAndInvalidInput) {
   EXPECT_EQ(GCHRON_ERR_INVALID, gchron_datetime_round(&in, GCHRON_UNIT_DAY, 0,
       GCHRON_ROUND_FLOOR, nullptr, &got));
 }
+
+/*--------------------------------------------------------------------------*
+ * ISO 8601 intervals
+ *--------------------------------------------------------------------------*/
+
+namespace {
+
+GCHRON_IntervalSpec ParseInterval(const std::string & text,
+    GCHRON_Result * result_out = nullptr, GCHRON_Error * err = nullptr) {
+  GCHRON_IntervalSpec spec{};
+  const GCHRON_Result r = gchron_parse_iso8601_interval(text.data(),
+      text.size(), nullptr, &spec, nullptr, err);
+  if (result_out != nullptr) {
+    *result_out = r;
+  }
+  else {
+    EXPECT_EQ(GCHRON_OK, r) << text;
+  }
+  return spec;
+}
+
+int64_t Seconds(const GCHRON_Interval & i) {
+  return i.end.sec - i.start.sec;
+}
+
+} // namespace
+
+TEST(IntervalGrammar, ReadsAllThreeForms) {
+  const GCHRON_IntervalSpec both = ParseInterval(
+      "2026-01-01T00:00:00Z/2026-02-01T00:00:00Z");
+  EXPECT_EQ(GCHRON_INTERVAL_START_END, both.form);
+  EXPECT_EQ(31 * 86400, Seconds(both.interval));
+
+  const GCHRON_IntervalSpec forward = ParseInterval(
+      "2026-01-01T00:00:00Z/P1M");
+  EXPECT_EQ(GCHRON_INTERVAL_START_DURATION, forward.form);
+  EXPECT_EQ(1, forward.duration.months);
+  EXPECT_EQ(31 * 86400, Seconds(forward.interval))
+      << "January is 31 days, which is what P1M after 1 January means";
+
+  const GCHRON_IntervalSpec backward = ParseInterval(
+      "P1M/2026-02-01T00:00:00Z");
+  EXPECT_EQ(GCHRON_INTERVAL_DURATION_END, backward.form);
+  EXPECT_EQ(1, backward.duration.months);
+  EXPECT_EQ(31 * 86400, Seconds(backward.interval));
+
+  /* All three name the same interval here, and the form says which was
+   * written - it is not recoverable from the bounds. */
+  EXPECT_EQ(0, gchron_instant_compare(&both.interval.start,
+      &forward.interval.start));
+  EXPECT_EQ(0, gchron_instant_compare(&both.interval.start,
+      &backward.interval.start));
+}
+
+/*
+ * A month is not thirty days, and which month it is decides the answer. This
+ * is the case that separates a real calendar resolution from a duration
+ * multiplied out into seconds.
+ */
+TEST(IntervalGrammar, ACalendarDurationIsResolvedAgainstItsOwnEnd) {
+  EXPECT_EQ(28 * 86400, Seconds(
+      ParseInterval("2026-02-01T00:00:00Z/P1M").interval))
+      << "February 2026 is 28 days";
+  EXPECT_EQ(29 * 86400, Seconds(
+      ParseInterval("2024-02-01T00:00:00Z/P1M").interval))
+      << "February 2024 is 29";
+  EXPECT_EQ(30 * 86400, Seconds(
+      ParseInterval("2026-04-01T00:00:00Z/P1M").interval));
+  EXPECT_EQ(365 * 86400, Seconds(
+      ParseInterval("2026-01-01T00:00:00Z/P1Y").interval));
+  EXPECT_EQ(366 * 86400, Seconds(
+      ParseInterval("2024-01-01T00:00:00Z/P1Y").interval));
+
+  /* Backwards from the end, the same way. */
+  EXPECT_EQ(28 * 86400, Seconds(
+      ParseInterval("P1M/2026-03-01T00:00:00Z").interval));
+  EXPECT_EQ(29 * 86400, Seconds(
+      ParseInterval("P1M/2024-03-01T00:00:00Z").interval));
+}
+
+/*
+ * ISO 8601's `Rn` is the ambiguity worth writing down rather than leaving for
+ * someone to discover. The standard counts repetitions of the interval; this
+ * library reads `R5` as five occurrences. The other live reading is "five
+ * more after the first", which gives six - and it is not an unreasonable
+ * reading of the wording, which is why the header says which one this is
+ * rather than assuming the question does not come up.
+ */
+TEST(IntervalGrammar, ARepeatCountIsTheNumberOfOccurrences) {
+  const GCHRON_IntervalSpec five = ParseInterval(
+      "R5/2026-01-01T00:00:00Z/P1M");
+  EXPECT_EQ(5, five.repetitions) << "R5 is five occurrences, not six";
+  EXPECT_EQ(GCHRON_INTERVAL_START_DURATION, five.form);
+  EXPECT_EQ(31 * 86400, Seconds(five.interval));
+
+  /* A bare R is unbounded, which a count of zero could not say - zero
+   * occurrences is something a caller may legitimately write. */
+  const GCHRON_IntervalSpec forever = ParseInterval(
+      "R/2026-01-01T00:00:00Z/P1M");
+  EXPECT_EQ(GCHRON_INTERVAL_UNBOUNDED, forever.repetitions);
+
+  const GCHRON_IntervalSpec none = ParseInterval(
+      "R0/2026-01-01T00:00:00Z/P1M");
+  EXPECT_EQ(0, none.repetitions);
+  EXPECT_NE(GCHRON_INTERVAL_UNBOUNDED, none.repetitions)
+      << "R0 and a bare R are different statements";
+
+  /* No R at all is zero, which is distinguishable from R0 only by... nothing.
+   * That is deliberate: an interval that does not repeat happens once, and a
+   * caller that cares about the distinction is asking about the text rather
+   * than about the interval. */
+  EXPECT_EQ(0, ParseInterval("2026-01-01T00:00:00Z/P1M").repetitions);
+}
+
+TEST(IntervalGrammar, TheOffsetsEachEndWasWrittenWithAreKept) {
+  const GCHRON_IntervalSpec spec = ParseInterval(
+      "2026-01-01T00:00:00+05:30/2026-01-02T00:00:00-08:00");
+  EXPECT_EQ(GCHRON_INTERVAL_START_END, spec.form);
+  EXPECT_EQ(5 * 3600 + 30 * 60, spec.start_offset_sec);
+  EXPECT_EQ(-8 * 3600, spec.end_offset_sec);
+}
+
+TEST(IntervalGrammar, MalformedInputIsFormatWithAPosition) {
+  const char * bad[] = {
+    "", "/", "2026-01-01T00:00:00Z", "P1M",
+    "2026-01-01T00:00:00Z/", "/2026-01-01T00:00:00Z",
+    "2026-01-01T00:00:00Z/2026-02-01T00:00:00Z/P1M",
+    "P1M/P1M", "R5/2026-01-01T00:00:00Z", "Rx/2026-01-01T00:00:00Z/P1M",
+    "2026-13-01T00:00:00Z/P1M", "2026-01-01T00:00:00Z/PXM"
+  };
+
+  for (const char * text : bad) {
+    GCHRON_Result result = GCHRON_OK;
+    GCHRON_Error err{};
+    ParseInterval(text, &result, &err);
+    EXPECT_NE(GCHRON_OK, result) << "accepted \"" << text << "\"";
+    EXPECT_NE(GCHRON_DIAG_NONE, err.diag) << "no diagnostic for \"" << text
+        << "\"";
+  }
+
+  GCHRON_IntervalSpec spec{};
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_parse_iso8601_interval(nullptr, 0,
+      nullptr, &spec, nullptr, nullptr));
+  EXPECT_EQ(GCHRON_ERR_INVALID, gchron_parse_iso8601_interval("x", 1, nullptr,
+      nullptr, nullptr, nullptr));
+}
+
+TEST(IntervalGrammar, AnEndBeforeItsStartIsRefusedWithItsOwnDiagnostic) {
+  GCHRON_Result result = GCHRON_OK;
+  GCHRON_Error err{};
+  ParseInterval("2026-02-01T00:00:00Z/2026-01-01T00:00:00Z", &result, &err);
+
+  EXPECT_EQ(GCHRON_ERR_RANGE, result);
+  EXPECT_EQ(GCHRON_DIAG_INTERVAL_END_BEFORE_START, err.diag)
+      << "the caller passed a document, not a bad argument, so this is a "
+      << "range error in the text rather than GCHRON_ERR_INVALID";
+
+  /* Equal ends are an empty interval, which is legal. */
+  EXPECT_EQ(0, Seconds(ParseInterval(
+      "2026-01-01T00:00:00Z/2026-01-01T00:00:00Z").interval));
+}
+
+TEST(IntervalGrammar, EveryDiagnosticItRaisesHasAString) {
+  for (GCHRON_Diag d : {GCHRON_DIAG_INTERVAL_SEPARATOR,
+       GCHRON_DIAG_INTERVAL_REPEAT_COUNT,
+       GCHRON_DIAG_INTERVAL_END_BEFORE_START}) {
+    const char * s = gchron_diag_string(d);
+    ASSERT_NE(nullptr, s);
+    EXPECT_STRNE("unknown diagnostic", s) << "diagnostic " << d;
+    EXPECT_GT(std::strlen(s), 5u);
+  }
+}

@@ -502,6 +502,86 @@ GCHRON_API GCHRON_Result gchron_parse_iso8601_duration(const char * text,
     GCHRON_ParseInfo * info, GCHRON_Error * err);
 
 /*--------------------------------------------------------------------------*
+ * ISO 8601 intervals
+ *--------------------------------------------------------------------------*/
+
+/**
+ * @brief Which of the three interval spellings some text turned out to be.
+ *
+ * All three name the same kind of thing and none of them can be recovered
+ * from the resolved bounds, so a parser that reads any of them has to report
+ * which it read - `2026-01-01T00:00Z/P1M` and the explicit end it resolves to
+ * are the same interval and not the same statement, and a writer that turned
+ * one into the other would be changing what the document said.
+ */
+typedef enum {
+  GCHRON_INTERVAL_NONE = 0,       ///< Not set.
+  GCHRON_INTERVAL_START_END,      ///< `<start>/<end>`.
+  GCHRON_INTERVAL_START_DURATION, ///< `<start>/<duration>`.
+  GCHRON_INTERVAL_DURATION_END    ///< `<duration>/<end>`.
+} GCHRON_IntervalForm;
+
+/** A repetition count that means "without end", from a bare `R/`. */
+#define GCHRON_INTERVAL_UNBOUNDED (-1)
+
+/**
+ * @brief What an ISO 8601 interval string said.
+ *
+ * The resolved bounds and the form it was written in, because the form is not
+ * recoverable from the bounds.
+ */
+typedef struct GCHRON_IntervalSpec {
+  GCHRON_Interval interval;    ///< The resolved half-open bounds.
+  GCHRON_Duration duration;    ///< As written; zeroed for `<start>/<end>`.
+  GCHRON_IntervalForm form;    ///< Which spelling it was.
+  int32_t start_offset_sec;    ///< The offset the start was written with.
+  int32_t end_offset_sec;      ///< The offset the end was written with.
+
+  /**
+   * How many times the interval occurs, or ::GCHRON_INTERVAL_UNBOUNDED.
+   *
+   * Zero when the text carried no `R`. **`R5` is five occurrences**, not six:
+   * ISO 8601 counts repetitions of the interval, and this library reads that
+   * as the number of times it happens. Some implementations read `Rn` as "n
+   * more after the first" and so give n+1; that reading is not wrong about
+   * the standard's wording so much as a different resolution of it, which is
+   * why this says which one it picked rather than leaving a caller to find
+   * out.
+   */
+  int64_t repetitions;
+} GCHRON_IntervalSpec;
+
+/**
+ * @brief Parse an ISO 8601 time interval.
+ *
+ * The three forms, and the repeating prefix:
+ *
+ *     2026-01-01T00:00:00Z/2026-02-01T00:00:00Z   start and end
+ *     2026-01-01T00:00:00Z/P1M                    start and duration
+ *     P1M/2026-02-01T00:00:00Z                    duration and end
+ *     R5/2026-01-01T00:00:00Z/P1M                 five of them
+ *     R/2026-01-01T00:00:00Z/P1M                  without end
+ *
+ * A duration carrying calendar units is resolved against the civil reading
+ * the other end was written with, at that end's own offset - `P1M` after
+ * 2026-01-31 is a month in the calendar, not thirty days, and which month it
+ * is depends on where the clock was.
+ *
+ * @param text The input. Not assumed to be NUL-terminated.
+ * @param len Bytes of input.
+ * @param opts Options. NULL means gchron_parse_options_default().
+ * @param out Receives the interval on success; untouched on failure.
+ * @param info Receives what the text said about its ends. May be NULL.
+ * @param err Receives the failure and its position. May be NULL.
+ * @return GCHRON_OK; GCHRON_ERR_FORMAT; GCHRON_ERR_RANGE when an end cannot
+ *   be represented or the resolved end precedes the start;
+ *   GCHRON_ERR_LIMIT; GCHRON_ERR_INVALID.
+ */
+GCHRON_API GCHRON_Result gchron_parse_iso8601_interval(const char * text,
+    size_t len, const GCHRON_ParseOptions * opts, GCHRON_IntervalSpec * out,
+    GCHRON_ParseInfo * info, GCHRON_Error * err);
+
+/*--------------------------------------------------------------------------*
  * TOML v1.0.0
  *--------------------------------------------------------------------------*/
 
