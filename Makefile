@@ -1430,6 +1430,20 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 		'g++ $$(LDFLAGS) $$(PLANTED_FIRST_UNRECORDED) -o $$@.a planted.o &&' \
 		'  g++ $$(LDFLAGS) $$(PLANTED_SECOND_UNRECORDED) -o $$@.b planted.o' \
 		>> $(BUILD_DIR)/stamp_control.mk
+# The control's failure message names two causes because the fingerprint
+# genuinely cannot separate them, which is a different situation from the two
+# arms that were merged onto one number by accident. Those were separable, and
+# were separated by moving a planted shape to disturb a different field. This
+# pair is not: the control is written by this recipe's own printf, so "has the
+# shape gone missing" and "has the sweep stopped seeing it" are the same
+# question asked of one number. Measured rather than assumed - deleting the
+# negated rule from the emitter and removing the negation strip from the awk
+# both print UNMODELLED 1, identically. Where shapes can be separated,
+# separate them; where they converge, the message carries the ambiguity
+# instead of asserting the likelier half. A peer found this in their port and
+# the first version of this message had the same defect as the shadowed pin:
+# right about one cause, actively wrong about the other.
+#
 # PREREQ is cut from the comparison rather than pinned twice. It counts the
 # link sweep's skip list, which is a constant of the sweep and not something
 # the control exercises - and while it was in this string, adding a name to
@@ -1441,7 +1455,16 @@ check-stamps: ## Fail if a compile rule has no flags stamp, or the wrong one
 			$(BUILD_DIR)/stamp_control.mk | tail -1 \
 			| sed 's/ PREREQ [0-9]*$$//'); \
 	if [ "$$ctl" != "$(STAMP_CONTROL_EXPECTED)" ]; then \
-		printf "\033[0;31mcheck-stamps: the control says '%s', not '%s' - the sweep is not reading compile rules the way it thinks, so a clean result from it means nothing.\033[0m\n" "$$ctl" "$(STAMP_CONTROL_EXPECTED)" >&2; \
+		printf "\033[0;31mcheck-stamps: the control says '%s', not '%s'.\033[0m\n" "$$ctl" "$(STAMP_CONTROL_EXPECTED)" >&2; \
+		printf "\nThis has two causes and they need opposite fixes, and this number\n" >&2; \
+		printf "cannot tell them apart - a planted shape the sweep stopped seeing and\n" >&2; \
+		printf "a planted shape that is no longer there print the same fingerprint,\n" >&2; \
+		printf "byte for byte. Read the control this run just wrote:\n\n" >&2; \
+		printf "    %s\n\n" "$(BUILD_DIR)/stamp_control.mk" >&2; \
+		printf "If the shape is in it, the sweep is what changed. If the shape is\n" >&2; \
+		printf "missing, the recipe that writes the control is what changed, and the\n" >&2; \
+		printf "sweep may be fine. Either way a clean result from this sweep means\n" >&2; \
+		printf "nothing until it is resolved.\n" >&2; \
 		exit 1; \
 	fi
 
