@@ -52,6 +52,8 @@
 
 #include "../core/core_internal.h"
 #if defined(_WIN32)
+#include <ghoti.io/cutil/dir.h>
+#include <ghoti.io/cutil/file.h>
 /* TODO(windows): unexercised, like the branch that uses them. */
 #include <windows.h>
 #endif
@@ -319,8 +321,6 @@ GCHRON_Result gchron_zonedb_local(GCHRON_ZoneDb * db,
  * Listing a directory
  *--------------------------------------------------------------------------*/
 
-#if !defined(_WIN32)
-
 /**
  * Whether a directory entry is one of the parallel trees rather than a zone.
  *
@@ -339,6 +339,8 @@ static bool is_parallel_tree(const char * name) {
   return strcmp(name, "posix") == 0 || strcmp(name, "right") == 0;
 }
 
+#if !defined(_WIN32)
+
 /** Whether a file begins with the TZif magic. */
 static bool is_tzif_file(const char * path) {
   FILE * handle = fopen(path, "rb");
@@ -352,6 +354,35 @@ static bool is_tzif_file(const char * path) {
   fclose(handle);
   return read_bytes == sizeof(magic) && memcmp(magic, "TZif", 4) == 0;
 }
+
+#else /* _WIN32 */
+
+/**
+ * Whether a file begins with the TZif magic.
+ *
+ * Through cutil rather than fopen(), which on Windows cannot open a path whose
+ * bytes are UTF-8 - and the root is wherever the caller put the tree, which
+ * is commonly under a profile directory named after a person.
+ */
+static bool is_tzif_file(const char * path) {
+  GCU_File_Handle handle;
+  char magic[4];
+  size_t got = 0;
+  bool is_tzif;
+
+  if (gcu_file_open(&handle, path, GCU_FILE_OPEN_READ, GCU_FILE_PERMS_DEFAULT,
+          NULL) != GCU_FILE_OK) {
+    gcu_file_close(&handle);
+    return false;
+  }
+  is_tzif = gcu_file_read_bytes(&handle, magic, sizeof(magic), &got)
+          == GCU_FILE_OK
+      && got == sizeof(magic) && memcmp(magic, "TZif", 4) == 0;
+  gcu_file_close(&handle);
+  return is_tzif;
+}
+
+#endif /* _WIN32 */
 
 /** How long a path this walk will build. */
 #define WALK_PATH_MAX 1024
@@ -372,6 +403,8 @@ static bool join_into(char * out, size_t size, const char * a,
     const char * b) {
   return gcu_path_join(GCU_PATH_NATIVE, a, b, out, size, NULL) == GCU_PATH_OK;
 }
+
+#if !defined(_WIN32)
 
 /** Walk a directory, visiting every zone identifier under it. */
 static GCHRON_Result walk(GCHRON_ZoneDb * db, const char * root,
@@ -425,7 +458,76 @@ static GCHRON_Result walk(GCHRON_ZoneDb * db, const char * root,
   return result;
 }
 
-#endif /* !_WIN32 */
+#else /* _WIN32 */
+
+/**
+ * Walk a directory, visiting every zone identifier under it.
+ *
+ * The same walk as the POSIX one, through cutil's directory iterator because
+ * Windows has no dirent. One difference is not cosmetic: the *identifier* is
+ * joined with `/` whatever the platform, because it is a tzdb name and not a
+ * path. Joined natively it would come out `America\New_York`, which
+ * gchron_zone_id_is_safe() refuses, and every zone below the top level would
+ * silently drop out of the listing. The path that is opened is still joined
+ * natively.
+ */
+static GCHRON_Result walk(GCHRON_ZoneDb * db, const char * root,
+    const char * prefix, int depth,
+    GCHRON_Result (*visit)(GCHRON_ZoneDb *, const char *)) {
+  char path[WALK_PATH_MAX];
+  GCU_Dir dir;
+  GCHRON_Result result = GCHRON_OK;
+
+  /* Bounded for the same reason as the POSIX walk: a junction can loop. */
+  if (depth > 4) {
+    return GCHRON_OK;
+  }
+  if (!join_into(path, sizeof(path), root, prefix)) {
+    return GCHRON_OK;
+  }
+
+  if (gcu_dir_open(&dir, path, NULL) != GCU_FILE_OK) {
+    gcu_dir_close(&dir);
+    return GCHRON_ERR_IO;
+  }
+  while (result == GCHRON_OK) {
+    const char * name = NULL;
+    bool done = false;
+    char child[WALK_PATH_MAX];
+    char full[WALK_PATH_MAX];
+    GCU_File_Info info;
+
+    /* A read error ends the walk where readdir() returning NULL would. */
+    if (gcu_dir_read(&dir, &name, NULL, &done) != GCU_FILE_OK || done) {
+      break;
+    }
+    if (name[0] == '.' || is_parallel_tree(name)) {
+      continue;
+    }
+    if (gcu_path_join(GCU_PATH_POSIX, prefix, name, child, sizeof(child),
+            NULL) != GCU_PATH_OK) {
+      continue;
+    }
+    if (!join_into(full, sizeof(full), root, child)) {
+      continue;
+    }
+    /* Following links, as stat() does. */
+    if (gcu_file_stat(full, &info) != GCU_FILE_OK) {
+      continue;
+    }
+    if (info.type == GCU_FILE_TYPE_DIRECTORY) {
+      result = walk(db, root, child, depth + 1, visit);
+    }
+    else if (info.type == GCU_FILE_TYPE_REGULAR
+        && gchron_zone_id_is_safe(child) && is_tzif_file(full)) {
+      result = visit(db, child);
+    }
+  }
+  gcu_dir_close(&dir);
+  return result;
+}
+
+#endif /* _WIN32 */
 
 GCHRON_Result gchron_zonedb_list(GCHRON_ZoneDb * db,
     const char * const ** out_ids, size_t * out_count) {
@@ -443,14 +545,5 @@ GCHRON_Result gchron_zonedb_list(GCHRON_ZoneDb * db,
  */
 GCHRON_Result gchron_zonedb_walk_directory(GCHRON_ZoneDb * db,
     const char * root, GCHRON_Result (*visit)(GCHRON_ZoneDb *, const char *)) {
-#if defined(_WIN32)
-  /* TODO(windows): there is no directory to walk; the embedded table
-   * enumerates itself. See the workspace's notes/suite/WINDOWS-TODO.md. */
-  (void)db;
-  (void)root;
-  (void)visit;
-  return GCHRON_ERR_UNSUPPORTED;
-#else
   return walk(db, root, "", 0, visit);
-#endif
 }
