@@ -34,7 +34,7 @@ protected:
   void SetUp() override {
     // Not a skip: a machine with no zoneinfo cannot check any of this, and a
     // suite that passed anyway would be measuring nothing.
-    ASSERT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db_))
+    ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db_))
         << "no system zoneinfo directory";
   }
   void TearDown() override { gchron_zonedb_destroy(db_); }
@@ -51,7 +51,15 @@ protected:
 } // namespace
 
 TEST_F(Zones, ADatabaseSaysWhereItsDataCameFromAndWhichRelease) {
+#ifdef _WIN32
+  // gchrontest::open_zonedb() falls back to the embedded table here.
+  const char * tzdir = std::getenv("TZDIR");
+  EXPECT_EQ((tzdir == nullptr || tzdir[0] == '\0')
+          ? GCHRON_ZONE_SOURCE_EMBEDDED : GCHRON_ZONE_SOURCE_SYSTEM,
+      gchron_zonedb_source(db_));
+#else
   EXPECT_EQ(GCHRON_ZONE_SOURCE_SYSTEM, gchron_zonedb_source(db_));
+#endif
   // "Which rules produced this timestamp" is an audit question, and a library
   // that cannot answer has made the dispute unresolvable (section 6.6).
   const char * version = gchron_zonedb_version(db_);

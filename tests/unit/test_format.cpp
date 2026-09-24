@@ -541,7 +541,7 @@ TEST(Format, DestroyingANamedFormatIsIgnored) {
 
 TEST(Format, TheZoneLettersWorkOnAZonedValue) {
   GCHRON_ZoneDb * db = nullptr;
-  ASSERT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db));
+  ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db));
   const GCHRON_Zone * zone = nullptr;
   ASSERT_EQ(GCHRON_OK, gchron_zonedb_zone(db, "America/New_York", &zone));
 

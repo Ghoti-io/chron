@@ -20,7 +20,7 @@ namespace {
 class Ixdtf : public ::testing::Test {
 protected:
   void SetUp() override {
-    ASSERT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db_))
+    ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db_))
         << "no system zoneinfo directory";
   }
   void TearDown() override { gchron_zonedb_destroy(db_); }

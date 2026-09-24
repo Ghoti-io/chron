@@ -186,6 +186,27 @@ private:
 };
 
 /**
+ * The database a test asks its zone questions of.
+ *
+ * The system zoneinfo directory wherever there is one. Windows has none, so
+ * there gchron_zonedb_system() succeeds only when `$TZDIR` names a tree, and
+ * otherwise the answer is the embedded table - which is what
+ * gchron_zonedb_default() hands every Windows caller, and whose lookup, link
+ * resolution and enumeration are code no other platform's run of these tests
+ * reaches. It is not a skip: the embedded table is a real database built from
+ * a real tzdata release, and every question put to it here has an answer.
+ */
+inline GCHRON_Result open_zonedb(GCHRON_ZoneDb ** out) {
+#ifdef _WIN32
+  const char * tzdir = std::getenv("TZDIR");
+  if (tzdir == nullptr || tzdir[0] == '\0') {
+    return gchron_zonedb_embedded(nullptr, nullptr, out);
+  }
+#endif
+  return gchron_zonedb_system(nullptr, nullptr, out);
+}
+
+/**
  * The system zone database, released when it goes out of scope.
  *
  * A test that needs a zone for one assertion should not have to carry a
@@ -196,7 +217,7 @@ private:
 class ZoneDb {
 public:
   ZoneDb() {
-    EXPECT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db_))
+    EXPECT_EQ(GCHRON_OK, open_zonedb(&db_))
         << "no system zoneinfo directory";
   }
   ~ZoneDb() { gchron_zonedb_destroy(db_); }

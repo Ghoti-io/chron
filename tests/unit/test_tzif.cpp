@@ -270,7 +270,7 @@ TEST(Tzif, TheLimitsAreEnforcedAndZeroMeansNoLimit) {
  */
 TEST(Tzif, EveryZoneFileOnThisMachineParses) {
   GCHRON_ZoneDb * db = nullptr;
-  ASSERT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db));
+  ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db));
   const char * const * ids = nullptr;
   size_t count = 0;
   ASSERT_EQ(GCHRON_OK, gchron_zonedb_list(db, &ids, &count));
