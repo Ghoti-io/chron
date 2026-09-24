@@ -2412,6 +2412,9 @@ check-counts: ## Fail if README.md's test count no longer matches the suites
 # rather than spells, and count a DISABLED_ test that never runs.  A gate
 # that can disagree with the thing it certifies is not measuring it.
 check-counts: $(TEST_EXECUTABLES)
+ifeq ($(OS_NAME), Windows)
+	@printf "check-counts: skipped on Windows - README.md states the Linux count, and the glibc differentials are compiled out here, so the two platforms run different numbers of tests.\n"
+else
 	@tests=0; \
 	for test_exe in $(TEST_EXECUTABLES); do \
 		n=$$(LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_list_tests 2>/dev/null \
@@ -2434,6 +2437,7 @@ check-counts: $(TEST_EXECUTABLES)
 	fi; \
 	printf "\033[0;32mcheck-counts: README.md's %d tests in %d suites is what is there.\033[0m\n" \
 		"$$tests" "$$suites"
+endif
 
 check-docs: ## Fail on a documentation fault in the headers or the manual
 	@if ! command -v doxygen >/dev/null 2>&1; then \
