@@ -179,6 +179,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", nargs="?", default=None)
     parser.add_argument("-o", "--output", default="src/leap/leap_builtin.c")
+    # How the generated comment names the source. MSYS2 rewrites a POSIX path
+    # argument for a native Python - /usr/share/zoneinfo/... arrives as
+    # C:/msys64/usr/share/zoneinfo/... - so the path this script opened is not
+    # the spelling the committed file records, and check-generated would call
+    # an unchanged table stale. The Makefile passes the POSIX spelling here.
+    parser.add_argument("--source-name", default=None)
     args = parser.parse_args()
 
     source = args.source
@@ -202,7 +208,10 @@ def main():
 
     output = pathlib.Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render(entries, updated, expiry, source))
+    # LF line endings: the file is committed and compared byte for byte, and a
+    # native Python on Windows would otherwise write CRLF.
+    output.write_text(render(entries, updated, expiry, args.source_name or source),
+                      newline="\n")
 
     print("%s: %d entries, expires %s"
           % (args.output, len(entries), iso(expiry)))

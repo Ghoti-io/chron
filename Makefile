@@ -661,7 +661,9 @@ check-generated: ## Fail if a committed generated source is not what its generat
 		printf "  src/leap/leap_builtin.c      not checked: no $$leap_source (it ships with tzdata)\n"; \
 		skipped="$$skipped src/leap/leap_builtin.c"; \
 	else \
-		if ! python3 tools/leap/embed.py "$$leap_source" -o "$$tmp/leap_builtin.c" \
+		if ! MSYS2_ARG_CONV_EXCL=--source-name= python3 tools/leap/embed.py \
+				"$$leap_source" --source-name="$$leap_source" \
+				-o "$$tmp/leap_builtin.c" \
 				>/dev/null 2>"$$tmp/err"; then \
 			printf "\033[0;31m\n### tools/leap/embed.py failed ###\033[0m\n" >&2; \
 			cat "$$tmp/err" >&2; \

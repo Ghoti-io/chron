@@ -347,7 +347,9 @@ def main():
 
     output = pathlib.Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(render(version, names, blobs, tzdir))
+    # LF line endings, as tools/leap/embed.py: the same generated source on
+    # every platform, not CRLF from a native Python on Windows.
+    output.write_text(render(version, names, blobs, tzdir), newline="\n")
 
     print("%s: tzdata %s, %d zones, %d distinct images, %d bytes"
           % (args.output, version, len(names), len(blobs),
