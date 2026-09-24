@@ -386,9 +386,11 @@ GCHRON_API GCHRON_Result gchron_zonedb_posix(GCHRON_ZoneDb * db,
  *    under `zoneinfo`; a regular file is read as an anonymous TZif zone, and
  *    Debian's `/etc/timezone` is consulted for the name.
  * 3. On Windows, `GetDynamicTimeZoneInformation()` and the CLDR
- *    `windowsZones.xml` mapping. That branch is written, marked
- *    `TODO(windows):` and listed in the workspace's
- *    `notes/suite/WINDOWS-TODO.md`.
+ *    `windowsZones.xml` mapping, read from the `TimeZoneKeyName` registry
+ *    value rather than the localised display name. A zone Windows added
+ *    after the mapping's CLDR release has no identifier here and is refused
+ *    with `GCHRON_ERR_RANGE` rather than guessed at;
+ *    gchron_zone_windows_mapping_version() names that release.
  *
  * Nothing else in the library calls this. A GCHRON_ZonedDateTime never has an
  * implicit zone.

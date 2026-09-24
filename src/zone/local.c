@@ -55,7 +55,6 @@
 #include <ghoti.io/cutil/dir.h>
 #include <ghoti.io/cutil/file.h>
 #include <ghoti.io/cutil/safemath.h>
-/* TODO(windows): unexercised, like the branch that uses them. */
 #include <windows.h>
 #endif
 
@@ -227,12 +226,14 @@ GCHRON_Result gchron_zonedb_local(GCHRON_ZoneDb * db,
 
 #if defined(_WIN32)
   /*
-   * TODO(windows): written, never run. There is no machine here to run it on,
-   * and CONVENTIONS.md section 11 is explicit that a platform branch is
-   * written, marked, listed, and not claimed to work. See the workspace's
-   * notes/suite/WINDOWS-TODO.md,
-   * where "done" means gchron_zonedb_local() on a machine set to Pacific
-   * Standard Time returns America/Los_Angeles.
+   * Run on 2026-09-23, on a Windows 11 machine under MSYS2 MINGW64 set to
+   * Central Standard Time: this returned America/Chicago, through the
+   * registry and through the table below.
+   *
+   * TODO(windows): one case stays untried, and it is the one this table
+   * cannot answer by construction - a machine whose zone Windows added after
+   * the CLDR release the table was built from. That is item 6b in the
+   * workspace's notes/suite/WINDOWS-TODO.md.
    *
    * Windows reports a zone by a name of its own - "Pacific Standard Time" -
    * and CLDR publishes what those mean in IANA terms. A name the table does

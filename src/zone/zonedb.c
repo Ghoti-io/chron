@@ -463,10 +463,11 @@ static void db_unlock(GCHRON_ZoneDb * db) {
 /** Where the platform keeps its zone files. */
 static const char * platform_zoneinfo(void) {
 #if defined(_WIN32)
-  /* TODO(windows): Windows has no zoneinfo directory. gchron_zonedb_system()
-   * says so rather than inventing a path; gchron_zonedb_embedded() is the
-   * route, and phase 4 builds its table. See the workspace's
-   * notes/suite/WINDOWS-TODO.md. */
+  /* Windows has no zoneinfo directory, so gchron_zonedb_system() says so
+   * rather than inventing a path, and gchron_zonedb_embedded() is the route.
+   * That is a decision and not an omission, so it is deliberately unmarked;
+   * it was confirmed on 2026-09-23, where lookup, links and listing all pass
+   * on Windows against the embedded table. */
   return NULL;
 #else
   return "/usr/share/zoneinfo";

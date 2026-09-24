@@ -50,12 +50,11 @@
 
 #if defined(_WIN32)
 /*
- * TODO(windows): none of this branch has been run. GetSystemTimePreciseAsFileTime
- * is Windows 8 and later; QueryPerformanceCounter's frequency is fixed at
- * boot. See the workspace's notes/suite/WINDOWS-TODO.md, where "done" means
- * gchron_clock_now() on the
- * system clock agrees with the shell's own time and gchron_tick_now() is
- * monotonic across a clock change.
+ * Run on 2026-09-23 under MSYS2 MINGW64. tests/unit/test_clock.cpp carries no
+ * _WIN32 guard of its own, so the cases below are the ones that ran there,
+ * and they passed: this branch is exercised rather than merely written.
+ *
+ * GetSystemTimePreciseAsFileTime is Windows 8 and later.
  */
 
 /** Hundreds of nanoseconds between 1601-01-01 and 1970-01-01. */
@@ -86,10 +85,14 @@ static GCHRON_Result system_resolution(const GCHRON_Clock * self,
 }
 
 /*
- * TODO(windows): neither counter has been read on Windows. The workspace's
- * notes/suite/WINDOWS-TODO.md section 6d says what would settle it, and the check has to be done on real
- * hardware because the question is what the machine does across a real
- * suspend.
+ * Both counters have been read on Windows, on 2026-09-23: the Tick cases in
+ * tests/unit/test_clock.cpp are unguarded and passed there.
+ *
+ * TODO(windows): that settles less than it sounds like. Reading both counters
+ * shows they answer; it does not show the one property the pair exists to
+ * express, which is that across a suspend one of them stops and the other
+ * does not. Only a machine that can actually sleep shows that, and it is item
+ * 6d in the workspace's notes/suite/WINDOWS-TODO.md.
  *
  * QueryPerformanceCounter is deliberately *not* used here, though it was
  * before this pair existed and though it has the finer resolution. Microsoft

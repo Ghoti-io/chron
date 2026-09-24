@@ -118,9 +118,15 @@ else ifeq ($(findstring MINGW32_NT,$(UNAME_S)),MINGW32_NT)  # 32-bit Windows
 	PC_LIB_DIR = $(shell cygpath -m $(LIB_INSTALL_PATH)/$(SUITE))
 	override BUILD := win32/$(BUILD)
 
-# TODO(windows): the Windows branches in this file were adapted from image's
-# and have never been run, nor has GCHRON_API's dllexport/dllimport switching.
-# See the workspace's notes/suite/WINDOWS-TODO.md item 6.
+# The 64-bit arm below has been run: 2026-09-23, MSYS2 MINGW64 with gcc 16.2,
+# the whole suite green, installed into a prefix and consumed from there
+# through pkg-config alone. That exercised GCHRON_API's dllexport/dllimport
+# switching, and found one real defect in this file - the import library was
+# written somewhere the .pc did not point.
+#
+# TODO(windows): the 32-bit arm above is the one that has still never been
+# run. It was adapted from image's, as the 64-bit arm was, and the port went
+# to MINGW64 only.
 else ifeq ($(findstring MINGW64_NT,$(UNAME_S)),MINGW64_NT)  # 64-bit Windows
 	OS_NAME := Windows
 	LIB_EXTENSION := dll
