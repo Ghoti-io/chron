@@ -37,6 +37,14 @@
 
 namespace {
 
+/*
+ * The oracle is glibc. The Windows C runtime is not a stand-in for it: its
+ * `tzset` reads only a US-rules subset of this grammar, its `struct tm` has
+ * no `tm_gmtoff` or `tm_zone`, and it has no `localtime_r`. The differential
+ * is compiled out there; the tests below it ask this library alone and run.
+ */
+#if !defined(_WIN32)
+
 /** Read the POSIX TZ footer out of a version-2 TZif image. */
 bool footer_of(const std::string & path, std::string * out) {
   std::ifstream in(path, std::ios::binary);
@@ -71,7 +79,7 @@ std::vector<std::string> harvest() {
   const char * const * ids = nullptr;
   size_t count = 0;
 
-  if (gchron_zonedb_system(nullptr, nullptr, &db) != GCHRON_OK) {
+  if (gchrontest::open_zonedb(&db) != GCHRON_OK) {
     return {};
   }
   const char * dir = std::getenv("TZDIR");
@@ -101,7 +109,7 @@ struct GlibcAnswer {
 };
 
 bool ask_glibc(const std::string & rule, std::time_t when, GlibcAnswer * out) {
-  ::setenv("TZ", rule.c_str(), 1);
+  gchrontest::set_env("TZ", rule.c_str());
   ::tzset();
   std::tm parts{};
   if (::localtime_r(&when, &parts) == nullptr) {
@@ -112,9 +120,11 @@ bool ask_glibc(const std::string & rule, std::time_t when, GlibcAnswer * out) {
   out->abbreviation = parts.tm_zone ? parts.tm_zone : "";
   return true;
 }
+#endif
 
 } // namespace
 
+#if !defined(_WIN32)
 TEST(PosixTz, EveryFooterInTheSystemDatabaseAgreesWithGlibc) {
   std::vector<std::string> rules = harvest();
   // Not a skip. A machine with no zoneinfo cannot run this differential at
@@ -124,7 +134,7 @@ TEST(PosixTz, EveryFooterInTheSystemDatabaseAgreesWithGlibc) {
       << "no TZif footers found; this differential checked nothing";
 
   GCHRON_ZoneDb * db = nullptr;
-  ASSERT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db));
+  ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db));
 
   // A lattice rather than a sweep: every six hours through four years either
   // side of 2026 lands on both sides of every changeover a recurring rule can
@@ -171,7 +181,7 @@ TEST(PosixTz, EveryFooterInTheSystemDatabaseAgreesWithGlibc) {
     }
     ++rules_checked;
   }
-  ::unsetenv("TZ");
+  gchrontest::unset_env("TZ");
   ::tzset();
   gchron_zonedb_destroy(db);
 
@@ -185,11 +195,12 @@ TEST(PosixTz, EveryFooterInTheSystemDatabaseAgreesWithGlibc) {
       << "be parsed, so those zones would answer wrongly past their tables";
   EXPECT_GT(rules_checked, 20u);
 }
+#endif
 
 // The grammar's edges, which no real footer exercises but a hostile one will.
 TEST(PosixTz, TheGrammarsEdgesAreAcceptedOrRefusedDeliberately) {
   GCHRON_ZoneDb * db = nullptr;
-  ASSERT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db));
+  ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db));
   const GCHRON_Zone * zone = nullptr;
 
   struct Case { const char * rule; bool valid; const char * why; };
@@ -251,7 +262,7 @@ TEST(PosixTz, TheGrammarsEdgesAreAcceptedOrRefusedDeliberately) {
  */
 TEST(PosixTz, ARuleWhoseTwoChangeoversCoincideHasNoTransitions) {
   GCHRON_ZoneDb * db = nullptr;
-  ASSERT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db));
+  ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db));
   const GCHRON_Zone * zone = nullptr;
   ASSERT_EQ(GCHRON_OK,
       gchron_zonedb_posix(db, "BST5CDT,M1.1.0/0,M1.1.0/1", &zone));
@@ -280,7 +291,7 @@ TEST(PosixTz, ARuleWhoseTwoChangeoversCoincideHasNoTransitions) {
 // and must agree with the offset lookup that sits beside them.
 TEST(PosixTz, TransitionsFoundForwardAndBackAgreeWithTheOffsetLookup) {
   GCHRON_ZoneDb * db = nullptr;
-  ASSERT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db));
+  ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db));
   const GCHRON_Zone * zone = nullptr;
   ASSERT_EQ(GCHRON_OK,
       gchron_zonedb_posix(db, "EST5EDT,M3.2.0,M11.1.0", &zone));

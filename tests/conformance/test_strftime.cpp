@@ -81,6 +81,15 @@ const Moment MOMENTS[] = {
   { 2038, 1, 19, 3, 14, 7 },
 };
 
+/*
+ * The oracle is glibc. The Windows C runtime is not a stand-in for it: its
+ * `struct tm` has neither `tm_gmtoff` nor `tm_zone`, it has no `localtime_r`,
+ * and its `strftime` spells several of the specifiers above differently or not
+ * at all - so every comparison against it would be measuring the runtime. The
+ * differentials are compiled out there, and the tests that ask this library
+ * alone still run.
+ */
+#if !defined(_WIN32)
 /** What glibc says, for a UTC civil reading. */
 bool ask_glibc(const char * pattern, const Moment & m, std::string * out) {
   std::tm parts{};
@@ -115,6 +124,7 @@ bool ask_glibc(const char * pattern, const Moment & m, std::string * out) {
   *out = std::string(buffer, length);
   return true;
 }
+#endif
 
 } // namespace
 
@@ -129,6 +139,7 @@ TEST(Strftime, TheCLocaleIsWhatThisTestAssumes) {
       << "LC_TIME is " << current << "; this differential needs the C locale";
 }
 
+#if !defined(_WIN32)
 TEST(Strftime, EverySpecifierAgreesWithGlibc) {
   size_t checked = 0;
   for (const char * pattern : SPECIFIERS) {
@@ -175,14 +186,14 @@ TEST(Strftime, EverySpecifierAgreesWithGlibc) {
 // alone does not carry - so they get their own case with a real zone.
 TEST(Strftime, TheZoneSpecifiersAgreeWithGlibcInARealZone) {
   GCHRON_ZoneDb * db = nullptr;
-  ASSERT_EQ(GCHRON_OK, gchron_zonedb_system(nullptr, nullptr, &db));
+  ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db));
   const GCHRON_Zone * zone = nullptr;
   ASSERT_EQ(GCHRON_OK, gchron_zonedb_zone(db, "America/New_York", &zone));
 
   const char * patterns[] = { "%z", "%Z", "%Y-%m-%d %H:%M:%S %z (%Z)" };
   const int64_t moments[] = { 1781539200, 1768478400, 1793514600 };
 
-  ::setenv("TZ", "America/New_York", 1);
+  gchrontest::set_env("TZ", "America/New_York");
   ::tzset();
 
   size_t checked = 0;
@@ -218,11 +229,12 @@ TEST(Strftime, TheZoneSpecifiersAgreeWithGlibcInARealZone) {
     }
     gchron_format_destroy(format);
   }
-  ::unsetenv("TZ");
+  gchrontest::unset_env("TZ");
   ::tzset();
   gchron_zonedb_destroy(db);
   EXPECT_GT(checked, 5u);
 }
+#endif
 
 /*
  * `%U` and `%W` count weeks from the first Sunday or Monday of the year, with
@@ -248,6 +260,7 @@ TEST(Strftime, TheTwoNonIsoWeekNumbersAreRefusedRatherThanApproximated) {
   gchron_format_destroy(format);
 }
 
+#if !defined(_WIN32)
 /*
  * `%s` cannot go in the table above. glibc computes it from the `struct tm`
  * through the *process* time zone and ignores `tm_gmtoff` while doing it, so
@@ -259,7 +272,7 @@ TEST(Strftime, TheTwoNonIsoWeekNumbersAreRefusedRatherThanApproximated) {
 TEST(Strftime, EpochSecondsAgreeWithGlibcWithTheZonePinned) {
   const char * previous = ::getenv("TZ");
   std::string saved = previous ? previous : "";
-  ::setenv("TZ", "UTC", 1);
+  gchrontest::set_env("TZ", "UTC");
   ::tzset();
 
   GCHRON_Format * format = nullptr;
@@ -290,10 +303,10 @@ TEST(Strftime, EpochSecondsAgreeWithGlibcWithTheZonePinned) {
   gchron_format_destroy(format);
 
   if (previous) {
-    ::setenv("TZ", saved.c_str(), 1);
+    gchrontest::set_env("TZ", saved.c_str());
   }
   else {
-    ::unsetenv("TZ");
+    gchrontest::unset_env("TZ");
   }
   ::tzset();
   EXPECT_GT(checked, 5u);
@@ -437,6 +450,7 @@ TEST(Strftime, TheYearWidthBelowOneThousandIsADeliberateDeviation) {
     gchron_format_destroy(format);
   }
 }
+#endif
 
 /*
  * What no differential can ask, because glibc has no refusals to compare
