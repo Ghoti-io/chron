@@ -55,6 +55,11 @@
 /** Defined in local.c, which owns every filesystem and environment call. */
 GCHRON_Result gchron_zonedb_walk_directory(GCHRON_ZoneDb * db,
     const char * root, GCHRON_Result (*visit)(GCHRON_ZoneDb *, const char *));
+#if defined(_WIN32)
+/** Also local.c: whether an identifier names a file spelled exactly so. */
+GCHRON_Result gchron_zonedb_check_spelling(const GCHRON_Allocator * allocator,
+    const char * root, const char * id);
+#endif
 
 /** One cached zone, keyed by the identifier the caller asked for. */
 typedef struct CacheEntry {
@@ -852,8 +857,25 @@ static GCHRON_Result load_zone(GCHRON_ZoneDb * db, const char * id,
   if (path == NULL) {
     return GCHRON_ERR_OOM;
   }
+#if defined(_WIN32)
+  /*
+   * The filesystem folds case, so `europe/paris` would open `Europe/Paris`
+   * and be cached under the wrong name. A spelling that is not on disk is a
+   * file that is not there, and goes on to the link table like one.
+   */
+  result = gchron_zonedb_check_spelling(db->allocator, db->directory, id);
+  if (result == GCHRON_OK) {
+    result = gchron_zone_read_file(path, db->limits.max_tzif_bytes,
+        db->allocator, &data, &len);
+  }
+  else if (result == GCHRON_ERR_OOM) {
+    gcu_allocator_free(db->allocator, path);
+    return result;
+  }
+#else
   result = gchron_zone_read_file(path, db->limits.max_tzif_bytes,
       db->allocator, &data, &len);
+#endif
   gcu_allocator_free(db->allocator, path);
   if (result == GCHRON_ERR_IO) {
     /*

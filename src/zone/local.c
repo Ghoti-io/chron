@@ -54,6 +54,7 @@
 #if defined(_WIN32)
 #include <ghoti.io/cutil/dir.h>
 #include <ghoti.io/cutil/file.h>
+#include <ghoti.io/cutil/safemath.h>
 /* TODO(windows): unexercised, like the branch that uses them. */
 #include <windows.h>
 #endif
@@ -547,3 +548,90 @@ GCHRON_Result gchron_zonedb_walk_directory(GCHRON_ZoneDb * db,
     const char * root, GCHRON_Result (*visit)(GCHRON_ZoneDb *, const char *)) {
   return walk(db, root, "", 0, visit);
 }
+
+#if defined(_WIN32)
+
+/**
+ * Whether @p id names a file under @p root spelled exactly so.
+ *
+ * Windows looks a name up without regard to case, and drops trailing dots
+ * from it first, so under a zoneinfo directory `europe/paris` and
+ * `Europe/Paris.` both open `Europe/Paris`. A tzdb identifier is
+ * case-sensitive - RFC 9557 section 3.1 says so of the annotation that
+ * carries one - and a zone opened under a spelling the tzdb does not have
+ * would be cached, and reported by gchron_zone_id(), under that spelling. So
+ * each component is looked for by exact comparison in a listing of the
+ * directory above it, which is the one place the filesystem reports the name
+ * as it was written.
+ *
+ * Called by zonedb.c before it opens a zone file, and only on Windows.
+ *
+ * @return GCHRON_OK when every component matched; GCHRON_ERR_IO when one did
+ *   not, which zonedb.c treats as "no such file"; GCHRON_ERR_OOM.
+ */
+GCHRON_Result gchron_zonedb_check_spelling(const GCHRON_Allocator * allocator,
+    const char * root, const char * id) {
+  size_t root_len = strlen(root);
+  size_t id_len = strlen(id);
+  size_t size;
+  char * path;
+  size_t used;
+  const char * component = id;
+  GCHRON_Result result = GCHRON_OK;
+
+  if (!gcu_safe_add_size(root_len, id_len, &size)
+      || !gcu_safe_add_size(size, 2, &size)) {
+    return GCHRON_ERR_OOM;
+  }
+  path = (char *)gcu_allocator_malloc(allocator, size);
+  if (path == NULL) {
+    return GCHRON_ERR_OOM;
+  }
+  memcpy(path, root, root_len + 1);
+  used = root_len;
+
+  while (result == GCHRON_OK && *component != '\0') {
+    const char * slash = strchr(component, '/');
+    size_t length = (slash != NULL) ? (size_t)(slash - component)
+                                    : strlen(component);
+    GCU_Dir dir;
+    bool found = false;
+
+    if (gcu_dir_open(&dir, path, allocator) != GCU_FILE_OK) {
+      gcu_dir_close(&dir);
+      result = GCHRON_ERR_IO;
+      break;
+    }
+    for (;;) {
+      const char * name = NULL;
+      bool done = false;
+      if (gcu_dir_read(&dir, &name, NULL, &done) != GCU_FILE_OK || done) {
+        break;
+      }
+      if (strlen(name) == length && memcmp(name, component, length) == 0) {
+        found = true;
+        break;
+      }
+    }
+    gcu_dir_close(&dir);
+    if (!found) {
+      result = GCHRON_ERR_IO;
+      break;
+    }
+
+    /* Descend: `path` has room for the root, every component, and one
+     * separator more than the identifier has. */
+    path[used++] = '/';
+    memcpy(path + used, component, length);
+    used += length;
+    path[used] = '\0';
+    component += length;
+    if (*component == '/') {
+      ++component;
+    }
+  }
+  gcu_allocator_free(allocator, path);
+  return result;
+}
+
+#endif /* _WIN32 */

@@ -741,6 +741,50 @@ TEST(ZoneDb, ALinkNameIsResolvedThroughTzdataZi) {
 }
 
 /*
+ * A zone identifier is case-sensitive; a filesystem need not be. On Windows
+ * `europe/paris` opened `Europe/Paris`, and so did `Europe/Paris.`, because
+ * Win32 drops a trailing dot before looking a name up - so a directory-backed
+ * database accepted spellings the tzdb does not have, and cached and reported
+ * the zone under them. RFC 9557's `AZoneTheDatabaseDoesNotHaveSaysSo` caught
+ * it, but only when `$TZDIR` pointed the suite at a directory; this asks the
+ * directory reader directly, on every platform.
+ */
+TEST(ZoneDb, AnIdentifierMatchesOnlyItsExactSpellingWhateverTheFilesystemDoes) {
+  // A minimal version-1 TZif image: one type, UTC, no transitions.
+  std::string tzif("TZif", 4);
+  tzif.append(16, '\0');  // version 1, then the reserved bytes
+  const unsigned char counts[24] = {
+    0, 0, 0, 0,  0, 0, 0, 0,  0, 0, 0, 0,  // isutcnt, isstdcnt, leapcnt
+    0, 0, 0, 0,  0, 0, 0, 1,  0, 0, 0, 4,  // timecnt, typecnt, charcnt
+  };
+  tzif.append(reinterpret_cast<const char *>(counts), sizeof(counts));
+  tzif.append(6, '\0');     // offset 0, not daylight saving, designation 0
+  tzif.append("UTC", 4);    // and its terminator
+
+  gchrontest::TempDir dir;
+  dir.write("Real", tzif);
+  dir.write("tzdata.zi", "L Real Alias\n");
+
+  GCHRON_ZoneDb * db = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_directory(dir.path().c_str(), nullptr,
+      nullptr, &db));
+  const GCHRON_Zone * zone = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_zone(db, "Real", &zone))
+      << "the fixture does not load, so the refusals below would mean nothing";
+  EXPECT_STREQ("Real", gchron_zone_id(zone));
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_zone(db, "Alias", &zone))
+      << "the fixture's link does not resolve";
+
+  for (const char * wrong : { "real", "REAL", "Real.", "alias" }) {
+    zone = nullptr;
+    EXPECT_EQ(GCHRON_ERR_UNSUPPORTED, gchron_zonedb_zone(db, wrong, &zone))
+        << wrong;
+    EXPECT_EQ(nullptr, zone) << wrong;
+  }
+  gchron_zonedb_destroy(db);
+}
+
+/*
  * `tzdata.zi` is read twice by two different functions - read_version() for
  * the `# version` line, and build_links() for the link table - and they used
  * to apply two different hardcoded caps to it, 1 MiB and 4 MiB. Nothing was
