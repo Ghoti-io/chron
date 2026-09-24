@@ -575,6 +575,13 @@ EXAMPLES := $(patsubst examples/%.c,$(APP_DIR)/examples/%$(EXE_EXTENSION),$(EXAM
 # baked in at compile time.
 CHRON_ROOT := $(CURDIR)
 TEST_DATA := $(CURDIR)/tests/data
+TEST_DEFINES := -DGCHRON_TEST_DATA=\"$(TEST_DATA)\"
+# A test that needs real TZif files to build a fixture from reads them from
+# /usr/share/zoneinfo. Windows has none, so it is told where the tree the
+# embedded table was generated from lives instead.
+ifeq ($(OS_NAME), Windows)
+TEST_DEFINES += -DGCHRON_TEST_ZONEINFO=\"$(TZDATA_DIR)\"
+endif
 
 all: $(APP_DIR)/$(TARGET) $(APP_DIR)/$(STATIC_TARGET) ## Build shared + static libraries
 
@@ -785,17 +792,17 @@ endif
 $(OBJ_DIR)/tests/%.o: tests/%.cpp $(FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests $(TEST_DEFINES) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(OBJ_DIR)/tests/%.o: tests/unit/%.cpp $(FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests $(TEST_DEFINES) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 $(OBJ_DIR)/tests/%.o: tests/conformance/%.cpp $(FLAGS_STAMP) | $(LIBVER_GEN)
 	@printf "\n### Compiling Test: $* ###\n"
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests -DGCHRON_TEST_DATA=\"$(TEST_DATA)\" -c $< -MMD -MP -MF $(@:.o=.d) -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDE) -Itests $(TEST_DEFINES) -c $< -MMD -MP -MF $(@:.o=.d) -o $@
 
 # Build rule for one test executable. $1 = source path, $2 = executable name.
 # Tests compile to .o first and link separately, so a library change relinks

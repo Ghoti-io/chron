@@ -21,7 +21,37 @@
 
 #include <ghoti.io/chron/chron.h>
 
+#ifdef _WIN32
+#include <ghoti.io/cutil/dir.h>
+#endif
+
 namespace gchrontest {
+
+/**
+ * Set an environment variable for the library under test to read.
+ *
+ * The library reads `TZ` and `TZDIR` with getenv(), so on Windows the value
+ * has to reach the C runtime's copy of the environment, which _putenv_s()
+ * updates and SetEnvironmentVariable() does not. The C runtime cannot hold a
+ * variable set to the empty string - _putenv_s() with "" removes it - so on
+ * Windows an empty value reads as unset.
+ */
+inline void set_env(const char * name, const char * value) {
+#ifdef _WIN32
+  EXPECT_EQ(0, ::_putenv_s(name, value)) << name;
+#else
+  EXPECT_EQ(0, ::setenv(name, value, 1)) << name;
+#endif
+}
+
+/** Remove an environment variable, as set_env() would see it. */
+inline void unset_env(const char * name) {
+#ifdef _WIN32
+  EXPECT_EQ(0, ::_putenv_s(name, "")) << name;
+#else
+  EXPECT_EQ(0, ::unsetenv(name)) << name;
+#endif
+}
 
 /**
  * Directory holding the checked-in vectors. The Makefile bakes in
@@ -96,12 +126,25 @@ inline GCHRON_DateTime datetime(int32_t year, int month, int day, int hour,
 class TempDir {
 public:
   TempDir() {
+#ifdef _WIN32
+    // There is no /tmp, and no mkdtemp; cutil makes the directory in the
+    // system's temporary directory instead, with the same exclusivity.
+    char * made = nullptr;
+    EXPECT_EQ(GCU_FILE_OK,
+        gcu_dir_temp_create(nullptr, "gchrontest", nullptr, &made))
+        << "could not make a temporary directory";
+    if (made != nullptr) {
+      path_ = made;
+      gcu_dir_free_path(nullptr, made);
+    }
+#else
     char pattern[] = "/tmp/gchrontestXXXXXX";
     const char * made = ::mkdtemp(pattern);
     EXPECT_NE(nullptr, made) << "could not make a temporary directory";
     if (made != nullptr) {
       path_ = made;
     }
+#endif
   }
   ~TempDir() {
     if (path_.empty()) {

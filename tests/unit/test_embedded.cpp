@@ -22,7 +22,30 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <ghoti.io/cutil/dir.h>
+#endif
+
 namespace {
+
+/**
+ * A directory-backed database to hold the embedded one up against.
+ *
+ * On Windows gchron_zonedb_system() has no directory to open unless `$TZDIR`
+ * names one, which would make every comparison here a skip on the one
+ * platform where the embedded table is what callers actually get. The build
+ * names the tree the table was generated from instead, so the two readers are
+ * still compared over the same release.
+ */
+GCHRON_Result open_directory_db(GCHRON_ZoneDb ** out) {
+#if defined(_WIN32) && defined(GCHRON_TEST_ZONEINFO)
+  if (std::getenv("TZDIR") == nullptr) {
+    return gchron_zonedb_directory(GCHRON_TEST_ZONEINFO, nullptr, nullptr,
+        out);
+  }
+#endif
+  return gchron_zonedb_system(nullptr, nullptr, out);
+}
 
 class Embedded : public ::testing::Test {
 protected:
@@ -55,7 +78,7 @@ TEST_F(Embedded, ItHoldsTheZonesAndAnswersTheSameAsTheSystemDatabase) {
   // - one walks a directory, one indexes a blob - so agreeing is evidence
   // that the embedded path is right, not a tautology.
   GCHRON_ZoneDb * system_db = nullptr;
-  if (gchron_zonedb_system(nullptr, nullptr, &system_db) != GCHRON_OK) {
+  if (open_directory_db(&system_db) != GCHRON_OK) {
     GTEST_SKIP() << "no system zone database on this machine";
   }
 
@@ -293,7 +316,7 @@ TEST(ZoneDbLinks, ADirectoryDatabaseResolvesTheTzdbsLinksToo) {
    * that Java and a great deal of existing configuration still use.
    */
   GCHRON_ZoneDb * system_db = nullptr;
-  if (gchron_zonedb_system(nullptr, nullptr, &system_db) != GCHRON_OK) {
+  if (open_directory_db(&system_db) != GCHRON_OK) {
     GTEST_SKIP() << "no system zone database on this machine";
   }
   GCHRON_ZoneDb * embedded_db = nullptr;
@@ -353,7 +376,7 @@ TEST(ZoneDbLinks, WhatTheDatabaseListsIsWhatItCanOpen) {
    * this is a real check and not a restatement.
    */
   GCHRON_ZoneDb * db = nullptr;
-  if (gchron_zonedb_system(nullptr, nullptr, &db) != GCHRON_OK) {
+  if (open_directory_db(&db) != GCHRON_OK) {
     GTEST_SKIP() << "no system zone database on this machine";
   }
   const char * const * ids = nullptr;
@@ -383,6 +406,22 @@ TEST(ZoneDbLinks, WhatTheDatabaseListsIsWhatItCanOpen) {
 class Fixture {
 public:
   bool build() {
+#ifdef _WIN32
+    // No /tmp, no mkdtemp, and no zoneinfo under /usr/share: cutil makes the
+    // directory, and the build says where the generator's tree is.
+    char * made = nullptr;
+    if (gcu_dir_temp_create(nullptr, "gchron_link", nullptr, &made)
+        != GCU_FILE_OK) {
+      return false;
+    }
+    root_ = made;
+    gcu_dir_free_path(nullptr, made);
+#ifdef GCHRON_TEST_ZONEINFO
+    std::string tzif = read_file(GCHRON_TEST_ZONEINFO "/UTC");
+#else
+    std::string tzif;
+#endif
+#else
     char pattern[] = "/tmp/gchron_link_XXXXXX";
     const char * made = mkdtemp(pattern);
     if (made == nullptr) {
@@ -391,11 +430,11 @@ public:
     root_ = made;
 
     std::string tzif = read_file("/usr/share/zoneinfo/UTC");
+#endif
     if (tzif.size() < 4 || tzif.compare(0, 4, "TZif") != 0) {
       return false;
     }
-    return mkdir((root_ + "/db").c_str(), 0700) == 0
-        && mkdir((root_ + "/outside").c_str(), 0700) == 0
+    return make_dir(root_ + "/db") && make_dir(root_ + "/outside")
         && write_file(root_ + "/db/Inside", tzif)
         && write_file(root_ + "/outside/Target", tzif);
   }
@@ -423,6 +462,13 @@ public:
   }
 
 private:
+  static bool make_dir(const std::string & path) {
+#ifdef _WIN32
+    return gcu_dir_create(path.c_str()) == GCU_FILE_OK;
+#else
+    return mkdir(path.c_str(), 0700) == 0;
+#endif
+  }
   static std::string read_file(const char * path) {
     std::ifstream in(path, std::ios::binary);
     return std::string((std::istreambuf_iterator<char>(in)),

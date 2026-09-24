@@ -40,19 +40,19 @@ protected:
   }
   void TearDown() override {
     if (had_tz_) {
-      ::setenv("TZ", saved_.c_str(), 1);
+      gchrontest::set_env("TZ", saved_.c_str());
     }
     else {
-      ::unsetenv("TZ");
+      gchrontest::unset_env("TZ");
     }
   }
 
   static void set_tz(const char * value) {
     if (value == nullptr) {
-      ::unsetenv("TZ");
+      gchrontest::unset_env("TZ");
     }
     else {
-      ::setenv("TZ", value, 1);
+      gchrontest::set_env("TZ", value);
     }
   }
 

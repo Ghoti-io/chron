@@ -584,10 +584,10 @@ protected:
   }
   void TearDown() override {
     if (had_) {
-      ::setenv("TZDIR", saved_.c_str(), 1);
+      gchrontest::set_env("TZDIR", saved_.c_str());
     }
     else {
-      ::unsetenv("TZDIR");
+      gchrontest::unset_env("TZDIR");
     }
   }
 
@@ -605,7 +605,7 @@ TEST_F(LeapFile, ATzdirWithNoLeapSecondsListFallsThroughToTheSystemCopy) {
     GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
   }
   GCHRON_LeapTable * from_system = nullptr;
-  ::unsetenv("TZDIR");
+  gchrontest::unset_env("TZDIR");
   ASSERT_EQ(GCHRON_OK,
       gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr))
       << "no $TZDIR at all did not reach the system copy";
@@ -613,7 +613,7 @@ TEST_F(LeapFile, ATzdirWithNoLeapSecondsListFallsThroughToTheSystemCopy) {
   gchron_leap_table_destroy(from_system);
 
   // An empty $TZDIR is not a value, and is the same as not setting it.
-  ::setenv("TZDIR", "", 1);
+  gchrontest::set_env("TZDIR", "");
   GCHRON_LeapTable * from_empty = nullptr;
   ASSERT_EQ(GCHRON_OK,
       gchron_leap_table_file(nullptr, nullptr, &from_empty, nullptr));
@@ -622,7 +622,7 @@ TEST_F(LeapFile, ATzdirWithNoLeapSecondsListFallsThroughToTheSystemCopy) {
 
   // A directory that exists and holds no leap-seconds.list: the shape a
   // fetched tzdb or a container has.
-  ::setenv("TZDIR", GCHRON_TEST_DATA, 1);
+  gchrontest::set_env("TZDIR", GCHRON_TEST_DATA);
   GCHRON_LeapTable * table = nullptr;
   GCHRON_Error err{};
   ASSERT_EQ(GCHRON_OK,
@@ -636,7 +636,7 @@ TEST_F(LeapFile, ATzdirWithNoLeapSecondsListFallsThroughToTheSystemCopy) {
   // and each has to fall through rather than become "no table".
   for (const char * dir : { GCHRON_TEST_DATA "/vectors/leap/leapseconds.vec",
       GCHRON_TEST_DATA "/no-such-directory" }) {
-    ::setenv("TZDIR", dir, 1);
+    gchrontest::set_env("TZDIR", dir);
     GCHRON_LeapTable * one = nullptr;
     ASSERT_EQ(GCHRON_OK, gchron_leap_table_file(nullptr, nullptr, &one,
         nullptr)) << dir;
@@ -653,7 +653,7 @@ TEST_F(LeapFile, ATzdirWithNoLeapSecondsListFallsThroughToTheSystemCopy) {
 TEST_F(LeapFile, ATzdirCopyThatIsThereIsTheAnswerEvenWhenItIsWrong) {
   gchrontest::TempDir dir;
   dir.write("leap-seconds.list", "not a leap second list at all\n");
-  ::setenv("TZDIR", dir.path().c_str(), 1);
+  gchrontest::set_env("TZDIR", dir.path().c_str());
 
   GCHRON_LeapTable * table = nullptr;
   GCHRON_Error err{};
@@ -677,7 +677,7 @@ TEST_F(LeapFile, ATzdirCopyTooLargeToReadIsAnAnswerRatherThanAFallback) {
   gchrontest::TempDir dir;
   // One byte past the megabyte the loader will hold.
   dir.write("leap-seconds.list", std::string(1024 * 1024 + 1, '#'));
-  ::setenv("TZDIR", dir.path().c_str(), 1);
+  gchrontest::set_env("TZDIR", dir.path().c_str());
 
   GCHRON_LeapTable * table = nullptr;
   GCHRON_Error err{};
@@ -709,7 +709,7 @@ TEST_F(LeapFile, ATzdirTooLongForTheFilesystemIsAMissLikeAnyOther) {
     GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
   }
   GCHRON_LeapTable * from_system = nullptr;
-  ::unsetenv("TZDIR");
+  gchrontest::unset_env("TZDIR");
   ASSERT_EQ(GCHRON_OK,
       gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr));
   const size_t expected = gchron_leap_table_count(from_system);
@@ -717,7 +717,7 @@ TEST_F(LeapFile, ATzdirTooLongForTheFilesystemIsAMissLikeAnyOther) {
 
   std::string dir(5000, 'a');
   dir[0] = '/';
-  ::setenv("TZDIR", dir.c_str(), 1);
+  gchrontest::set_env("TZDIR", dir.c_str());
 
   GCHRON_LeapTable * table = nullptr;
   ASSERT_EQ(GCHRON_OK,
@@ -779,7 +779,7 @@ TEST_F(LeapFile, RunningOutOfMemoryStopsTheSearchRatherThanMovingOn) {
     }
   } refuse_first;
 
-  ::setenv("TZDIR", "/usr/share/zoneinfo", 1);
+  gchrontest::set_env("TZDIR", "/usr/share/zoneinfo");
   GCHRON_LeapTable * table = nullptr;
   EXPECT_EQ(GCHRON_ERR_OOM,
       gchron_leap_table_file(nullptr, &refuse_first.allocator, &table,
@@ -805,15 +805,20 @@ TEST_F(LeapFile, RunningOutOfMemoryStopsTheSearchRatherThanMovingOn) {
  * today, so that moving it has to be deliberate.
  */
 TEST_F(LeapFile, ATzdirCopyThatCannotBeOpenedFallsThroughAsAMissingOneDoes) {
+#ifdef _WIN32
+  GTEST_SKIP() << "no mode bit makes a file unreadable on Windows, so this "
+                  "machine cannot pose the question";
+#else
   if (::geteuid() == 0) {
     GTEST_SKIP() << "root can read a mode-000 file, so this machine cannot "
                     "pose the question";
   }
+#endif
   if (::access("/usr/share/zoneinfo/leap-seconds.list", R_OK) != 0) {
     GTEST_SKIP() << "this machine has no leap-seconds.list to fall back to";
   }
   GCHRON_LeapTable * from_system = nullptr;
-  ::unsetenv("TZDIR");
+  gchrontest::unset_env("TZDIR");
   ASSERT_EQ(GCHRON_OK,
       gchron_leap_table_file(nullptr, nullptr, &from_system, nullptr));
   const size_t expected = gchron_leap_table_count(from_system);
@@ -821,7 +826,7 @@ TEST_F(LeapFile, ATzdirCopyThatCannotBeOpenedFallsThroughAsAMissingOneDoes) {
 
   gchrontest::TempDir dir;
   dir.write("leap-seconds.list", "#$\t3960100800\n", 0);
-  ::setenv("TZDIR", dir.path().c_str(), 1);
+  gchrontest::set_env("TZDIR", dir.path().c_str());
 
   GCHRON_LeapTable * table = nullptr;
   ASSERT_EQ(GCHRON_OK, gchron_leap_table_file(nullptr, nullptr, &table,
