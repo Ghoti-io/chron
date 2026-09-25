@@ -1743,15 +1743,8 @@ check-oracle-ldml-parse: $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION)
 #
 check-oracle-temporal: ## Check the RFC 9557 reader against V8's Temporal (needs node)
 check-oracle-temporal: $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)
-	@if ! command -v node >/dev/null 2>&1; then \
-		printf "\033[0;31mcheck-oracle-temporal: node is not installed.\033[0m\n" >&2; \
-		printf "Temporal is the oracle for this grammar; without it the check\n" >&2; \
-		printf "is absent rather than weaker, and saying so beats a green run.\n" >&2; \
-		exit 1; \
-	fi
-	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" node --harmony-temporal \
-		tools/oracle/temporal_diff.js \
-		--driver $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)
+	$(call run-oracle,node,python3 tools/oracle/temporal_run.py \
+		--driver $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION))
 
 #
 # The four differentials in one target. They are not part of `make test` -
@@ -1773,7 +1766,8 @@ check-oracle-temporal: $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)
 #
 GHOTI_CONTAINER_ENGINE ?= docker
 ORACLE_ENV = LD_LIBRARY_PATH="$(TEST_LD_PATH)" \
-	GHOTI_CONTAINER_ENGINE="$(GHOTI_CONTAINER_ENGINE)"
+	GHOTI_CONTAINER_ENGINE="$(GHOTI_CONTAINER_ENGINE)" \
+	GHOTI_ORACLE_REQUIRED="$(if $(REQUIRE_ORACLES),1,0)"
 
 define run-oracle
 	@$(ORACLE_ENV) python3 tools/oracle/oracle_run.py $(1) -- $(2)
@@ -1902,7 +1896,7 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
 test-full: ## Run the suite with every gate and every differential required
 test-full:
 	@$(MAKE) --no-print-directory test REQUIRE_ORACLES=1
-	@$(MAKE) --no-print-directory check-oracles
+	@$(MAKE) --no-print-directory check-oracles REQUIRE_ORACLES=1
 
 test-quiet: ## Run tests with minimal output (one line per test suite)
 test-quiet: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES)

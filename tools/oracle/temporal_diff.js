@@ -24,27 +24,15 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
-import { spawnSync } from "node:child_process";
 import process from "node:process";
 
 if (typeof Temporal === "undefined") {
   console.error(
     "temporal_diff: this node has no Temporal. Run it as\n" +
-    "  node --harmony-temporal tools/oracle/temporal_diff.js --driver <path>\n" +
+    "  node --harmony-temporal tools/oracle/temporal_diff.js\n" +
     "The oracle is the authority here; without it the check is absent rather\n" +
     "than weaker, and saying so beats a green run.");
   process.exit(1);
-}
-
-let driver = null;
-for (let i = 2; i < process.argv.length; ++i) {
-  if (process.argv[i] === "--driver" && i + 1 < process.argv.length) {
-    driver = process.argv[++i];
-  }
-}
-if (driver === null) {
-  console.error("usage: temporal_diff.js --driver <path to gchron_iso>");
-  process.exit(2);
 }
 
 /*
@@ -189,13 +177,36 @@ function ask_temporal(text) {
 const strings = corpus();
 const input = strings.map((s) => Buffer.from(s, "utf8").toString("hex"))
     .join("\n") + "\n";
-const run = spawnSync(driver, [], { input, maxBuffer: 1 << 28 });
-if (run.status !== 0) {
-  console.error(`temporal_diff: the driver exited ${run.status}`);
-  if (run.stderr) process.stderr.write(run.stderr);
+
+/*
+ * Two phases, because this file now runs inside the reference's own image and
+ * the driver it used to spawn is *this library*, which does not live in there
+ * and should not: an oracle image that contains the implementation it answers
+ * for can no longer be trusted to be ignorant of it.
+ *
+ * So `--emit-corpus` prints the corpus and stops, the host runs the driver
+ * over it, and a second invocation reads the driver's verdicts on stdin. The
+ * corpus is generated from fixed tables with no randomness and no clock, so
+ * the two invocations build the identical list - which is what lets the
+ * verdicts be matched to it by position. tools/oracle/temporal_run.py is the
+ * host side and does all three steps.
+ */
+if (process.argv.includes("--emit-corpus")) {
+  await new Promise((done) => process.stdout.write(input, done));
+  process.exit(0);
+}
+
+let received = "";
+process.stdin.setEncoding("utf8");
+for await (const chunk of process.stdin) {
+  received += chunk;
+}
+const verdicts = received.split("\n");
+if (verdicts.length < strings.length) {
+  console.error(`temporal_diff: ${verdicts.length} verdicts for ` +
+      `${strings.length} strings; the driver and this corpus disagree`);
   process.exit(1);
 }
-const verdicts = run.stdout.toString().split("\n");
 
 let compared = 0;
 let agreed = 0;
