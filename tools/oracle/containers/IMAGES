@@ -36,7 +36,13 @@
 # gap as a disagreement. Mounting makes the comparison independent of the
 # image's data altogether, which is also why raising this pin can never change
 # what is being compared.
-python	docker.io/library/python:3.13-slim@sha256:37134a49d21d2120e4c4d73bb76f8a4ab9aef31f096f7ec2ead48c2feead4332	Python 3.13	Zone offsets, DST flags and abbreviations, over every zone the system database holds
+#
+# **3.14, raised from 3.13 on 2026-09-25, and that claim held.** Both gates
+# printed byte-identical output either side of the raise apart from the version
+# line - 105,730 agreed on the system database, and 105,730 plus 24,634 on the
+# embedded table. A prediction the design makes and nobody had run is worth
+# one command; this pin is also now the one `unicode` carries.
+python	docker.io/library/python:3.14-slim@sha256:7bf6c3111fe094f8ee1a1cbcdc63c4cfb345b0e3df42d5aa9a90b3b4b022ab6d	Python 3.14	Zone offsets, DST flags and abbreviations, over every zone the system database holds
 
 # V8's Temporal, for RFC 9557. Temporal's string format *is* RFC 9557 - the
 # `[America/New_York]` suffix was standardised for it - so this is the grammar's
