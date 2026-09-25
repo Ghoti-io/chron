@@ -912,13 +912,42 @@ overwrote the first, and the impossible value disappeared into a plausible
 wrong time. A field never records a value it cannot hold.
 
 **Some letters do not invert, and say so.** `z` is the zone abbreviation, and
-`EST` is three different zones in two hemispheres; `v` and `O` are worse.
-Reading them requires a locale database and a policy for choosing between the
-candidates, which is ICU's job and §14's non-goal. They return
-`GCHRON_ERR_UNSUPPORTED` at *compile* time when a format is compiled for
-parsing, so the refusal arrives with a pattern offset rather than on the
-first line of a log file. `VV` - the zone identifier - inverts exactly and is
-supported.
+`EST` is three different zones in two hemispheres; `v` is worse. Reading them
+requires a locale database and a policy for choosing between the candidates,
+which is ICU's job and §14's non-goal. They return `GCHRON_ERR_UNSUPPORTED` at
+*compile* time when a format is compiled for parsing, so the refusal arrives
+with a pattern offset rather than on the first line of a log file. `VV` - the
+zone identifier - inverts exactly and is supported.
+
+**`O` used to be in that sentence, and it was wrong.** TR35 calls the localised
+GMT format a localised *name*, which is why it sat with `z` and `v` - but in the
+root locale it is the literal `GMT` and a numeric offset, and root is the only
+locale the **writer** has: `GCHRON_Names` has hooks for months, weekdays, eras,
+day periods and the week rules, and none for `gmtFormat` or `gmtZeroFormat`, so
+the emitter writes `GMT` and ASCII digits whatever provider it is handed. So the
+refusal was not a symmetry between a general reader and a general writer; it was
+this library emitting `GMT+0`, `GMT-4` and `GMT+00:09:21` and declining to read
+any of them.
+
+What made that visible was nothing in the repository. `take_offset()` had carried
+a complete, documented reader for all three shapes since phase 3, reachable from
+no call site, because the scan's offset arm listed three item kinds and computed
+three styles where the emitter has four. `gchron_format_is_invertible()` refused
+the letter; the differential that reads ICU's own bytes had no pattern carrying
+it, so the one gate that could have asked was excused; and the round trip nobody
+ran was the only thing that would have noticed. It turned up by hand while
+triaging an unrelated pin raise.
+
+`O`, `OOOO` and `ZZZZ` now invert. `ZZZZ` is in that list because TR35 makes it
+the long localised GMT format rather than the RFC 822 offset its three shorter
+spellings are - and for one commit it was the opposite error, accepted by
+`gchron_format_is_invertible()` and refused by the scan, a promise that held only
+because `ZZZZ` happened to write a readable `-0000` for an offset marked unknown.
+Two places encoded "what can be read" and disagreed in both directions at once.
+`make check-oracle-ldml-parse` now asks ICU about all three, 684 readings where
+it asked about 576, and `Format.EveryPatternThatSaysItInvertsIsOneTheScanner-
+WillTry` sweeps every letter and count the compiler accepts rather than a list,
+because a list is what both of those errors hid behind.
 
 **A two-digit year needs to know what year it is**, and takes a
 `GCHRON_Clock` to find out, exactly as §8.1's RFC 850 parser does. Without
@@ -1166,7 +1195,7 @@ below is produced by software this library did not write.
 | RFC 3339, `date`, `time`, `duration` text | JSON-Schema-Test-Suite `tests/draft2020-12/optional/format/{date-time,date,time,duration}.json` | `tools/oracle/jsonschema_format.py` → `tests/data/vectors/parse/`, read by `tests/conformance/test_jsonschema_format.cpp` | fetched by `tools/corpus/fetch.sh` |
 | ISO 8601 and RFC 9557 strings | **V8's Temporal**, which is what test262 exercises and whose string format *is* RFC 9557 - the `[America/New_York]` suffix was standardised for it - so asking V8 is the same authority without a corpus to fetch. `ZonedDateTime.from(s, {offset: "reject", disambiguation: "reject"})` against this library's strict defaults, over a lattice of civil times, fractions, offsets, zones and annotation forms | `tools/oracle/gchron_iso.c` + `temporal_diff.js`, `make check-oracle-temporal`. Two classes are **not compared because V8 is the one that is wrong** - it rejects the critical `!`, and rejects an unknown non-critical annotation that RFC 9557 §3.3 leaves it free to ignore - and the differ counts them so that a newer V8 dropping them to zero would be visible. Raising the pin from Node 22 to 24 did not: V8 13.6 rejects both exactly as 12.4 did. A third class is this library's own decision: §3.3 lets a reader with nothing to reconcile take the first of a duplicated key, which it does, while V8 rejects the string | node 24, Temporal behind `--harmony-temporal`; node 25 is unusable - V8 14.1 accepts the flag and leaves `Temporal` undefined |
 | LDML pattern semantics | **ICU** `icu::SimpleDateFormat` in the root locale, through a small C++ driver built only when `pkg-config icu-i18n` succeeds. ICU is the definition of what a pattern means and is never linked by the library | `tools/oracle/icu_format.cpp` + `gchron_format.c` + `ldml_diff.py`, `make check-oracle-ldml` | ICU 78.3 (CLDR 48), built from source in a pinned image. Zero divergences in the offset letters: CLDR 48 spells a zero offset `GMT+0`/`GMT+00:00` in the localized GMT format where 76.1 wrote CLDR's `gmtZeroFormat`, and **this library followed it** - the raise found the change and section 8.3's rule decided it. `z`, `zz` and `zzz` report 36 cases rather than 33 for the same reason, Europe/Dublin in winter now reaching a divergence it was agreeing with |
-| LDML patterns read backwards (§8.7) | **ICU** again, but as the *writer*: ICU formats an instant, then both sides are handed ICU's own bytes to read | `tools/oracle/ldml_parse_diff.py` + `gchron_scan.c` + `icu_format.cpp`, `make check-oracle-ldml-parse` | ICU 78.3, the same image. Unchanged by that raise, and it would be: no pattern in its corpus carries `O`, `OOOO` or `ZZZZ`, because §8.7 refuses to read them at all - so the format gate is the only one that has ever had anything to say about the localized GMT format |
+| LDML patterns read backwards (§8.7) | **ICU** again, but as the *writer*: ICU formats an instant, then both sides are handed ICU's own bytes to read | `tools/oracle/ldml_parse_diff.py` + `gchron_scan.c` + `icu_format.cpp`, `make check-oracle-ldml-parse` | ICU 78.3, the same image. 684 of 684, up from 576: `O`, `OOOO` and `ZZZZ` were absent from its corpus while §8.7 refused to read them, and they now read - so ICU's own three shapes for the localized GMT format (`GMT-4`, `GMT+5:45`, `GMT+00:09:21`) are checked rather than excused |
 | `strftime` | the C library's own `strftime` in the C locale: every specifier at twelve chosen moments, then every day of eighty years - about 1.3 million comparisons. The one class they disagree on is asserted as a deviation rather than skipped (§8.8) | `tests/conformance/test_strftime.cpp` - in process, because the oracle is a libc function | yes, in `make test` |
 | YAML 1.1 `!!timestamp` | **PyYAML**, the reference implementation of the YAML version that has a timestamp type at all, and the parser most existing 1.1 documents were written against | `tools/oracle/yaml_timestamp.py` + `gchron_yaml.c` → `tests/data/vectors/parse/yaml_timestamp.vec`, read by `tests/conformance/test_yaml_timestamp.cpp` | yes |
 | HTTP-date, RFC 5322 | the RFCs' own examples | `tests/unit/test_httpdate.cpp`, which carries them inline; **no committed vectors and no outside driver**, so this row is weaker than every other one here | the examples, yes; an oracle, no |

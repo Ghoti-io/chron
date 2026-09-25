@@ -315,7 +315,14 @@ TEST(FormatParse, AZoneAbbreviationCannotBeReadBack) {
   // `EST` is US Eastern, Australian Eastern and several others; choosing
   // between them needs CLDR, which section 14 declines to ship. The refusal
   // arrives when the pattern is checked, not on the first line of a log.
-  for (const char * pattern : { "z", "zzzz", "O", "OOOO", "HH:mm z" }) {
+  //
+  // `O` and `OOOO` used to be in this list and are not any more. They are the
+  // localised GMT format, which in the root locale is the literal `GMT` and a
+  // numeric offset - and root is the only locale the *writer* has, because
+  // GCHRON_Names carries no hook for `gmtFormat` or `gmtZeroFormat`. So they
+  // read back; what could not read back was an abbreviation, which is a
+  // different claim that had been filed under the same rule.
+  for (const char * pattern : { "z", "zzzz", "HH:mm z" }) {
     GCHRON_Format * format = compiled(pattern);
     ASSERT_NE(nullptr, format) << pattern;
 
@@ -327,7 +334,7 @@ TEST(FormatParse, AZoneAbbreviationCannotBeReadBack) {
     // reported the item index until `fuzz_scan` noticed the number was not
     // an offset into anything.
     EXPECT_LT(err.offset, strlen(pattern)) << pattern;
-    EXPECT_EQ(std::string(pattern).find_first_of("zO"), err.offset) << pattern;
+    EXPECT_EQ(std::string(pattern).find_first_of("z"), err.offset) << pattern;
 
     GCHRON_ParsedFields fields{};
     EXPECT_EQ(GCHRON_ERR_UNSUPPORTED,

@@ -254,15 +254,16 @@ TEST(Format, EveryOffsetLetterSpellsAnUnknownOffsetInItsOwnShape) {
     { "Z", "+0000", "-0000" },
     { "ZZ", "+0000", "-0000" },
     { "ZZZ", "+0000", "-0000" },
-    { "ZZZZ", "GMT+00:00", "GMT" },
+    { "ZZZZ", "GMT+00:00", "GMT-00:00" },
     { "ZZZZZ", "Z", "-00:00" },
-    // Localised GMT. `GMT+0` states the offset is zero, which is the one
-    // thing an unknown offset declines to state, so the unknown case keeps a
-    // bare `GMT`. It is not CLDR's `gmtUnknownFormat`, which answers a
-    // different question - a zone whose offset the formatter could not work
-    // out, rather than a sender who withheld one.
-    { "O", "GMT+0", "GMT" },
-    { "OOOO", "GMT+00:00", "GMT" },
+    // Localised GMT, and no exception to the rule. A bare `GMT` is what CLDR's
+    // `gmtZeroFormat` means and what every ICU up to 76.1 wrote for a *known*
+    // zero, so writing it for an unknown offset would collide with text this
+    // library has to be able to read from other writers. `GMT-0` carries the
+    // same convention `-00:00` carries for the ISO letters, and unlike a bare
+    // `GMT` it round-trips.
+    { "O", "GMT+0", "GMT-0" },
+    { "OOOO", "GMT+00:00", "GMT-00:00" },
   };
 
   GCHRON_DateTime civil = gchrontest::datetime(2026, 9, 20, 15, 30, 0);
@@ -286,12 +287,20 @@ TEST(Format, EveryOffsetLetterSpellsAnUnknownOffsetInItsOwnShape) {
  * Not a round trip of the value - a bare offset pattern names no date - but of
  * the *flag*, which is the thing a hard-coded `-00:00` was there to protect
  * and the thing nothing checked.
+ *
+ * This is also the test that makes the negative-zero rule exceptionless. While
+ * `O`, `OOOO` and `ZZZZ` wrote a bare `GMT` for an unknown offset they could
+ * not appear here, because a bare `GMT` is a known zero on the way back in.
  */
 TEST(Format, AnUnknownOffsetReadsBackAsUnknownInEveryShapeThatCanBeRead) {
+  // All seventeen. The localised GMT letters joined when their reader stopped
+  // being unreachable; before that they were the only offset spellings this
+  // library could write and not read.
   static const char * const readable[] = {
     "X", "XX", "XXX", "XXXX", "XXXXX",
     "x", "xx", "xxx", "xxxx", "xxxxx",
-    "Z", "ZZ", "ZZZ", "ZZZZZ",
+    "Z", "ZZ", "ZZZ", "ZZZZ", "ZZZZZ",
+    "O", "OOOO",
   };
   GCHRON_DateTime civil = gchrontest::datetime(2026, 9, 20, 15, 30, 0);
   GCHRON_OffsetDateTime unknown{};
@@ -315,33 +324,38 @@ TEST(Format, AnUnknownOffsetReadsBackAsUnknownInEveryShapeThatCanBeRead) {
 
 /*
  * `gchron_format_is_invertible()` has to refuse exactly what the scanner
- * refuses, and for `ZZZZ` it did not.
+ * refuses, and it is now the *only* thing standing between a caller and the
+ * scanner's own answer - so this asserts both, for each pattern, and that they
+ * agree.
  *
- * `ZZZZ` is the long localised GMT format - TR35 makes it the same format as
- * `OOOO` - so it is not readable for the same reason `OOOO` is not. This
- * function accepted it anyway, promising a round trip `gchron_format_parse()`
- * has never delivered. It went unnoticed because the promise held for exactly
- * one value of one flag: `ZZZZ` used to write `-0000` when the offset was
- * marked unknown, which parses. Spelling the unknown offset the way the letter
- * spells every other offset is what left the claim with nothing to hide behind.
+ * Both halves were wrong at once and in opposite directions. It accepted `ZZZZ`
+ * while `gchron_format_parse()` refused it, a promise of a round trip the
+ * scanner could not deliver - hidden because `ZZZZ` wrote a readable `-0000`
+ * for exactly one value of one flag. And it refused `O` and `OOOO` while
+ * take_offset() had a complete, documented reader for them that no call site
+ * reached.
  */
-TEST(Format, IsInvertibleRefusesExactlyWhatTheScannerCannotRead) {
-  struct Row { const char * pattern; bool invertible; };
+TEST(Format, IsInvertibleAgreesWithWhatTheScannerActuallyDoes) {
+  struct Row { const char * pattern; const char * text; bool invertible; };
   static const Row rows[] = {
-    { "X", true }, { "XXXXX", true },
-    { "x", true }, { "xxxxx", true },
-    { "Z", true }, { "ZZ", true }, { "ZZZ", true }, { "ZZZZZ", true },
-    // The localised GMT format, by either spelling.
-    { "ZZZZ", false }, { "O", false }, { "OOOO", false },
-    // An abbreviation is not a bijection: `EST` is several zones.
-    { "z", false }, { "zzzz", false },
-    // And a compound pattern inherits the refusal from the one letter in it.
-    { "uuuu-MM-dd'T'HH:mm:ss ZZZZ", false },
-    { "uuuu-MM-dd'T'HH:mm:ssXXX", true },
+    { "X", "Z", true }, { "XXXXX", "-08:00", true },
+    { "x", "+00", true }, { "xxxxx", "-08:00", true },
+    { "Z", "+0000", true }, { "ZZ", "+0000", true }, { "ZZZ", "+0000", true },
+    { "ZZZZZ", "Z", true },
+    // The localised GMT format, by either spelling. Readable in root, which is
+    // the only locale the writer has: GCHRON_Names carries no hook for
+    // `gmtFormat` or `gmtZeroFormat`, so emit.c writes the literal `GMT`
+    // whatever provider it is given.
+    { "ZZZZ", "GMT-08:00", true },
+    { "O", "GMT-8", true },
+    { "OOOO", "GMT-08:00", true },
+    // An abbreviation is not a bijection: `EST` is several zones, and choosing
+    // between them needs CLDR data section 14 declines to ship.
+    { "z", "EST", false }, { "zzzz", "Eastern Standard Time", false },
+    // A compound pattern inherits the refusal from the one letter in it.
+    { "uuuu-MM-dd'T'HH:mm:ss zzzz", "2026-09-20T15:30:00 X", false },
+    { "uuuu-MM-dd'T'HH:mm:ssXXX", "2026-09-20T15:30:00Z", true },
   };
-  GCHRON_DateTime civil = gchrontest::datetime(2026, 9, 20, 15, 30, 0);
-  GCHRON_OffsetDateTime known{};
-  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, false, &known));
 
   for (const Row & row : rows) {
     GCHRON_Format * format = nullptr;
@@ -351,6 +365,78 @@ TEST(Format, IsInvertibleRefusesExactlyWhatTheScannerCannotRead) {
     GCHRON_Result said = gchron_format_is_invertible(format, nullptr);
     EXPECT_EQ(row.invertible ? GCHRON_OK : GCHRON_ERR_UNSUPPORTED, said)
         << row.pattern;
+
+    /*
+     * And the scanner agrees. A pattern it can read must not answer
+     * GCHRON_ERR_UNSUPPORTED on text of the right shape, and a pattern it
+     * cannot read must answer exactly that - not GCHRON_ERR_FORMAT, which
+     * would mean "this text does not match" rather than "this letter never
+     * can".
+     */
+    GCHRON_ParsedFields fields{};
+    GCHRON_Result read = gchron_format_parse(format, row.text,
+        std::strlen(row.text), nullptr, &fields, nullptr);
+    if (row.invertible) {
+      EXPECT_EQ(GCHRON_OK, read) << row.pattern << " on " << row.text;
+    }
+    else {
+      EXPECT_EQ(GCHRON_ERR_UNSUPPORTED, read) << row.pattern;
+    }
+    gchron_format_destroy(format);
+  }
+}
+
+/*
+ * The localised GMT reader accepts what other writers produce, not only what
+ * this one does.
+ *
+ * A bare `GMT` is CLDR's `gmtZeroFormat` and is what every ICU up to 76.1 wrote
+ * for a known zero offset, so it has to read as a known zero - which is also
+ * the reason the unknown case cannot be spelled that way.
+ */
+TEST(Format, TheLocalisedGmtReaderTakesEverySpellingOfTheFormat) {
+  struct Row {
+    const char * pattern;
+    const char * text;
+    int32_t offset_sec;
+    bool unknown;
+    bool accepted;
+  };
+  static const Row rows[] = {
+    { "O", "GMT", 0, false, true },
+    { "OOOO", "GMT", 0, false, true },
+    { "ZZZZ", "GMT", 0, false, true },
+    { "O", "GMT+0", 0, false, true },
+    { "OOOO", "GMT+00:00", 0, false, true },
+    { "O", "GMT-0", 0, true, true },
+    { "OOOO", "GMT-00:00", 0, true, true },
+    { "O", "GMT-8", -8 * 3600, false, true },
+    { "OOOO", "GMT-08:00", -8 * 3600, false, true },
+    // The short form keeps minutes when they are not zero.
+    { "O", "GMT+5:45", 5 * 3600 + 45 * 60, false, true },
+    // And the seconds the tzdb records for local mean time.
+    { "OOOO", "GMT+00:19:32", 19 * 60 + 32, false, true },
+    // Refused: out of range, and a `gmtFormat` this locale does not have.
+    { "O", "GMT+24", 0, false, false },
+    { "O", "UTC+0", 0, false, false },
+  };
+
+  for (const Row & row : rows) {
+    GCHRON_Format * format = nullptr;
+    ASSERT_EQ(GCHRON_OK,
+        gchron_format_compile(row.pattern, std::strlen(row.pattern),
+            GCHRON_FORMAT_LDML, nullptr, nullptr, &format, nullptr));
+    GCHRON_ParsedFields fields{};
+    GCHRON_Result read = gchron_format_parse(format, row.text,
+        std::strlen(row.text), nullptr, &fields, nullptr);
+    if (!row.accepted) {
+      EXPECT_NE(GCHRON_OK, read) << row.pattern << " on " << row.text;
+    }
+    else {
+      ASSERT_EQ(GCHRON_OK, read) << row.pattern << " on " << row.text;
+      EXPECT_EQ(row.offset_sec, fields.offset_sec) << row.text;
+      EXPECT_EQ(row.unknown, fields.offset_unknown) << row.text;
+    }
     gchron_format_destroy(format);
   }
 }
@@ -396,18 +482,8 @@ TEST(Format, AZeroOffsetWritesAnExplicitZeroInTheLocalisedGmtFormat) {
       &mean));
   EXPECT_EQ("GMT+00:19:32", with_pattern("OOOO", mean));
 
-  /*
-   * An unknown offset keeps writing a bare `GMT`, which is the one case the
-   * change must not reach: since CLDR 48 `GMT+0` asserts an offset of exactly
-   * zero, and that is precisely what RFC 3339 section 4.3's unknown offset
-   * declines to say. No oracle covers this - the differential formats zoned
-   * instants and a zoned instant always has an offset - so this assertion is
-   * the only thing holding it.
-   */
-  GCHRON_OffsetDateTime unknown{};
-  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, true, &unknown));
-  EXPECT_EQ("GMT", with_pattern("O", unknown));
-  EXPECT_EQ("GMT", with_pattern("OOOO", unknown));
+  // The unknown offset is EveryOffsetLetterSpellsAnUnknownOffsetInItsOwnShape's
+  // to assert, for all seventeen spellings rather than these two.
 }
 
 TEST(Format, ALetterThatNeedsAZoneWithoutOneIsRefused) {
@@ -826,6 +902,118 @@ TEST(Format, TheNamesProviderIsWhereNamesComeFrom) {
  * year write the sign outside the zero padding, so a count past nine digits
  * needed one byte more than it had been promised.
  */
+/*
+ * Whatever this library writes, it reads - or says up front that it cannot.
+ *
+ * `gchron_format_is_invertible()` exists so that a caller can ask once, when a
+ * pattern arrives from a template, instead of on the first line of a log. That
+ * makes it a promise about `gchron_format_parse()`, and a promise nothing
+ * checked: both halves were wrong at once, in opposite directions, and for a
+ * long time.
+ *
+ *   - It accepted `ZZZZ` while the scan refused it, because `ZZZZ` is the long
+ *     localised GMT format and not the RFC 822 offset its shorter spellings
+ *     are. Hidden by a second defect: `ZZZZ` wrote a readable `-0000` for an
+ *     unknown offset, so the promise held for one value of one flag.
+ *   - It refused `O` and `OOOO` while take_offset() carried a complete,
+ *     documented reader for `GMT`, `GMT+8` and `GMT+08:00` that no call site
+ *     reached - twenty lines that could not run, under a refusal whose stated
+ *     reason (a locale that localises the word) describes a library this is
+ *     not, since GCHRON_Names has no hook for `gmtFormat`.
+ *
+ * So this sweeps the same generated population TheDeclaredBoundReallyBounds-
+ * EveryPattern does - every letter, every count that compiles - rather than a
+ * list, because a list is what both of those hid behind. The value is zoned so
+ * that every letter has what it needs.
+ *
+ * A pattern that inverts has to read **its own output**, and the only exemption
+ * is named rather than a class: `GCHRON_ERR_INVALID` with
+ * ::GCHRON_DIAG_PATTERN_NEEDS_CLOCK, which is `yy` and `YY` declining to guess
+ * a century because this library never calls the system clock on its own
+ * (mistake M18).
+ *
+ * The first draft of this only forbade GCHRON_ERR_UNSUPPORTED, and that was too
+ * weak by exactly the margin that matters: breaking the dispatch so that the
+ * localised GMT letters were read with the wrong style made them fail with
+ * GCHRON_ERR_FORMAT, which the loose version accepted. A reader that is present
+ * and wrong is the case this test exists for, so "did not refuse the letter" is
+ * not enough - it has to succeed.
+ *
+ * **Only one direction can break, and this says which.**
+ * `gchron_format_parse()` calls `gchron_format_is_invertible()` first, so a
+ * pattern this function refuses can never parse: that half of the loop below is
+ * held by construction and cannot fail, and is asserted for its diagnostic
+ * rather than as a control. The half with teeth is the other one, and it is
+ * where the `ZZZZ` defect lived - the gate said yes and then the *dispatch*
+ * refused, because "what can be read" was written down in two places. Reviving
+ * the localised GMT reader collapsed them into one.
+ */
+TEST(Format, EveryPatternThatSaysItInvertsIsOneTheScannerWillTry) {
+  GCHRON_ZoneDb * db = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchrontest::open_zonedb(&db));
+  const GCHRON_Zone * zone = nullptr;
+  ASSERT_EQ(GCHRON_OK, gchron_zonedb_zone(db, "America/New_York", &zone));
+  GCHRON_Instant instant{};
+  ASSERT_EQ(GCHRON_OK, gchron_instant_create(1781539200, 0, &instant));
+  GCHRON_ZonedDateTime zoned{};
+  ASSERT_EQ(GCHRON_OK, gchron_zoned_from_instant(instant, zone, &zoned));
+
+  int inverted = 0;
+  int refused = 0;
+  for (char ch = 'A'; ch <= 'z'; ++ch) {
+    if (!std::isalpha(static_cast<unsigned char>(ch))) {
+      continue;
+    }
+    for (int count = 1; count <= 20; ++count) {
+      std::string pattern(static_cast<size_t>(count), ch);
+      GCHRON_Format * format = nullptr;
+      if (gchron_format_compile(pattern.c_str(), pattern.size(),
+              GCHRON_FORMAT_LDML, nullptr, nullptr, &format, nullptr)
+          != GCHRON_OK) {
+        continue; /* a count this letter does not accept */
+      }
+      char buffer[256];
+      size_t length = 0;
+      if (gchron_format_zoned(format, &zoned, nullptr, buffer, sizeof(buffer),
+              &length) != GCHRON_OK) {
+        gchron_format_destroy(format);
+        continue; /* a letter this value cannot feed */
+      }
+      GCHRON_Result says = gchron_format_is_invertible(format, nullptr);
+      GCHRON_ParsedFields fields{};
+      GCHRON_Error err{};
+      GCHRON_Result read = gchron_format_parse(format, buffer, length, nullptr,
+          &fields, &err);
+      if (says == GCHRON_OK) {
+        ++inverted;
+        if (read != GCHRON_OK) {
+          EXPECT_EQ(GCHRON_ERR_INVALID, read)
+              << pattern << " wrote " << std::string(buffer, length)
+              << " and is_invertible said it could be read back";
+          EXPECT_EQ(GCHRON_DIAG_PATTERN_NEEDS_CLOCK, err.diag)
+              << pattern << " wrote " << std::string(buffer, length);
+        }
+      }
+      else {
+        ++refused;
+        EXPECT_EQ(GCHRON_ERR_UNSUPPORTED, says) << pattern;
+        // Structural, per the note above: parse() gates on is_invertible(), so
+        // this cannot fail. Asserted for the *diagnostic*, which can - a
+        // refusal that reached the caller as GCHRON_DIAG_NONE would tell a
+        // template author nothing about which letter to change.
+        EXPECT_EQ(GCHRON_ERR_UNSUPPORTED, read) << pattern;
+        EXPECT_EQ(GCHRON_DIAG_PATTERN_NOT_INVERTIBLE, err.diag) << pattern;
+        EXPECT_LT(err.offset, pattern.size()) << pattern;
+      }
+      gchron_format_destroy(format);
+    }
+  }
+  // A sweep that swept nothing passes every assertion in it.
+  EXPECT_GT(inverted, 50);
+  EXPECT_GT(refused, 0);
+  gchron_zonedb_destroy(db);
+}
+
 TEST(Format, TheDeclaredBoundReallyBoundsEveryPattern) {
   static const struct {
     int32_t year;

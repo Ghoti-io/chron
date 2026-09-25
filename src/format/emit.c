@@ -184,18 +184,25 @@ static void put_offset(Cursor * c, int32_t offset_sec, int count, int style,
      * specification now says both things - but design.md section 8.3 makes ICU
      * the definition of what a pattern means, and ICU has picked one.
      *
-     * An unknown offset writes a bare `GMT`, which is the one case that change
-     * must not reach: `GMT+0` asserts an offset of exactly zero, and declining
-     * to assert that is the whole content of RFC 3339 section 4.3. It is not
-     * CLDR's `gmtUnknownFormat` either - that element is for a zone whose
-     * offset the formatter could not determine, where this is a sender who
-     * withheld one deliberately. A bare `GMT` at least states nothing about
-     * the number, which is the claim being made.
+     * An unknown offset is a negative zero here as well - `GMT-0`, or
+     * `GMT-00:00` at the long count - so the rule has no exception: every
+     * offset letter writes the sign and the letter's own shape.
+     *
+     * It wrote a bare `GMT` for one commit, on the reasoning that `GMT+0`
+     * asserts an offset of exactly zero and RFC 3339 section 4.3 exists to
+     * decline that. The reasoning was right about `GMT+0` and wrong about the
+     * alternative, and making the localised GMT format readable is what showed
+     * it: a bare `GMT` is exactly what CLDR's `gmtZeroFormat` means and what
+     * every ICU up to 76.1 wrote for a *known* zero, so it collides with text
+     * from other writers in the one direction that matters, and a reader cannot
+     * tell the two apart. `GMT-0` is unambiguous, round-trips, and carries the
+     * same convention as `-00:00` does for the ISO letters.
+     *
+     * It is not CLDR's `gmtUnknownFormat` in either spelling. That element is
+     * for a zone whose offset the formatter could not determine, where this is
+     * a sender who withheld one deliberately.
      */
     put_string(c, "GMT");
-    if (unknown) {
-      return;
-    }
     put_char(c, negative ? '-' : '+');
     if (count >= 4) {
       put_number(c, hours, 2);

@@ -293,7 +293,14 @@ static bool take_offset(Cursor * c, int style, int32_t * out_sec,
   *out_unknown = false;
 
   if (style == 3) {
-    /* `O`: localised GMT. `GMT` alone is a zero offset. */
+    /*
+     * `O`: localised GMT. `GMT` alone is a *known* zero offset, which is what
+     * CLDR's `gmtZeroFormat` means and what every ICU up to 76.1 wrote for one
+     * - so reading it as anything else would misread text this library does not
+     * produce but does have to accept. An unknown offset arrives as `GMT-0` or
+     * `GMT-00:00` and is recognised below by the rule every other letter uses:
+     * a negative sign with a zero magnitude.
+     */
     if (!take_exact(c, "GMT", 3)) {
       return false;
     }
@@ -432,32 +439,39 @@ static bool item_is_numeric(const GCHRON_FormatItem * item) {
 /**
  * Whether one item can be read back.
  *
- * `z`, `v` and `O` name a zone loosely - `EST` is US Eastern, Australian
- * Eastern and a handful of others, and `v` is looser still - so choosing
- * among the candidates needs CLDR's data and a preference order, which
- * section 14 declines to ship. `O` is here too: `GMT+5` *is* readable as an
- * offset, but TR35 calls it a localised name and a locale that localises the
- * word would not be readable at all, so refusing it uniformly beats a reader
- * that works only in the root locale.
+ * `z` and `v` name a zone loosely - `EST` is US Eastern, Australian Eastern and
+ * a handful of others, and `v` is looser still - so choosing among the
+ * candidates needs CLDR's data and a preference order, which section 14
+ * declines to ship. Those do not invert and cannot.
  *
- * The count matters for one letter. `ZZZZ` is not the RFC 822 offset its three
- * shorter spellings are: TR35 makes it the long localised GMT format, the same
- * as `OOOO`, and emit.c writes it that way. So it does not invert either, and
- * saying it did was a promise the scan could not keep - `gchron_format_parse()`
- * has always refused `ZZZZ` while this function has always accepted it.
+ * **`O`, `OOOO` and `ZZZZ` do.** This function used to refuse them on the
+ * grounds that TR35 calls the localised GMT format a localised *name*, and that
+ * "a locale that localises the word would not be readable at all, so refusing
+ * it uniformly beats a reader that works only in the root locale". That reason
+ * described a library this is not. `GCHRON_Names` has hooks for months,
+ * weekdays, eras, day periods and the week rules, and none for `gmtFormat`,
+ * `gmtZeroFormat` or `hourFormat` - so emit.c writes the literal `GMT` and
+ * ASCII digits whatever provider it is handed. The *writer* works only in the
+ * root locale, which makes a reader that does the same symmetric rather than a
+ * compromise, and there is no locale that localises the word because nothing
+ * can supply one.
  *
- * That was hidden by a second defect rather than by nobody trying. `ZZZZ` used
- * to emit `-0000` when the offset was marked unknown, which *is* readable, so
- * the pattern inverted for exactly one value of one flag. Spelling the unknown
- * offset consistently is what left this with nothing to hide behind.
+ * What the old refusal cost was the defect it was hiding: this library emitted
+ * `GMT+0` and could not read it. If `GCHRON_Names` ever grows a localised GMT
+ * hook, this is the decision that has to be revisited, and the reader in
+ * take_offset() is where the root-locale assumption lives.
+ *
+ * So nothing here turns on the letter count, and the parameter it briefly took
+ * is gone again. It mattered for one commit, while `ZZZZ` was refused by the
+ * scan and accepted by this function; making the scan read the localised GMT
+ * format settled it from the other end, which is the better end. If a future
+ * letter needs the count, Format.EveryPatternThatSaysItInvertsIsOneTheScanner-
+ * WillTry is the test that will say so.
  */
-static bool item_inverts(GCHRON_ItemKind kind, uint16_t count) {
+static bool item_inverts(GCHRON_ItemKind kind) {
   switch (kind) {
     case GCHRON_ITEM_ZONE_ABBREV:
-    case GCHRON_ITEM_OFFSET_LOCALISED:
       return false;
-    case GCHRON_ITEM_OFFSET_RFC822:
-      return count != 4;
     default:
       return true;
   }
@@ -471,7 +485,7 @@ GCHRON_Result gchron_format_is_invertible(const GCHRON_Format * format,
     return gchron_fail(err, GCHRON_ERR_INVALID, GCHRON_DIAG_NONE, 0, 0);
   }
   for (i = 0; i < format->item_count; ++i) {
-    if (!item_inverts(format->items[i].kind, format->items[i].count)) {
+    if (!item_inverts(format->items[i].kind)) {
       /*
        * The offset is into the *pattern*, which is what a caller debugging a
        * template needs and what this function documents. It used to be the
@@ -988,9 +1002,23 @@ GCHRON_Result gchron_format_parse(const GCHRON_Format * format,
 
       case GCHRON_ITEM_OFFSET_ISO_Z:
       case GCHRON_ITEM_OFFSET_ISO:
-      case GCHRON_ITEM_OFFSET_RFC822: {
+      case GCHRON_ITEM_OFFSET_RFC822:
+      case GCHRON_ITEM_OFFSET_LOCALISED: {
+        /*
+         * The same four styles emit.c writes, chosen the same way - `ZZZZ` is
+         * the long localised GMT format and not the RFC 822 offset its three
+         * shorter spellings are, so it reads as style 3 too.
+         *
+         * take_offset()'s style 3 branch was written with the rest of this and
+         * then reached by nothing: this arm listed only three kinds and
+         * computed only styles 0, 1 and 2. Twenty lines of documented reader
+         * for `GMT`, `GMT+8` and `GMT+08:00`, unreachable, while
+         * gchron_format_parse() refused every pattern that needed it.
+         */
         int style = item->kind == GCHRON_ITEM_OFFSET_ISO ? 1
-            : (item->kind == GCHRON_ITEM_OFFSET_RFC822 ? 2 : 0);
+            : item->kind == GCHRON_ITEM_OFFSET_LOCALISED ? 3
+            : item->kind != GCHRON_ITEM_OFFSET_RFC822 ? 0
+            : (item->count == 4 ? 3 : 2);
         int32_t offset = 0;
         bool unknown = false;
         if (!take_offset(&c, style, &offset, &unknown)) {
@@ -1018,7 +1046,6 @@ GCHRON_Result gchron_format_parse(const GCHRON_Format * format,
         break;
 
       case GCHRON_ITEM_ZONE_ABBREV:
-      case GCHRON_ITEM_OFFSET_LOCALISED:
       case GCHRON_ITEM_COUNT:
       default:
         /* gchron_format_is_invertible() ran first and refused these. */

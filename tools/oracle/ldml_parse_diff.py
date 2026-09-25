@@ -57,6 +57,25 @@ COMPLETE = [
     "uuuu-MM-dd'T'HH:mm:ss'['VV']'",
     "'at' HH:mm:ssXXX 'on' uuuu-MM-dd",
     "'it''s' uuuu-MM-dd HH:mm:ssXXX",
+    #
+    # The localised GMT format, in all three of its spellings. Absent until
+    # 2026-09-25, and absent for a reason that had stopped being true: this
+    # library refused to *read* `O`, `OOOO` and `ZZZZ` at all, so there was
+    # nothing to compare. It refused them while carrying a complete reader for
+    # them that no call site reached, and it wrote them the whole time - which
+    # made this the one gate that could have said "you emit text you cannot
+    # read" and had been excused from asking.
+    #
+    # Worth knowing what these add over the `X` and `Z` rows: ICU writes the
+    # short form without a leading zero and drops zero minutes (`GMT-4`), keeps
+    # them when they are not zero (`GMT+5:45`), and writes the seconds the tzdb
+    # records for local mean time (`GMT+00:09:21` for Paris in 1900). Three
+    # shapes one pattern, decided by the value, which is exactly the class of
+    # reader bug a fixed-shape corpus does not reach.
+    #
+    "uuuu-MM-dd'T'HH:mm:ss O",
+    "uuuu-MM-dd'T'HH:mm:ss OOOO",
+    "uuuu-MM-dd'T'HH:mm:ss ZZZZ",
 ]
 
 # Patterns that name only part of one. Reported, never failed: this library
