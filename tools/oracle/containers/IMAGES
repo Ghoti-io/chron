@@ -65,20 +65,33 @@ node	docker.io/library/node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea4195
 # disagreement is a defect rather than a reading.
 #
 # **This is the pin that does name data**, because CLDR ships inside ICU: what
-# a pattern means is a CLDR question and the ICU release answers it. 76.1 is
-# what this machine has had all along and what the seven known divergences in
-# ldml_diff.py are calibrated against. `unicode` pins 78.3 for its own reason -
-# it needs Unicode 17.0 - and the two libraries asking different ICUs is fine
-# so long as both say so, which until 2026-09-24 neither did.
+# a pattern means is a CLDR question and the ICU release answers it. So this is
+# the only pin here whose raise can change an answer, and raising it on
+# 2026-09-25 did.
 #
-# **Built here, but from Debian stable rather than from source**, which is the
-# other departure from `unicode`. It built 78.3 from a source tarball because
-# 78.3 exists only in sid, and CONTAINERS.md section 2.6 is right that an apt
-# pin into sid expires sooner than a stable one. 76.1 is Debian 13's own
-# libicu-dev, and Debian 13 is stable, so that reason does not apply: the base
-# is pinned by digest and the package comes from a release that does not move.
+# **78.3, raised from 76.1, and it moved 27 rows.** ICU 78.3 carries CLDR 48,
+# which added an explicit zero-offset spelling to the localized GMT format:
+# `GMT+0` and `GMT+00:00` where 76.1 wrote `GMT`. That is not a regression and
+# it is not a defect here either - the specification now says both things, and
+# ldml_diff.py's CONDITIONAL_DIVERGENCES carries the citation and the minimal
+# pair. Whether this library follows CLDR 48 on output is a separate decision
+# about text users read; notes/chron/ORACLES-OPEN.md holds it.
+#
+# 78.3 is also the newest ICU4C release (2026-03-17) and what `unicode` pins,
+# so this raise also ends the suite asking one question of two CLDR versions.
+#
+# **Built here, and now from source rather than from Debian**, which the raise
+# forced and which is the right instrument anyway. 76.1 is Debian 13's own
+# libicu-dev, so an apt install was cheap and stable while that was the pin;
+# 78.3 exists only in sid, and CONTAINERS.md section 2.6 is right that an exact
+# apt pin into sid expires sooner than a source release, which has no expiry.
+# This is the one gate whose disagreement means a defect, so an expiring pin is
+# the worst place to put it.
 #
 # Being built here, the pin is not a digest - two builds of one Dockerfile are
 # not two copies of one image - so the run-time version check in oracle_env.py
-# is the real guarantee. Build it with `make oracle-images`.
-icu	localhost/ghoti-chron-oracle-icu:76.1	ICU 76.1	LDML pattern formatting and parsing in the root locale
+# is the real guarantee. Build it with `make oracle-images`. That build takes
+# seconds rather than the quarter hour an ICU build costs, because `unicode`'s
+# Dockerfile has the same base digest and the same source tarball and the
+# engine reuses its layers: the tag is this repository's, the compile was not.
+icu	localhost/ghoti-chron-oracle-icu:78.3	ICU 78.3	LDML pattern formatting and parsing in the root locale

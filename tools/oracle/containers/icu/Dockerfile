@@ -14,32 +14,55 @@
 # 76.1 here, 78.3 there. Two libraries in one suite asking different ICUs is
 # fine; not saying so is not.
 #
-# **From Debian stable rather than from source**, which is where this departs
-# from `unicode`'s equivalent. That one builds ICU 78.3 from the Consortium's
-# tarball because 78.3 exists only in sid, and notes/suite/CONTAINERS.md
-# section 2.6 is right that an exact apt pin into sid expires sooner than a
-# stable one does. This gate wants 76.1, which *is* Debian 13's libicu-dev, and
-# Debian 13 is stable - so the cheap option and the correct one coincide here
-# in a way they did not there.
+# **78.3, raised from 76.1 on 2026-09-25, and from source rather than from
+# Debian.** 76.1 is Debian 13's libicu-dev and an apt install of it was the
+# cheap and correct option while that was the pin. It stops being available the
+# moment the pin moves: 78.3 is in sid, and notes/suite/CONTAINERS.md section
+# 2.6 reasons out why an exact apt pin into sid is the wrong instrument for a
+# gate whose disagreement means a defect - sid moves continuously, so such a pin
+# expires, while a source release has no expiry. So this now builds what
+# `unicode`'s equivalent builds, the same way.
 #
-# What is pinned:
+# 78.3 is also the newest ICU4C release there is (2026-03-17; the later 79.x
+# tags on that repository are icu4x, which is the Rust project and not this
+# library's reference), and it is what `unicode` pins - so raising to it also
+# ends the suite asking one question of two CLDR versions.
 #
-#   - the base, by digest, which fixes the apt suite and therefore the ICU
-#     package version inside it
-#   - the run-time version check in oracle_env.py, which is the real guarantee,
-#     because two builds of one Dockerfile are not two copies of one image
+# What is pinned, per section 2.6's two-part rule for a built-here image:
 #
-# Why 76.1 and not the newest: it is what the seven known divergences in
-# ldml_diff.py were measured against. Raising it is new CLDR data and therefore
-# new answers, and those arrive as divergences needing triage - a separate
-# change with its own commit, not a side effect of containerising.
+#   - the base, by digest
+#   - the source tarball, by the **SHA-512 the Unicode Consortium publishes**
+#     for it in SHASUM512.txt beside the release. Not the git tag: a tag is a
+#     name and this is the bytes. Checked against that file rather than copied
+#     from the sibling repository that already had it, because a figure taken on
+#     trust is not a figure.
+#   - and the run-time version check in oracle_env.py, which is the real
+#     guarantee, because two builds of one Dockerfile are not two copies of one
+#     image.
 
 FROM docker.io/library/debian@sha256:7792b1f7702a86946cd518db72b6a407302c3e9bc1635634368b878189e8221c
 
+ARG ICU_VERSION=78.3
+ARG ICU_TARBALL=icu4c-78.3-sources.tgz
+ARG ICU_SHA512=04a49455e1489030c520a4bfd2664fa2171e7938d08f2acdbbcb1fda976639fd8b1f0704f2eec89ba59a7b6d118ceaab6ec5a096e40d9085a0895d91ce225245
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      g++ libc6-dev libicu-dev pkg-config \
+      ca-certificates curl g++ make pkg-config libc6-dev python3 \
  && rm -rf /var/lib/apt/lists/*
+
+RUN cd /tmp \
+ && curl -fsSLO "https://github.com/unicode-org/icu/releases/download/release-${ICU_VERSION}/${ICU_TARBALL}" \
+ && printf '%s  %s\n' "${ICU_SHA512}" "${ICU_TARBALL}" | sha512sum -c - \
+ && tar xzf "${ICU_TARBALL}" \
+ && cd icu/source \
+ && ./runConfigureICU Linux \
+      --prefix=/usr/local \
+      --disable-samples --disable-tests --disable-extras --disable-layoutex \
+ && make -j"$(nproc)" \
+ && make install \
+ && ldconfig \
+ && cd /tmp && rm -rf /tmp/icu /tmp/"${ICU_TARBALL}"
 
 # A version probe compiled into the image, so oracle_env.py can ask what this
 # reference is without first compiling the driver.
@@ -67,7 +90,13 @@ RUN printf '%s\n' \
 # the environment's locale would answer a different question on a machine whose
 # LANG is set. notes/suite/CONTAINERS.md records this costing regex 1,855 rows
 # of false disagreement when its vim oracle inherited $LANG.
+#
+# LD_LIBRARY_PATH because this ICU is in /usr/local rather than where the
+# distribution puts one, and the driver is compiled at run time against the
+# mounted source: the link succeeds either way and without this the binary it
+# produces would not start.
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 ENTRYPOINT []
 CMD ["icu-version"]

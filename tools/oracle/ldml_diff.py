@@ -20,6 +20,7 @@ import argparse
 import itertools
 import os
 import subprocess
+import textwrap
 import sys
 
 # The letters and counts worth checking, one pattern each, plus a handful of
@@ -70,6 +71,36 @@ KNOWN_DIVERGENCES = {
     "zzz": "as z.",
 }
 
+# Divergences that a letter cannot name, because they depend on the value
+# rather than on the pattern.
+#
+# Keyed by pattern, `O` here would stop comparing the localised GMT format
+# altogether - 45 rows at non-zero offsets that agree today and would stop
+# being asked. An exclusion wide enough to absorb a future defect is worse
+# than the divergence it was written for, so these match the answers.
+#
+# Each entry is (name, predicate, reason). The predicate is given the pattern,
+# the zone, the instant and both answers.
+CONDITIONAL_DIVERGENCES = [
+    (
+        "localised GMT at a zero offset",
+        lambda pattern, zone, millis, ours, theirs: (
+            ours == "GMT" and theirs in ("GMT+0", "GMT+00:00")),
+        "chron writes CLDR's `gmtZeroFormat`, which root spells `GMT` and "
+        "which TR35's own table of fallback elements still describes as how "
+        "\"GMT/UTC with an offset of zero should be represented\". ICU 78.3 "
+        "writes an explicit `GMT+0`/`GMT+00:00` instead, while continuing to "
+        "carry that element and return it from getGMTZeroFormat(). ICU 76.1 "
+        "wrote `GMT` and agreed. The change is CLDR's, not a regression: TR35 "
+        "revision 76 (CLDR 48) added `\"GMT+00:00\" (long)` and `\"UTC+0\" "
+        "(short)` to the localized-GMT examples, where revision 75 and every "
+        "revision before it had none - so the specification now says both "
+        "things and ICU picked the newer one. Whether this library follows it "
+        "is a decision about output users read, not a defect: see "
+        "notes/chron/ORACLES-OPEN.md.",
+    ),
+]
+
 ZONES = [
     "UTC",
     "America/New_York",
@@ -90,6 +121,15 @@ MILLIS = [
     -2208988800000,  # 1900-01-01T00:00:00Z
     1000000000123,   # a millisecond that is not zero
 ]
+
+
+def matched(query, ours, theirs):
+    """The conditional divergence this row falls in, or None."""
+    pattern, zone, millis = query.split("\t")
+    for name, predicate, _ in CONDITIONAL_DIVERGENCES:
+        if predicate(pattern, zone, millis, ours, theirs):
+            return name
+    return None
 
 
 def run(argv, queries):
@@ -147,6 +187,7 @@ def main():
 
     agreed = 0
     known = {}
+    conditional = {}
     both_refused = 0
     only_we_refused = []
     only_they_refused = []
@@ -163,6 +204,18 @@ def main():
             only_they_refused.append(query)
         elif ours_out == theirs_out:
             agreed += 1
+        elif matched(query, ours_out, theirs_out) is not None:
+            #
+            # Before the letter table, deliberately. Three of the `z` rows
+            # diverge under ICU 78.3 for the zero-offset reason rather than
+            # for the no-zone-names reason, and filing them under `z` would
+            # make that letter's count move for a cause it does not name.
+            # Attributing a row to what actually caused it is what keeps the
+            # other counts comparable across a raise.
+            #
+            name = matched(query, ours_out, theirs_out)
+            conditional.setdefault(name, []).append((query, ours_out,
+                                                     theirs_out))
         elif query.split("\t")[0] in KNOWN_DIVERGENCES:
             known.setdefault(query.split("\t")[0], []).append(
                 (ours_out, theirs_out))
@@ -192,6 +245,20 @@ def main():
             "asked the wrong question rather than that the library is wrong.\n"
             % (len(queries), agreed))
         return 1
+
+    for name, _, reason in CONDITIONAL_DIVERGENCES:
+        cases = conditional.get(name)
+        if not cases:
+            print("\nKNOWN DIVERGENCE %r no longer diverges, against %s.\n"
+                  "Re-triage it and remove it, or find out what changed."
+                  % (name, oracle_env.version("icu")))
+            return 1
+        query, ours_out, theirs_out = cases[0]
+        print("known divergence, %s: %d cases, e.g. %s -> chron %r vs icu %r"
+              % (name, len(cases), query.replace("\t", " | "), ours_out,
+                 theirs_out))
+        for line in textwrap.wrap(reason, 72):
+            print("    " + line)
 
     for pattern, reason in sorted(KNOWN_DIVERGENCES.items()):
         cases = known.get(pattern)
