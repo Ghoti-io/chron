@@ -35,7 +35,8 @@ import os
 import pathlib
 import subprocess
 import sys
-import zoneinfo
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_env
 
 # Instants chosen to land either side of every kind of changeover: a few
 # fixed dates that have caught real defects, plus a regular lattice.
@@ -64,17 +65,42 @@ def tzdata_release(tzdir):
     return None
 
 
+# Not zones, though they are TZif files under the tree.
+#
+# `posixrules` is the POSIX fallback rule set, not a name anyone asks for.
+#
+# `localtime` is a pointer to whichever zone this machine is set to, so
+# comparing it asks about the machine's configuration rather than about the
+# tzdb - and the zone it points at is already in the population under its own
+# name. It is also the one entry that cannot survive being read through a
+# mount: it is a symlink to /etc/localtime, which is *outside* the zone tree,
+# so a reference reading the tree from a container follows it to that
+# container's own /etc/localtime and answers UTC. That produced 218
+# disagreements the first time this gate ran containerised, all of them this
+# one name, and every one of them looking like a defect in chron.
+NOT_ZONES = ("posixrules", "localtime")
+
+
 def system_zones(tzdir):
     """Every zone the database holds, named the way it names them.
 
     A zone is a file whose first four bytes are `TZif`, which is what the
-    library's own reader requires; `posixrules` is excluded because it is the
-    POSIX fallback rule set rather than a zone anyone can ask for by name.
+    library's own reader requires.
+
+    Returns (zones, escapes). An escape is a symlink whose immediate target
+    leaves the tree: it resolves to different bytes for a reader that reaches
+    the tree through a mount, so it is excluded and named rather than compared.
+    Checking the immediate hop rather than the fully resolved path is the whole
+    trick - on this machine `localtime` points at `/etc/localtime`, which
+    points back at `America/Chicago`, so a check that resolves the whole chain
+    sees a target inside the tree and finds nothing wrong.
     """
     found = set()
+    escapes = set()
     root = pathlib.Path(tzdir)
     if not root.is_dir():
-        return found
+        return found, escapes
+    prefix = str(root.resolve()) + os.sep
     for path in root.rglob("*"):
         if not path.is_file():
             continue
@@ -85,10 +111,15 @@ def system_zones(tzdir):
         except OSError:
             continue
         name = str(path.relative_to(root))
-        if name == "posixrules":
+        if name in NOT_ZONES:
             continue
+        if path.is_symlink():
+            target = os.readlink(str(path))
+            if os.path.isabs(target) and not target.startswith(prefix):
+                escapes.add(name)
+                continue
         found.add(name)
-    return found
+    return found, escapes
 
 
 def lattice(step):
@@ -97,22 +128,28 @@ def lattice(step):
     return list(range(start, end, step))
 
 
-def expected(zone, seconds):
-    try:
-        tz = zoneinfo.ZoneInfo(zone)
-    except Exception:
-        return None
-    moment = datetime.datetime.fromtimestamp(seconds, tz)
-    offset = moment.utcoffset()
-    dst = moment.dst()
-    if offset is None:
-        return None
-    return "%d\t%d\t%s\t%s" % (
-        int(offset.total_seconds()),
-        1 if (dst is not None and dst.total_seconds() != 0) else 0,
-        moment.tzname(),
-        moment.strftime("%Y-%m-%dT%H:%M:%S"),
-    )
+ASK = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                   "zoneinfo_ask.py")
+
+
+def reference(tzdir, argv, stdin):
+    """Run the reference over the host's zone files.
+
+    The mount is the whole point. The image ships tzdata of its own, frozen by
+    the digest that pins it, and the host's moves with the distribution. A
+    differential between two *readers* has to hand both of them the same bytes,
+    or the first time the host updates it starts reporting the gap between two
+    tzdb releases as though this library had regressed.
+    """
+    command = oracle_env.command(
+        "python", ["python3", ASK] + list(argv),
+        readonly=[tzdir], env={"PYTHONTZPATH": tzdir})
+    finished = subprocess.run(command, input=stdin, capture_output=True,
+                              text=True)
+    if finished.returncode != 0:
+        sys.stderr.write(finished.stderr)
+        raise SystemExit(finished.returncode)
+    return finished.stdout.splitlines()
 
 
 def main():
@@ -124,11 +161,7 @@ def main():
     args = parser.parse_args()
 
     tzdir = os.environ.get("TZDIR", "/usr/share/zoneinfo")
-    try:
-        listed = set(zoneinfo.available_timezones())
-    except Exception as error:
-        sys.stderr.write("zoneinfo.py: %s\n" % error)
-        return 1
+    listed = set(reference(tzdir, ["--list"], ""))
     #
     # The population is the *database's*, which is what the docstring above
     # claims and what this did not do: it swept
@@ -140,8 +173,8 @@ def main():
     # whose tzdata omits the backward-compatibility links while the database
     # carries them, it would not be.
     #
-    held = system_zones(tzdir)
-    zones = sorted(held | listed)
+    held, escapes = system_zones(tzdir)
+    zones = sorted((held | listed) - set(NOT_ZONES) - escapes)
     if not zones:
         sys.stderr.write("zoneinfo.py: no zones available; nothing checked\n")
         return 1
@@ -166,13 +199,18 @@ def main():
                          % (len(lines), len(queries)))
         return 1
 
+    wants = reference(tzdir, [], stdin)
+    if len(wants) != len(queries):
+        sys.stderr.write("zoneinfo.py: the reference answered %d of %d "
+                         "queries\n" % (len(wants), len(queries)))
+        return 1
+
     checked = 0
     skipped = 0
     mismatches = []
-    for query, line in zip(queries, lines):
+    for query, line, want in zip(queries, lines, wants):
         zone, seconds = query.split("\t")
-        want = expected(zone, int(seconds))
-        if want is None:
+        if want == "-":
             skipped += 1
             continue
         got = line.split("\t", 2)[2] if line.count("\t") >= 2 else ""
@@ -194,6 +232,12 @@ def main():
     # than it looks like, so it is worth reading rather than inferring from
     # two totals.
     #
+    if escapes:
+        print("%d name(s) excluded as symlinks leaving the zone tree, which a "
+              "reference reading it through a mount would resolve differently:"
+              % len(escapes))
+        for name in sorted(escapes):
+            print("  %s -> %s" % (name, os.readlink(os.path.join(tzdir, name))))
     if unaskable:
         print("%d zone(s) the database holds that this oracle cannot "
               "construct, so nothing here checks them:" % len(unaskable))

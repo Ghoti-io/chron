@@ -1795,14 +1795,8 @@ check-oracles: check-oracle-zoneinfo
 
 check-oracle-zoneinfo: ## Check every zone the system database holds against Python's zoneinfo
 check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
-	@if ! command -v python3 >/dev/null 2>&1; then \
-		printf "\033[0;31mcheck-oracle-zoneinfo: python3 is not installed.\033[0m\n" >&2; \
-		printf "The oracle is the authority here; without it this check is not\n" >&2; \
-		printf "weaker, it is absent, and saying so beats a green run.\n" >&2; \
-		exit 1; \
-	fi
-	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/oracle/zoneinfo_diff.py \
-		--driver $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
+	$(call run-oracle,python,python3 tools/oracle/zoneinfo_diff.py \
+		--driver $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION))
 
 ####################################################################
 # Conformance vectors
