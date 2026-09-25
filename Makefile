@@ -525,7 +525,7 @@ TESTFLAGS_RESOLVED := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-conf
 # run. It costs about a second and reports rather than fails when the input
 # a generator needs is not on the machine.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
-	check-generated check-docs check-license check-counts
+	check-generated check-docs check-license check-counts check-skip-notices
 
 #
 # A check whose tool is missing prints a line and passes, which on one
@@ -538,6 +538,22 @@ TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
 # notes/suite/SUITE-TODO.md item 17.
 #
 REQUIRE_ORACLES ?=
+#
+# A gate that skips leaves a note here, and one that runs removes its own.
+# `test` reads the directory to say which gates did not run, because its
+# summary line otherwise reads identically whether they ran or not and the
+# skip notices themselves are on stderr, thirty suites earlier.
+#
+# Each gate owns exactly one file, named after itself, whose contents are the
+# label the summary prints - so a gate that skips only part of itself can say
+# so rather than being reported as absent.
+#
+# This is a transitional measure. Once the oracles are containerised these
+# tools are present by construction, nothing skips, and the parenthesis never
+# appears; see notes/chron/ORACLES-OPEN.md.
+#
+GATE_SKIP_DIR := $(BUILD_DIR)/.gates-skipped
+
 SKIP_EXIT := $(if $(REQUIRE_ORACLES),1,0)
 SKIP_NOTE := $(if $(REQUIRE_ORACLES),REQUIRE_ORACLES is set - a check that cannot run is a failure.,)
 
@@ -654,9 +670,12 @@ embed-windows-zones:
 #
 check-generated: ## Fail if a committed generated source is not what its generator produces
 	@if ! command -v python3 >/dev/null 2>&1; then \
+		mkdir -p $(GATE_SKIP_DIR); \
+		printf "check-generated (no python3)\n" > $(GATE_SKIP_DIR)/check-generated; \
 		printf "check-generated: skipped entirely (no python3). $(SKIP_NOTE)\n" >&2; \
 		exit $(SKIP_EXIT); \
 	fi; \
+	rm -f $(GATE_SKIP_DIR)/check-generated; \
 	tmp=$$(mktemp -d) || exit 1; \
 	trap 'rm -rf "$$tmp"' EXIT; \
 	checked=0; \
@@ -867,7 +886,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar vectors-calendars
 .PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license check-counts
-.PHONY: check-aliasing check-stamps
+.PHONY: check-aliasing check-stamps check-skip-notices
 .PHONY: check-oracle-temporal check-oracles test-full
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
@@ -1837,7 +1856,13 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
 		printf "\033[0;31m\nFailed:$$failed\033[0m\n"; \
 		exit 1; \
 	fi; \
-	printf "\033[0;32m\nAll $(words $(TEST_EXECUTABLES)) suites passed.\033[0m\n"
+	skipped=$$(cat $(GATE_SKIP_DIR)/* 2>/dev/null \
+		| awk '{ printf "%s%s", (NR>1 ? ", " : ""), $$0 }'); \
+	if [ -n "$$skipped" ]; then \
+		printf "\033[0;32m\nAll $(words $(TEST_EXECUTABLES)) suites passed (skipped: %s).\033[0m\n" "$$skipped"; \
+	else \
+		printf "\033[0;32m\nAll $(words $(TEST_EXECUTABLES)) suites passed.\033[0m\n"; \
+	fi
 
 #
 # What a release is measured with. `make test` stays lenient about a missing
@@ -2377,9 +2402,12 @@ check-license: ## Fail if a source file has no SPDX header or a document claims 
 	fi; \
 	printf "check-license: %d sources carry $(LICENSE_ID).\n" "$$count"; \
 	if ! command -v git >/dev/null 2>&1 || ! git rev-parse --git-dir >/dev/null 2>&1; then \
+		mkdir -p $(GATE_SKIP_DIR); \
+		printf "check-license (prose half only)\n" > $(GATE_SKIP_DIR)/check-license; \
 		printf "check-license: skipped the prose half (not a git checkout). $(SKIP_NOTE)\n" >&2; \
 		exit $(SKIP_EXIT); \
 	fi; \
+	rm -f $(GATE_SKIP_DIR)/check-license; \
 	skip="$(LICENSE_ALLOWLIST) COPYING COPYING.LESSER"; \
 	claims=$$(git ls-files -z \
 		| xargs -0 grep -HInIE "(SPDX-License-Identifier:|[Ll]icen[sc]ed under|[Ll]icense:)" 2>/dev/null \
@@ -2401,6 +2429,41 @@ check-license: ## Fail if a source file has no SPDX header or a document claims 
 		exit 1; \
 	fi; \
 	printf "\033[0;32mcheck-license: nothing claims a license other than $(LICENSE_ID).\033[0m\n"
+
+check-skip-notices: ## Fail if a gate can skip without saying so in the summary
+	@#
+	@# `test` reports which gates skipped by reading $(GATE_SKIP_DIR), which
+	@# only works if every gate that can skip writes its own marker first. The
+	@# arms for the feature itself are three PATH shims - hide `doxygen`,
+	@# `python3` or `git` and run `make test` - and those demonstrate the
+	@# gates that exist today. They cannot catch the regression that actually
+	@# threatens this: a fourth skipping gate added later with no marker,
+	@# which is invisible until someone runs on a machine missing that tool.
+	@#
+	@# So the check is structural. Every `exit $(SKIP_EXIT)` must have a
+	@# write to $(GATE_SKIP_DIR) within the six lines above it.
+	@#
+	@awk '\
+		/^\t*@?#/ { next } \
+		/GATE_SKIP_DIR\)\// { seen = NR } \
+		/exit \$$\(SKIP_EXIT\)/ { \
+			total++; \
+			if (seen == 0 || NR - seen > 6) { \
+				printf "  line %d: exits SKIP_EXIT with no marker written\n", NR; \
+				bad++; \
+			} \
+		} \
+		END { \
+			if (bad) { \
+				printf "\033[0;31mcheck-skip-notices: %d of %d skip sites are silent.\033[0m\n", bad, total; \
+				exit 1; \
+			} \
+			if (total == 0) { \
+				print "check-skip-notices: no skip sites found - the pattern changed"; \
+				exit 1; \
+			} \
+			printf "\033[0;32mAll %d gate skip sites record themselves for the summary.\033[0m\n", total; \
+		}' Makefile
 
 check-counts: ## Fail if README.md's test count no longer matches the suites
 # The README tells a reader what `make test` will print before they run it,
@@ -2447,9 +2510,12 @@ endif
 
 check-docs: ## Fail on a documentation fault in the headers or the manual
 	@if ! command -v doxygen >/dev/null 2>&1; then \
+		mkdir -p $(GATE_SKIP_DIR); \
+		printf "check-docs (no doxygen)\n" > $(GATE_SKIP_DIR)/check-docs; \
 		printf "check-docs: skipped (no doxygen). $(SKIP_NOTE)\n" >&2; \
 		exit $(SKIP_EXIT); \
 	fi; \
+	rm -f $(GATE_SKIP_DIR)/check-docs; \
 	tmp=$$(mktemp -d) || exit 1; \
 	trap 'rm -rf "$$tmp"' EXIT; \
 	fail=0; \
