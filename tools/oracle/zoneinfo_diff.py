@@ -247,8 +247,9 @@ def main():
             print("  ... and %d more" % (len(unaskable) - 25))
     #
     # This is the *system* database, which gchron_zone drives through
-    # gchron_zonedb_system(). The embedded table is a different population and
-    # no differential reaches it; notes/chron/ORACLES-OPEN.md has the detail.
+    # gchron_zonedb_system() by default. The embedded table is a different
+    # population with its own gate: embedded_diff.py, make
+    # check-oracle-embedded.
     #
     if mismatches:
         print("\nfirst disagreements:")

@@ -1160,6 +1160,7 @@ below is produced by software this library did not write.
 | the 33 sample dates in every calendar | Reingold & Dershowitz, *Calendrical Calculations*, the sample-data appendix; the `convertdate` package, which implements their algorithms directly | `tools/oracle/calendars.py` → `tests/data/vectors/calendar/{julian,hybrid}.vec`, read by `tests/unit/test_calendar.cpp` | vectors committed; `convertdate` not installed here, so they cannot be regenerated on this machine |
 | every zone's every transition | **`zdump -v`** over all zones in the system database: the UTC instant and the civil time, offset, abbreviation and DST flag on both sides of every transition, from the reference implementation of the tzdb itself. Several hundred thousand assertions, regenerated when tzdata updates | `tools/oracle/zdump.py` → `tests/data/vectors/zones/transitions.vec` | `zdump` 2.41, tzdata 2026c |
 | the same, independently | Python 3.13 `zoneinfo` reading the same TZif files through different code | `tools/oracle/zoneinfo_diff.py` + `tools/oracle/gchron_zone.c`, `make check-oracle-zoneinfo` | yes |
+| the **embedded** table - the one a Windows build has | two references, because a generated table can be wrong in two ways. **`tzdata.zi`**, the tzdb's own declaration of what a release contains, for the population: every `Z` must be present, every `L` present *as a link to the target it names*, and nothing else present at all. Then **Python `zoneinfo`** again for the offsets, over the same host tree, with a name this distribution does not ship as a file asked under the canonical name `tzdata.zi` gives it - which is how the backward-compatibility names CLDR hands Windows get checked at all | `tools/oracle/embedded_diff.py` + `tools/oracle/gchron_zone.c --db embedded`, `make check-oracle-embedded` | yes; half independent by construction, because the table is generated from the tree the reference reads - it separates two *readers*, not two sources |
 | POSIX TZ string evaluation | glibc's own `tzset` + `localtime_r` with `TZ` set to each footer string in the database, across a lattice of instants. The corpus is harvested from the system's own TZif files rather than written out | `tests/conformance/test_posixtz_tzset.cpp` - in process, because the oracle is a libc function | yes, in `make test` |
 | civil → instant in a gap or overlap | Python `zoneinfo` with `fold=0` / `fold=1`, and `zdump`'s transition rows | as above | yes |
 | RFC 3339, `date`, `time`, `duration` text | JSON-Schema-Test-Suite `tests/draft2020-12/optional/format/{date-time,date,time,duration}.json` | `tools/oracle/jsonschema_format.py` → `tests/data/vectors/parse/`, read by `tests/conformance/test_jsonschema_format.cpp` | fetched by `tools/corpus/fetch.sh` |
@@ -1257,7 +1258,8 @@ src/chron.c     version
 tools/tzdata/   embed.py (IANA source tree → C table); windows_zones.py
                 (CLDR → the Windows mapping); fetch-cldr.sh; CLDR_TAG
 tools/leap/     embed.py (leap-seconds.list → the built-in table)
-tools/oracle/   zdump.py zoneinfo_diff.py gchron_zone.c
+tools/oracle/   zdump.py zoneinfo_diff.py zoneinfo_ask.py
+                embedded_diff.py gchron_zone.c
                 icu_format.cpp ldml_diff.py gchron_format.c
                 ldml_parse_diff.py gchron_scan.c
                 yaml_timestamp.py gchron_yaml.c

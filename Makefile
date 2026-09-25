@@ -885,7 +885,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar vectors-calendars
-.PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license check-counts
+.PHONY: tools check-oracle-zoneinfo check-oracle-embedded check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license check-counts
 .PHONY: check-aliasing check-stamps check-skip-notices
 .PHONY: check-oracle-temporal check-oracles test-full oracle-images
 # Release build commands
@@ -1785,11 +1785,24 @@ oracle-images:
 
 check-oracles: ## Run every differential against its outside oracle
 check-oracles: check-oracle-ldml check-oracle-ldml-parse check-oracle-temporal
-check-oracles: check-oracle-zoneinfo
+check-oracles: check-oracle-zoneinfo check-oracle-embedded
 
 check-oracle-zoneinfo: ## Check every zone the system database holds against Python's zoneinfo
 check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
 	$(call run-oracle,python,python3 tools/oracle/zoneinfo_diff.py \
+		--driver $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION))
+
+#
+# The embedded table is the *other* database, and the one a Windows build has
+# nothing else to fall back on. Its gate is separate rather than folded into
+# check-oracle-zoneinfo because the two ask different questions of different
+# populations: that one sweeps the system directory and this one sweeps a
+# generated table against the tzdb's own declaration of what a release
+# contains. Folding them would have meant one summary line for two claims.
+#
+check-oracle-embedded: ## Check the embedded table - the one Windows uses - against Python's zoneinfo and tzdata.zi
+check-oracle-embedded: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
+	$(call run-oracle,python,python3 tools/oracle/embedded_diff.py \
 		--driver $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION))
 
 ####################################################################
