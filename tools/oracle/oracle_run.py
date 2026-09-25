@@ -40,19 +40,11 @@ def main(argv):
     cut = argv.index("--")
     names = [n for n in argv[1:cut][0].split(",") if n]
     command = argv[cut + 1:]
-    required = os.environ.get("GHOTI_ORACLE_REQUIRED", "0") == "1"
 
     try:
         line = oracle_env.provenance(names)
     except oracle_env.OracleUnavailable as why:
-        where = " ".join(command[:3])
-        if required:
-            sys.stderr.write(
-                "### %s: the reference is not reachable ###\n%s\n"
-                % (where, why))
-            return 1
-        sys.stderr.write("SKIPPED %s\n  %s\n" % (where, why))
-        return 0
+        return oracle_env.decline(" ".join(command[:3]), why)
     print(line, flush=True)
     return subprocess.run(command).returncode
 

@@ -261,6 +261,29 @@ def check_pin(name):
     return got
 
 
+def decline(where, why):
+    """Report a reference this gate cannot reach, and say what that means.
+
+    Returns the exit status the gate should use: 1 under
+    GHOTI_ORACLE_REQUIRED=1, otherwise 0 with the word SKIPPED and a reason.
+
+    `oracle_run.py` calls this for a reference it could not resolve *before*
+    the gate ran. A gate calls it directly for the other case, which
+    `embedded_diff.py` is the first of: the reference resolved, answered its
+    version, and only then turned out not to hold the data this particular
+    comparison needs. One spelling of the protocol rather than two, because a
+    second one would drift - and the shape of the line is what a reader greps
+    for.
+    """
+    if os.environ.get("GHOTI_ORACLE_REQUIRED", "0") == "1":
+        sys.stderr.write(
+            "### %s: the reference this gate needs is not available ###\n%s\n"
+            % (where, why))
+        return 1
+    sys.stderr.write("SKIPPED %s\n  %s\n" % (where, why))
+    return 0
+
+
 def provenance(names):
     """One line naming every reference that answered, and how."""
     where = "container" if MODE == "container" else "host, unpinned"
