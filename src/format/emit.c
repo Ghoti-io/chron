@@ -138,16 +138,34 @@ static GCHRON_NameWidth width_for(int count) {
  * @param style 0 for `X` (Z when zero), 1 for `x` (always numeric), 2 for
  *   `Z` (RFC 822), 3 for `O` (localised GMT).
  */
-static void put_offset(Cursor * c, int32_t offset_sec, int count, int style) {
+static void put_offset(Cursor * c, int32_t offset_sec, int count, int style,
+    bool unknown) {
   int32_t magnitude = offset_sec < 0 ? -offset_sec : offset_sec;
   int hours = (int)(magnitude / 3600);
   int minutes = (int)((magnitude / 60) % 60);
   int seconds = (int)(magnitude % 60);
+  /*
+   * RFC 3339 section 4.3's unknown offset is a *negative zero*: the magnitude
+   * is zero and the sign is what carries the meaning, which is why `int32_t`
+   * cannot hold it and it arrives as a flag.
+   *
+   * Written through each letter's own shape rather than as one hard-coded
+   * string. The alternative - always writing `-00:00` because that is the
+   * RFC's literal text - cannot be had: `X`, `XX`, `XXXX` and `Z`..`ZZZ` are
+   * the ISO *basic* format and have no colon to write. So the sign is the
+   * portable half of the convention and the shape follows the pattern, which
+   * is also what the reader wants: scan.c treats a negative sign with a zero
+   * magnitude as unknown whatever the spelling, so every one of these reads
+   * back as what it was.
+   */
+  bool negative = unknown || offset_sec < 0;
 
-  if ((style == 0 || (style == 2 && count >= 5)) && offset_sec == 0) {
+  if (!unknown && (style == 0 || (style == 2 && count >= 5))
+      && offset_sec == 0) {
     /* TR35: `X` writes `Z` for a zero offset and `x` never does - that one
      * difference is the whole reason the two letters exist - and `ZZZZZ`
-     * follows `X`'s rule rather than `Z`'s. */
+     * follows `X`'s rule rather than `Z`'s. `Z` is not available for an
+     * unknown offset: it states the offset is zero. */
     put_char(c, 'Z');
     return;
   }
@@ -165,9 +183,20 @@ static void put_offset(Cursor * c, int32_t offset_sec, int count, int style) {
      * fallback elements as how an offset of zero should be represented, so the
      * specification now says both things - but design.md section 8.3 makes ICU
      * the definition of what a pattern means, and ICU has picked one.
+     *
+     * An unknown offset writes a bare `GMT`, which is the one case that change
+     * must not reach: `GMT+0` asserts an offset of exactly zero, and declining
+     * to assert that is the whole content of RFC 3339 section 4.3. It is not
+     * CLDR's `gmtUnknownFormat` either - that element is for a zone whose
+     * offset the formatter could not determine, where this is a sender who
+     * withheld one deliberately. A bare `GMT` at least states nothing about
+     * the number, which is the claim being made.
      */
     put_string(c, "GMT");
-    put_char(c, offset_sec < 0 ? '-' : '+');
+    if (unknown) {
+      return;
+    }
+    put_char(c, negative ? '-' : '+');
     if (count >= 4) {
       put_number(c, hours, 2);
       put_char(c, ':');
@@ -189,7 +218,7 @@ static void put_offset(Cursor * c, int32_t offset_sec, int count, int style) {
     return;
   }
 
-  put_char(c, offset_sec < 0 ? '-' : '+');
+  put_char(c, negative ? '-' : '+');
   if (style == 2) {
     /*
      * TR35: `Z`..`ZZZ` are "the ISO 8601 basic format with hours, minutes and
@@ -653,51 +682,45 @@ GCHRON_Result gchron_format_emit(const GCHRON_Format * format,
         break;
       }
 
+      /*
+       * All four offset letters take the same shape, and the unknown offset
+       * goes through put_offset() rather than being spelled here.
+       *
+       * It used to be spelled here, twice, and both spellings were wrong.
+       * `X`..`XXXXX` wrote `count >= 3 ? "-00:00" : "-0000"`, which treats
+       * count 4 as the extended format when only 3 and 5 are, and gave `X`
+       * minutes it omits for every value it does know. `Z`..`ZZZZZ` wrote
+       * `-0000` for all five counts, so `ZZZZZ` lost its colon and `ZZZZ`
+       * emitted an ISO string from a localised-GMT pattern. And `x`..`xxxxx`
+       * had no branch at all, so a value whose offset was explicitly unknown
+       * printed `+00:00` - the opposite claim. None of that was reachable by
+       * any gate here: the ICU differential formats zoned instants, and a
+       * zoned instant always has an offset.
+       */
       case GCHRON_ITEM_OFFSET_ISO_Z:
-        if (context->offset_unknown) {
-          /* RFC 3339 section 4.3's unknown offset has no LDML spelling, and
-           * `-00:00` is the only text that carries the meaning. */
-          put_string(&c, count >= 3 ? "-00:00" : "-0000");
-          break;
-        }
-        put_offset(&c, context->offset_sec, count, 0);
+        put_offset(&c, context->offset_sec, count, 0,
+            context->offset_unknown);
         break;
 
       case GCHRON_ITEM_OFFSET_ISO:
-        put_offset(&c, context->offset_sec, count, 1);
+        put_offset(&c, context->offset_sec, count, 1,
+            context->offset_unknown);
         break;
 
       case GCHRON_ITEM_OFFSET_RFC822:
-        if (context->offset_unknown) {
-          put_string(&c, "-0000");
-          break;
-        }
-        if (count == 4) {
-          put_offset(&c, context->offset_sec, count, 3);
-          break;
-        }
-        put_offset(&c, context->offset_sec, count, 2);
+        /* `ZZZZ` is the long localised GMT format and TR35 makes it the same
+         * format as `OOOO`, so it answers an unknown offset the same way -
+         * with `GMT`. Writing `-0000` there, as this did, produced text of a
+         * shape the pattern never asked for, and produced it only for the
+         * unknown case, so one log could carry both `GMT+00:00` and `-0000`
+         * from one pattern. */
+        put_offset(&c, context->offset_sec, count, count == 4 ? 3 : 2,
+            context->offset_unknown);
         break;
 
       case GCHRON_ITEM_OFFSET_LOCALISED:
-        if (context->offset_unknown) {
-          /*
-           * Not `GMT+0`, which since CLDR 48 asserts an offset of exactly
-           * zero - the one thing an unknown offset is not saying. `GMT` alone
-           * carries no claim about the number, which is what is wanted here
-           * and is what this letter wrote for every value before that change.
-           *
-           * It is not CLDR's `gmtUnknownFormat` either. That element is for a
-           * zone whose offset the formatter could not determine; this is RFC
-           * 3339 section 4.3's "local offset is unknown", which is a statement
-           * the sender made deliberately. No oracle here covers it, because
-           * the differential formats zoned instants and a zoned instant always
-           * has an offset.
-           */
-          put_string(&c, "GMT");
-          break;
-        }
-        put_offset(&c, context->offset_sec, count, 3);
+        put_offset(&c, context->offset_sec, count, 3,
+            context->offset_unknown);
         break;
 
       case GCHRON_ITEM_EPOCH_SECONDS: {

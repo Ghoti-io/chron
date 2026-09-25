@@ -358,6 +358,26 @@ GCHRON_API GCHRON_Result gchron_format_datetime(const GCHRON_Format * format,
  *
  * Fills the context's offset from the value, so a caller need not.
  *
+ * **An unknown offset is written as a negative zero**, in the shape the letter
+ * uses for an offset it knows. `GCHRON_OffsetDateTime::offset_unknown` is RFC
+ * 3339 §4.3's *offset unknown*, whose canonical text is `-00:00` - but `X`,
+ * `XX`, `XXXX` and `Z`..`ZZZ` are the ISO 8601 *basic* format and have no colon
+ * to write, so the sign is the portable half of the convention and the shape
+ * follows the pattern: `X` writes `-00`, `XX` and `XXXX` write `-0000`, `XXX`
+ * and `XXXXX` write `-00:00`, and `x`..`xxxxx` write the same as their
+ * uppercase counterparts, never `Z`. gchron_format_parse() reads any of them
+ * back as unknown, because what it keys on is a negative sign with a zero
+ * magnitude rather than one spelling.
+ *
+ * `O`, `OOOO` and `ZZZZ` write a bare `GMT`. The localised GMT format spells a
+ * *known* zero offset explicitly since CLDR 48 - `GMT+0` and `GMT+00:00` - and
+ * that is the one claim an unknown offset declines to make. This is not CLDR's
+ * `gmtUnknownFormat`, which answers a different question: a zone whose offset
+ * the formatter could not determine, rather than a sender who withheld one.
+ *
+ * The interop encoders are unaffected and keep writing `-00:00` exactly, which
+ * their own grammars require; see parse.h.
+ *
  * @param format A compiled format.
  * @param odt A valid offset date-time.
  * @param context Names and calendar. NULL means the defaults.
@@ -547,11 +567,14 @@ typedef struct GCHRON_PatternContext {
  * string reads GCHRON_ParsedFields::consumed from a pattern that ends where
  * the value does.
  *
- * Three pattern letters cannot be read back: `z`, `v` and `O` name a zone
+ * Some pattern letters cannot be read back. `z`, `v` and `O` name a zone
  * loosely - `EST` is three different zones in two hemispheres - and choosing
- * between the candidates needs CLDR, which §14 declines to ship. A format
- * containing one is refused here with ::GCHRON_DIAG_PATTERN_NOT_INVERTIBLE
- * rather than guessing. `VV` inverts exactly and is supported.
+ * between the candidates needs CLDR, which §14 declines to ship. `ZZZZ` joins
+ * them, because TR35 makes it the long localised GMT format and not the RFC 822
+ * offset its three shorter spellings are: it writes what `OOOO` writes and is
+ * refused for the same reason. A format containing any of them is refused here
+ * with ::GCHRON_DIAG_PATTERN_NOT_INVERTIBLE rather than guessing. `VV` inverts
+ * exactly and is supported.
  *
  * @param format A compiled pattern.
  * @param text The text to read. Not assumed to be NUL-terminated.
@@ -575,6 +598,9 @@ GCHRON_API GCHRON_Result gchron_format_parse(const GCHRON_Format * format,
  *
  * Every letter of it inverts. Worth asking once, when a pattern arrives from
  * a template or a configuration file, rather than on the first line of input.
+ *
+ * This answers for the letter *and its count*: `Z`, `ZZ`, `ZZZ` and `ZZZZZ`
+ * invert and `ZZZZ` does not, because at four it is the localised GMT format.
  *
  * @param format A compiled pattern.
  * @param err Receives the offending letter's offset into the pattern. May be

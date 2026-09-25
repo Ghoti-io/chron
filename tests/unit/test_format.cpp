@@ -196,18 +196,163 @@ TEST(Format, TheLengthBoundHoldsAndAZeroBufferAsksForTheLength) {
   gchron_format_destroy(format);
 }
 
-// Mistake M14 again, on the way out through a pattern.
-TEST(Format, AnUnknownOffsetPrintsAsMinusZeroZero) {
+/*
+ * Mistake M14 again, on the way out through a pattern - and swept rather than
+ * sampled, which is the whole point of this test.
+ *
+ * **No oracle here can reach this axis.** `make check-oracle-ldml` formats
+ * zoned instants against ICU, and a zoned instant always has an offset, so
+ * 3,780 agreeing comparisons say nothing at all about `offset_unknown`. What
+ * stood in for the differential was this test asserting two spellings, `XXX`
+ * and `Z`. Both of those two were right; three of the other fifteen were not:
+ *
+ *   - `XXXX` wrote `-00:00`, the *extended* form, while writing the basic form
+ *     for every offset it did know. The old code said
+ *     `count >= 3 ? "-00:00" : "-0000"`, and only counts 3 and 5 are extended.
+ *   - `x` through `xxxxx` ignored the flag entirely and wrote `+00:00`, which
+ *     is the opposite claim: `x` differs from `X` only in never writing `Z`,
+ *     so it can spell a negative zero perfectly well.
+ *   - `ZZZZ` wrote `-0000`, an ISO string from a localised-GMT pattern, and
+ *     only for the unknown case - so one pattern could emit `GMT+00:00` and
+ *     `-0000` into the same log.
+ *
+ * What replaced them is one rule: **an unknown offset is a negative zero,
+ * written in the shape the letter uses for an offset it knows.** The sign is
+ * the portable half of RFC 3339 section 4.3's convention - `X`, `XX`, `XXXX`
+ * and `Z`..`ZZZ` are the ISO *basic* format and have no colon to write, so
+ * `-00:00` exactly is not available to them - and it is the half the reader
+ * keys on: scan.c treats a negative sign with a zero magnitude as unknown
+ * whatever the spelling.
+ *
+ * Both columns are asserted. A fix to the unknown column that moved the known
+ * one would otherwise pass.
+ */
+TEST(Format, EveryOffsetLetterSpellsAnUnknownOffsetInItsOwnShape) {
+  struct Row {
+    const char * pattern;
+    const char * known;
+    const char * unknown;
+  };
+  // `Z` for a known zero where the letter has it; the negative zero otherwise.
+  static const Row rows[] = {
+    // ISO 8601 with the UTC indicator. Basic at 1, 2 and 4; extended at 3
+    // and 5. Count 1 omits minutes that are zero, which is why it is `-00`.
+    { "X", "Z", "-00" },
+    { "XX", "Z", "-0000" },
+    { "XXX", "Z", "-00:00" },
+    { "XXXX", "Z", "-0000" },
+    { "XXXXX", "Z", "-00:00" },
+    // The same shapes, and never `Z` - which is the only thing that makes `x`
+    // a separate letter, and the reason it can still spell the negative zero.
+    { "x", "+00", "-00" },
+    { "xx", "+0000", "-0000" },
+    { "xxx", "+00:00", "-00:00" },
+    { "xxxx", "+0000", "-0000" },
+    { "xxxxx", "+00:00", "-00:00" },
+    // RFC 822. `ZZZZ` is the long localised GMT format and `ZZZZZ` the ISO
+    // extended one, which is the pair TR35 splits off from the first three.
+    { "Z", "+0000", "-0000" },
+    { "ZZ", "+0000", "-0000" },
+    { "ZZZ", "+0000", "-0000" },
+    { "ZZZZ", "GMT+00:00", "GMT" },
+    { "ZZZZZ", "Z", "-00:00" },
+    // Localised GMT. `GMT+0` states the offset is zero, which is the one
+    // thing an unknown offset declines to state, so the unknown case keeps a
+    // bare `GMT`. It is not CLDR's `gmtUnknownFormat`, which answers a
+    // different question - a zone whose offset the formatter could not work
+    // out, rather than a sender who withheld one.
+    { "O", "GMT+0", "GMT" },
+    { "OOOO", "GMT+00:00", "GMT" },
+  };
+
+  GCHRON_DateTime civil = gchrontest::datetime(2026, 9, 20, 15, 30, 0);
+  GCHRON_OffsetDateTime known{};
+  GCHRON_OffsetDateTime unknown{};
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, false, &known));
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, true, &unknown));
+
+  for (const Row & row : rows) {
+    EXPECT_EQ(row.known, with_pattern(row.pattern, known))
+        << "known zero offset through " << row.pattern;
+    EXPECT_EQ(row.unknown, with_pattern(row.pattern, unknown))
+        << "unknown offset through " << row.pattern;
+  }
+}
+
+/*
+ * And every spelling of it reads back as what it was, which is the property
+ * the sign carries and the reason the shape is free to vary.
+ *
+ * Not a round trip of the value - a bare offset pattern names no date - but of
+ * the *flag*, which is the thing a hard-coded `-00:00` was there to protect
+ * and the thing nothing checked.
+ */
+TEST(Format, AnUnknownOffsetReadsBackAsUnknownInEveryShapeThatCanBeRead) {
+  static const char * const readable[] = {
+    "X", "XX", "XXX", "XXXX", "XXXXX",
+    "x", "xx", "xxx", "xxxx", "xxxxx",
+    "Z", "ZZ", "ZZZ", "ZZZZZ",
+  };
   GCHRON_DateTime civil = gchrontest::datetime(2026, 9, 20, 15, 30, 0);
   GCHRON_OffsetDateTime unknown{};
   ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, true, &unknown));
-  EXPECT_EQ("-00:00", with_pattern("XXX", unknown));
-  EXPECT_EQ("-0000", with_pattern("Z", unknown));
 
+  for (const char * pattern : readable) {
+    GCHRON_Format * format = nullptr;
+    ASSERT_EQ(GCHRON_OK,
+        gchron_format_compile(pattern, std::strlen(pattern),
+            GCHRON_FORMAT_LDML, nullptr, nullptr, &format, nullptr));
+    std::string text = with_pattern(pattern, unknown);
+    GCHRON_ParsedFields fields{};
+    EXPECT_EQ(GCHRON_OK,
+        gchron_format_parse(format, text.c_str(), text.size(), nullptr,
+            &fields, nullptr)) << pattern << " wrote " << text;
+    EXPECT_TRUE(fields.offset_unknown) << pattern << " wrote " << text;
+    EXPECT_EQ(0, fields.offset_sec) << pattern << " wrote " << text;
+    gchron_format_destroy(format);
+  }
+}
+
+/*
+ * `gchron_format_is_invertible()` has to refuse exactly what the scanner
+ * refuses, and for `ZZZZ` it did not.
+ *
+ * `ZZZZ` is the long localised GMT format - TR35 makes it the same format as
+ * `OOOO` - so it is not readable for the same reason `OOOO` is not. This
+ * function accepted it anyway, promising a round trip `gchron_format_parse()`
+ * has never delivered. It went unnoticed because the promise held for exactly
+ * one value of one flag: `ZZZZ` used to write `-0000` when the offset was
+ * marked unknown, which parses. Spelling the unknown offset the way the letter
+ * spells every other offset is what left the claim with nothing to hide behind.
+ */
+TEST(Format, IsInvertibleRefusesExactlyWhatTheScannerCannotRead) {
+  struct Row { const char * pattern; bool invertible; };
+  static const Row rows[] = {
+    { "X", true }, { "XXXXX", true },
+    { "x", true }, { "xxxxx", true },
+    { "Z", true }, { "ZZ", true }, { "ZZZ", true }, { "ZZZZZ", true },
+    // The localised GMT format, by either spelling.
+    { "ZZZZ", false }, { "O", false }, { "OOOO", false },
+    // An abbreviation is not a bijection: `EST` is several zones.
+    { "z", false }, { "zzzz", false },
+    // And a compound pattern inherits the refusal from the one letter in it.
+    { "uuuu-MM-dd'T'HH:mm:ss ZZZZ", false },
+    { "uuuu-MM-dd'T'HH:mm:ssXXX", true },
+  };
+  GCHRON_DateTime civil = gchrontest::datetime(2026, 9, 20, 15, 30, 0);
   GCHRON_OffsetDateTime known{};
   ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, false, &known));
-  EXPECT_EQ("Z", with_pattern("XXX", known));
-  EXPECT_EQ("+0000", with_pattern("Z", known));
+
+  for (const Row & row : rows) {
+    GCHRON_Format * format = nullptr;
+    ASSERT_EQ(GCHRON_OK,
+        gchron_format_compile(row.pattern, std::strlen(row.pattern),
+            GCHRON_FORMAT_LDML, nullptr, nullptr, &format, nullptr));
+    GCHRON_Result said = gchron_format_is_invertible(format, nullptr);
+    EXPECT_EQ(row.invertible ? GCHRON_OK : GCHRON_ERR_UNSUPPORTED, said)
+        << row.pattern;
+    gchron_format_destroy(format);
+  }
 }
 
 /*

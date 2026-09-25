@@ -439,12 +439,25 @@ static bool item_is_numeric(const GCHRON_FormatItem * item) {
  * offset, but TR35 calls it a localised name and a locale that localises the
  * word would not be readable at all, so refusing it uniformly beats a reader
  * that works only in the root locale.
+ *
+ * The count matters for one letter. `ZZZZ` is not the RFC 822 offset its three
+ * shorter spellings are: TR35 makes it the long localised GMT format, the same
+ * as `OOOO`, and emit.c writes it that way. So it does not invert either, and
+ * saying it did was a promise the scan could not keep - `gchron_format_parse()`
+ * has always refused `ZZZZ` while this function has always accepted it.
+ *
+ * That was hidden by a second defect rather than by nobody trying. `ZZZZ` used
+ * to emit `-0000` when the offset was marked unknown, which *is* readable, so
+ * the pattern inverted for exactly one value of one flag. Spelling the unknown
+ * offset consistently is what left this with nothing to hide behind.
  */
-static bool item_inverts(GCHRON_ItemKind kind) {
+static bool item_inverts(GCHRON_ItemKind kind, uint16_t count) {
   switch (kind) {
     case GCHRON_ITEM_ZONE_ABBREV:
     case GCHRON_ITEM_OFFSET_LOCALISED:
       return false;
+    case GCHRON_ITEM_OFFSET_RFC822:
+      return count != 4;
     default:
       return true;
   }
@@ -458,7 +471,7 @@ GCHRON_Result gchron_format_is_invertible(const GCHRON_Format * format,
     return gchron_fail(err, GCHRON_ERR_INVALID, GCHRON_DIAG_NONE, 0, 0);
   }
   for (i = 0; i < format->item_count; ++i) {
-    if (!item_inverts(format->items[i].kind)) {
+    if (!item_inverts(format->items[i].kind, format->items[i].count)) {
       /*
        * The offset is into the *pattern*, which is what a caller debugging a
        * template needs and what this function documents. It used to be the
