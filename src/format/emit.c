@@ -153,11 +153,19 @@ static void put_offset(Cursor * c, int32_t offset_sec, int count, int style) {
   }
 
   if (style == 3) {
-    /* `O` is the localised GMT format: `GMT+8`, or `GMT` exactly at zero. */
-    if (offset_sec == 0) {
-      put_string(c, "GMT");
-      return;
-    }
+    /*
+     * `O` is the localised GMT format: `GMT+8`, and `GMT+0` at zero.
+     *
+     * A zero offset used to write CLDR's `gmtZeroFormat`, which root spells
+     * `GMT`, and that is what every ICU up to 76.1 wrote. CLDR 48 changed it:
+     * TR35 revision 76 added `"GMT+00:00" (long)` and `"UTC+0" (short)` to the
+     * localized-GMT examples, where revision 75 and every revision before it
+     * had none, and ICU 78.3 writes the explicit form. The `gmtZeroFormat`
+     * element is still in the DTD and still described in TR35's own table of
+     * fallback elements as how an offset of zero should be represented, so the
+     * specification now says both things - but design.md section 8.3 makes ICU
+     * the definition of what a pattern means, and ICU has picked one.
+     */
     put_string(c, "GMT");
     put_char(c, offset_sec < 0 ? '-' : '+');
     if (count >= 4) {
@@ -672,6 +680,23 @@ GCHRON_Result gchron_format_emit(const GCHRON_Format * format,
         break;
 
       case GCHRON_ITEM_OFFSET_LOCALISED:
+        if (context->offset_unknown) {
+          /*
+           * Not `GMT+0`, which since CLDR 48 asserts an offset of exactly
+           * zero - the one thing an unknown offset is not saying. `GMT` alone
+           * carries no claim about the number, which is what is wanted here
+           * and is what this letter wrote for every value before that change.
+           *
+           * It is not CLDR's `gmtUnknownFormat` either. That element is for a
+           * zone whose offset the formatter could not determine; this is RFC
+           * 3339 section 4.3's "local offset is unknown", which is a statement
+           * the sender made deliberately. No oracle here covers it, because
+           * the differential formats zoned instants and a zoned instant always
+           * has an offset.
+           */
+          put_string(&c, "GMT");
+          break;
+        }
         put_offset(&c, context->offset_sec, count, 3);
         break;
 

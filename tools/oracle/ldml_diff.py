@@ -44,7 +44,7 @@ PATTERNS = [
     "A",
     "X", "XX", "XXX", "XXXX", "XXXXX",
     "x", "xx", "xxx", "xxxx", "xxxxx",
-    "Z", "ZZ", "ZZZ", "ZZZZZ",
+    "Z", "ZZ", "ZZZ", "ZZZZ", "ZZZZZ",
     "O", "OOOO",
     "VV",
     "z", "zz", "zzz",
@@ -66,40 +66,35 @@ PATTERNS = [
 KNOWN_DIVERGENCES = {
     "z": "chron prints the tzdb's own abbreviation (EST, EDT); CLDR root has "
          "no zone names and falls back to localised GMT. The abbreviation is "
-         "what a log line wants and what strftime %Z gives.",
+         "what a log line wants and what strftime %Z gives. 36 cases rather "
+         "than the 33 this said under ICU 76.1, and the three added are "
+         "Europe/Dublin in winter: chron writes GMT because that is the tzdb's "
+         "abbreviation there, and the localised GMT that ICU falls back to "
+         "spells a zero offset GMT+0 since CLDR 48. Same divergence, one more "
+         "zone reaching it.",
     "zz": "as z.",
     "zzz": "as z.",
 }
 
 # Divergences that a letter cannot name, because they depend on the value
-# rather than on the pattern.
+# rather than on the pattern. Each entry is (name, predicate, reason), and the
+# predicate is given the pattern, the zone, the instant and both answers.
 #
-# Keyed by pattern, `O` here would stop comparing the localised GMT format
-# altogether - 45 rows at non-zero offsets that agree today and would stop
-# being asked. An exclusion wide enough to absorb a future defect is worse
-# than the divergence it was written for, so these match the answers.
+# **Empty, and the reason it exists is worth keeping.** Raising the ICU pin from
+# 76.1 to 78.3 moved 27 rows: CLDR 48 spells a zero offset `GMT+0`/`GMT+00:00`
+# in the localised GMT format where 76.1 wrote `GMT`. That lived here for one
+# commit while the question of whether to follow CLDR 48 was open, and the shape
+# of the entry was the point - keyed by pattern, `O` would have stopped
+# comparing the localised GMT format altogether, including 45 rows at non-zero
+# offsets that agreed. An exclusion wide enough to absorb a future defect is
+# worse than the divergence it was written for. The library follows CLDR 48 now,
+# so the rows agree and the entry is gone.
 #
-# Each entry is (name, predicate, reason). The predicate is given the pattern,
-# the zone, the instant and both answers.
-CONDITIONAL_DIVERGENCES = [
-    (
-        "localised GMT at a zero offset",
-        lambda pattern, zone, millis, ours, theirs: (
-            ours == "GMT" and theirs in ("GMT+0", "GMT+00:00")),
-        "chron writes CLDR's `gmtZeroFormat`, which root spells `GMT` and "
-        "which TR35's own table of fallback elements still describes as how "
-        "\"GMT/UTC with an offset of zero should be represented\". ICU 78.3 "
-        "writes an explicit `GMT+0`/`GMT+00:00` instead, while continuing to "
-        "carry that element and return it from getGMTZeroFormat(). ICU 76.1 "
-        "wrote `GMT` and agreed. The change is CLDR's, not a regression: TR35 "
-        "revision 76 (CLDR 48) added `\"GMT+00:00\" (long)` and `\"UTC+0\" "
-        "(short)` to the localized-GMT examples, where revision 75 and every "
-        "revision before it had none - so the specification now says both "
-        "things and ICU picked the newer one. Whether this library follows it "
-        "is a decision about output users read, not a defect: see "
-        "notes/chron/ORACLES-OPEN.md.",
-    ),
-]
+# It was armed when it existed - pointed at 76.1 it reported that it no longer
+# diverged and exited 1, and a planted `O` disagreement at a non-zero offset was
+# not absorbed by it. Nothing exercises the mechanism while this list is empty,
+# so arm the next entry the same way rather than trusting that it still works.
+CONDITIONAL_DIVERGENCES = []
 
 ZONES = [
     "UTC",

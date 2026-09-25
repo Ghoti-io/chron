@@ -210,6 +210,61 @@ TEST(Format, AnUnknownOffsetPrintsAsMinusZeroZero) {
   EXPECT_EQ("+0000", with_pattern("Z", known));
 }
 
+/*
+ * CLDR 48 changed what a zero offset looks like in the localised GMT format,
+ * and this library followed it.
+ *
+ * Until ICU 76.1 a zero offset wrote CLDR's `gmtZeroFormat`, which root spells
+ * `GMT`. TR35 revision 76 - CLDR 48 - added `"GMT+00:00" (long)` and
+ * `"UTC+0" (short)` to the localized-GMT examples, where revision 75 and every
+ * revision back to 68 have none, and ICU 78.3 writes the explicit form.
+ * design.md section 8.3 makes ICU the definition of what a pattern means, so
+ * this library writes it too. `make check-oracle-ldml` is what found the change
+ * and is what keeps this agreeing; this test is what says it on a machine with
+ * no ICU.
+ *
+ * The non-zero cases are here as the control. A change to the zero case that
+ * reached the others would pass a test that only checked zero.
+ */
+TEST(Format, AZeroOffsetWritesAnExplicitZeroInTheLocalisedGmtFormat) {
+  GCHRON_DateTime civil = gchrontest::datetime(2026, 9, 20, 15, 30, 0);
+  GCHRON_OffsetDateTime zero{};
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, false, &zero));
+  EXPECT_EQ("GMT+0", with_pattern("O", zero));
+  EXPECT_EQ("GMT+00:00", with_pattern("OOOO", zero));
+  // TR35 makes `ZZZZ` the long localised GMT format, the same as `OOOO`.
+  EXPECT_EQ("GMT+00:00", with_pattern("ZZZZ", zero));
+
+  GCHRON_OffsetDateTime west{};
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, -4 * 3600, false, &west));
+  EXPECT_EQ("GMT-4", with_pattern("O", west));
+  EXPECT_EQ("GMT-04:00", with_pattern("OOOO", west));
+
+  // The short form keeps minutes when they are not zero, and both forms keep
+  // seconds - the tzdb records pre-standard local mean time to the second.
+  GCHRON_OffsetDateTime quarter{};
+  ASSERT_EQ(GCHRON_OK,
+      gchron_offset_create(&civil, 5 * 3600 + 45 * 60, false, &quarter));
+  EXPECT_EQ("GMT+5:45", with_pattern("O", quarter));
+  GCHRON_OffsetDateTime mean{};
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 19 * 60 + 32, false,
+      &mean));
+  EXPECT_EQ("GMT+00:19:32", with_pattern("OOOO", mean));
+
+  /*
+   * An unknown offset keeps writing a bare `GMT`, which is the one case the
+   * change must not reach: since CLDR 48 `GMT+0` asserts an offset of exactly
+   * zero, and that is precisely what RFC 3339 section 4.3's unknown offset
+   * declines to say. No oracle covers this - the differential formats zoned
+   * instants and a zoned instant always has an offset - so this assertion is
+   * the only thing holding it.
+   */
+  GCHRON_OffsetDateTime unknown{};
+  ASSERT_EQ(GCHRON_OK, gchron_offset_create(&civil, 0, true, &unknown));
+  EXPECT_EQ("GMT", with_pattern("O", unknown));
+  EXPECT_EQ("GMT", with_pattern("OOOO", unknown));
+}
+
 TEST(Format, ALetterThatNeedsAZoneWithoutOneIsRefused) {
   GCHRON_Format * format = nullptr;
   GCHRON_OffsetDateTime odt = sample();
