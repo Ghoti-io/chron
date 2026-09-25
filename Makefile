@@ -1739,7 +1739,9 @@ check-oracle-ldml-parse: $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION)
 # Temporal's string format *is* RFC 9557 - the `[America/New_York]` suffix was
 # standardised for it - and V8's implementation is the one test262 exercises,
 # so asking V8 is the same authority without a corpus to fetch. Temporal is
-# behind a flag in node 22, and the driver says so rather than skipping.
+# behind `--harmony-temporal` in every node that has it, and the driver says
+# so rather than skipping - which is what refuses node 25, where the flag is
+# accepted and `Temporal` is still undefined.
 #
 check-oracle-temporal: ## Check the RFC 9557 reader against V8's Temporal (needs node)
 check-oracle-temporal: $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)

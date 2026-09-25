@@ -16,11 +16,13 @@
 # numbers. ICU is the exception and goes the other way, because CLDR ships
 # inside ICU - see its entry.
 #
-# **Every pin here is the version the gate was green against on 2026-09-24**,
-# deliberately, including where a newer one exists. Containerising a reference
+# **Each pin was first set to the version its gate was already green against**,
+# deliberately, including where a newer one existed. Containerising a reference
 # and raising it are two changes, and doing both at once means the next
-# disagreement cannot be attributed to either. Raising one is its own commit
-# with its own triage.
+# disagreement cannot be attributed to either. So each raise is its own commit
+# with its own triage, and each entry below records what its raise changed -
+# including where the answer is nothing, which is the most useful thing a raise
+# can report and the easiest to leave unwritten.
 
 # CPython, for the zone differential. Python reads the same TZif files chron
 # does and the two agreeing is evidence about the files rather than about one
@@ -40,11 +42,23 @@ python	docker.io/library/python:3.13-slim@sha256:37134a49d21d2120e4c4d73bb76f8a4
 # `[America/New_York]` suffix was standardised for it - so this is the grammar's
 # reference implementation rather than a second opinion on it.
 #
-# Node 22 specifically, because temporal_diff.js documents three things this
-# V8 rejects that RFC 9557 allows, and counts them rather than filtering them
-# so that a newer V8 accepting them shows up as those counts falling to zero.
-# Pinning a newer node would silently retire that measurement.
-node	docker.io/library/node:22-slim@sha256:25330af3531fb5e23318554a0aa911125b6e91b1b777edf7655501d207c067a2	Node 22	RFC 9557 parsing: every field of every string both sides accept, and the ones only one of them does
+# **Node 24, raised from 22 on 2026-09-25, and the raise changed nothing** -
+# every count in the gate is identical, 4802 strings compared and agreed either
+# way. That is the whole result and it is worth writing down, because the reason
+# this entry gave for staying on 22 was wrong: it said a newer node "would
+# silently retire" the measurement of what V8 rejects, when in fact V8 13.6
+# rejects the critical `!` and an unknown non-critical annotation exactly as
+# 12.4 did. The counts were never at risk from a raise; they are at risk from
+# nobody looking.
+#
+# **Not Node 25**, which is newer still and unusable here: V8 14.1 lists
+# `--harmony-temporal` in `--v8-options` and node accepts the flag, but
+# `Temporal` is `undefined` with it, with it spelled `--harmony_temporal`, and
+# with `--harmony`. The differential refuses to run rather than compare against
+# nothing, which is the behaviour that turns this from a silent hole into a
+# one-line message - so the ceiling on this pin is set by where Temporal is
+# reachable, not by where it is newest.
+node	docker.io/library/node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6	Node 24	RFC 9557 parsing: every field of every string both sides accept, and the ones only one of them does
 
 # ICU, for the LDML formatter and parser. design.md section 8.3 makes ICU the
 # *definition* of what a pattern means, so this is the one reference here whose

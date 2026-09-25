@@ -14,10 +14,17 @@
  * guessed.
  *
  * **The oracle is incomplete, and where it is, that is recorded rather than
- * worked around.** V8's Temporal in Node 22 rejects three things RFC 9557
- * allows, so every string in those classes is counted and reported instead of
- * being compared. A newer V8 that accepts them should make those counts fall
- * to zero, which is the point of counting rather than filtering.
+ * worked around.** V8's Temporal rejects two things RFC 9557 allows - the
+ * critical `!`, and an unknown non-critical annotation it is free to ignore -
+ * so every string in those classes is counted and reported instead of being
+ * compared. A newer V8 that accepted them would show up as those counts
+ * falling to zero, which is the point of counting rather than filtering.
+ *
+ * **Measured, and it has not happened.** Raising the pin from Node 22 to 24,
+ * V8 12.4 to 13.6, left both counts exactly where they were; so did every
+ * other count here. The prediction is still the right shape and it is not yet
+ * a result, and the difference between those two is why the number is printed
+ * rather than described.
  *
  * Run by `make check-oracle-temporal`; not part of the library.
  *
