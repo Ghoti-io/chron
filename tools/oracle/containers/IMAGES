@@ -1,0 +1,70 @@
+# The oracle images, pinned by digest.
+#
+# One line per oracle: <name>	<image-ref>	<version>	<what it answers>
+# Tab-separated, because the last field is prose.
+#
+# The ref carries a tag *and* a digest. The tag is for a human reading this
+# file; the digest is what runs. A tag can be moved under you and a digest
+# cannot, so a green run names a set of bytes rather than a set of names.
+#
+# **What the version field names here is the reference, not the data**, and
+# that is a departure from `unicode`'s table which is worth stating. There a
+# CPython *is* a UCD version, so pinning the interpreter pins the data. Here
+# the data is mostly the subject under test: the zone differential compares two
+# readers of one set of TZif files, and those files are the host's. So the pin
+# names the reader and the differential prints the tzdb release beside its
+# numbers. ICU is the exception and goes the other way, because CLDR ships
+# inside ICU - see its entry.
+#
+# **Every pin here is the version the gate was green against on 2026-09-24**,
+# deliberately, including where a newer one exists. Containerising a reference
+# and raising it are two changes, and doing both at once means the next
+# disagreement cannot be attributed to either. Raising one is its own commit
+# with its own triage.
+
+# CPython, for the zone differential. Python reads the same TZif files chron
+# does and the two agreeing is evidence about the files rather than about one
+# reader's opinion of them.
+#
+# **It reads the host's zone tree, mounted read-only, not the image's.** The
+# image carries its own tzdata - 2026c today, the same release the host has -
+# and that coincidence is exactly the trap. The digest freezes the image's copy
+# where the host's moves with Debian, so the first time the host updates, an
+# unmounted oracle would begin comparing two tzdb releases and reporting the
+# gap as a disagreement. Mounting makes the comparison independent of the
+# image's data altogether, which is also why raising this pin can never change
+# what is being compared.
+python	docker.io/library/python:3.13-slim@sha256:37134a49d21d2120e4c4d73bb76f8a4ab9aef31f096f7ec2ead48c2feead4332	Python 3.13	Zone offsets, DST flags and abbreviations, over every zone the system database holds
+
+# V8's Temporal, for RFC 9557. Temporal's string format *is* RFC 9557 - the
+# `[America/New_York]` suffix was standardised for it - so this is the grammar's
+# reference implementation rather than a second opinion on it.
+#
+# Node 22 specifically, because temporal_diff.js documents three things this
+# V8 rejects that RFC 9557 allows, and counts them rather than filtering them
+# so that a newer V8 accepting them shows up as those counts falling to zero.
+# Pinning a newer node would silently retire that measurement.
+node	docker.io/library/node:22-slim@sha256:25330af3531fb5e23318554a0aa911125b6e91b1b777edf7655501d207c067a2	Node 22	RFC 9557 parsing: every field of every string both sides accept, and the ones only one of them does
+
+# ICU, for the LDML formatter and parser. design.md section 8.3 makes ICU the
+# *definition* of what a pattern means, so this is the one reference here whose
+# disagreement is a defect rather than a reading.
+#
+# **This is the pin that does name data**, because CLDR ships inside ICU: what
+# a pattern means is a CLDR question and the ICU release answers it. 76.1 is
+# what this machine has had all along and what the seven known divergences in
+# ldml_diff.py are calibrated against. `unicode` pins 78.3 for its own reason -
+# it needs Unicode 17.0 - and the two libraries asking different ICUs is fine
+# so long as both say so, which until 2026-09-24 neither did.
+#
+# **Built here, but from Debian stable rather than from source**, which is the
+# other departure from `unicode`. It built 78.3 from a source tarball because
+# 78.3 exists only in sid, and CONTAINERS.md section 2.6 is right that an apt
+# pin into sid expires sooner than a stable one. 76.1 is Debian 13's own
+# libicu-dev, and Debian 13 is stable, so that reason does not apply: the base
+# is pinned by digest and the package comes from a release that does not move.
+#
+# Being built here, the pin is not a digest - two builds of one Dockerfile are
+# not two copies of one image - so the run-time version check in oracle_env.py
+# is the real guarantee. Build it with `make oracle-images`.
+icu	localhost/ghoti-chron-oracle-icu:76.1	ICU 76.1	LDML pattern formatting and parsing in the root locale

@@ -887,7 +887,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar vectors-calendars
 .PHONY: tools check-oracle-zoneinfo check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license check-counts
 .PHONY: check-aliasing check-stamps check-skip-notices
-.PHONY: check-oracle-temporal check-oracles test-full
+.PHONY: check-oracle-temporal check-oracles test-full oracle-images
 # Release build commands
 .PHONY: all install test test-quiet test-asan test-valgrind test-valgrind-quiet test-watch uninstall watch
 # Debug build commands
@@ -1695,7 +1695,7 @@ $(APP_DIR)/tools/%$(EXE_EXTENSION): tools/oracle/%.c $(APP_DIR)/$(STATIC_TARGET)
 	$(CC) $(CFLAGS) $(INCLUDE) -o $@ $< $(LDFLAGS) $(CHRONLIBRARY) $(CUTIL_LIBS) $(STATIC_LINK_LIBS)
 
 tools: ## Build the oracle drivers the differentials run against
-tools: $(ORACLE_TOOLS) $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
+tools: $(ORACLE_TOOLS)
 
 # ICU, for the LDML differential. Found through pkg-config and **never linked
 # by the library** - design.md section 1: what ICU sells beyond a copy of the
@@ -1704,6 +1704,11 @@ tools: $(ORACLE_TOOLS) $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
 ICU_CFLAGS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --cflags icu-i18n icu-uc 2>/dev/null)
 ICU_LIBS := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-config --libs icu-i18n icu-uc 2>/dev/null)
 
+# Not a prerequisite of anything since the LDML gates moved to a pinned image:
+# they compile this source *inside* the container, against the ICU pinned
+# there, and GHOTI_ORACLE_MODE=host compiles its own copy too. Kept so that
+# `make $(APP_DIR)/tools/icu_format` still gives a binary to anyone debugging
+# ICU's own behaviour, and so the host build path does not rot unseen.
 $(APP_DIR)/tools/icu_format$(EXE_EXTENSION): tools/oracle/icu_format.cpp $(LINK_FLAGS_STAMP)
 	@if [ -z "$(strip $(ICU_LIBS))" ]; then \
 		printf "\033[0;31micu_format: ICU was not found by pkg-config.\033[0m\n" >&2; \
@@ -1715,19 +1720,20 @@ $(APP_DIR)/tools/icu_format$(EXE_EXTENSION): tools/oracle/icu_format.cpp $(LINK_
 	@mkdir -p $(@D)
 	$(CXX) $(CXXFLAGS) $(ICU_CFLAGS) -o $@ $< $(ICU_LIBS)
 
-check-oracle-ldml: ## Check the LDML formatter against ICU (needs libicu-dev)
-check-oracle-ldml: $(APP_DIR)/tools/gchron_format$(EXE_EXTENSION) \
-		$(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
-	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/oracle/ldml_diff.py \
-		--chron $(APP_DIR)/tools/gchron_format$(EXE_EXTENSION) \
-		--icu $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
+check-oracle-ldml: ## Check the LDML formatter against ICU
+# No longer depends on $(APP_DIR)/tools/icu_format, and that is the point: the
+# reference is compiled inside its own image against the ICU pinned there, so
+# this gate runs on a machine with no libicu-dev at all. Keeping the host
+# driver as a prerequisite would have put the old dependency back somewhere
+# nobody would look for it.
+check-oracle-ldml: $(APP_DIR)/tools/gchron_format$(EXE_EXTENSION)
+	$(call run-oracle,icu,python3 tools/oracle/ldml_diff.py \
+		--chron $(APP_DIR)/tools/gchron_format$(EXE_EXTENSION))
 
-check-oracle-ldml-parse: ## Check the LDML parser against ICU (needs libicu-dev)
-check-oracle-ldml-parse: $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
-		$(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
-	@LD_LIBRARY_PATH="$(TEST_LD_PATH)" python3 tools/oracle/ldml_parse_diff.py \
-		--chron $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION) \
-		--icu $(APP_DIR)/tools/icu_format$(EXE_EXTENSION)
+check-oracle-ldml-parse: ## Check the LDML parser against ICU
+check-oracle-ldml-parse: $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION)
+	$(call run-oracle,icu,python3 tools/oracle/ldml_parse_diff.py \
+		--chron $(APP_DIR)/tools/gchron_scan$(EXE_EXTENSION))
 
 #
 # Temporal's string format *is* RFC 9557 - the `[America/New_York]` suffix was
@@ -1754,6 +1760,35 @@ check-oracle-temporal: $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)
 # either, so each ran only when somebody typed its name and a regression
 # waited for that to happen.
 #
+#
+# Every differential goes through oracle_run.py, which resolves the reference
+# and asks its version *before* the gate runs, and prints what answered on the
+# line above the gate's numbers. notes/suite/CONTAINERS.md has the pattern;
+# tools/oracle/containers/IMAGES has the pins.
+#
+# GHOTI_ORACLE_MODE=host runs this machine's own tools instead, and says
+# `unpinned` in the line it prints. There is deliberately no fallback between
+# the two: a gate that quietly drops from the pinned reference to whatever is
+# installed prints the same green line for a weaker claim.
+#
+GHOTI_CONTAINER_ENGINE ?= docker
+ORACLE_ENV = LD_LIBRARY_PATH="$(TEST_LD_PATH)" \
+	GHOTI_CONTAINER_ENGINE="$(GHOTI_CONTAINER_ENGINE)"
+
+define run-oracle
+	@$(ORACLE_ENV) python3 tools/oracle/oracle_run.py $(1) -- $(2)
+endef
+
+oracle-images: ## Build the oracle images that are built here rather than pulled
+# Only ICU is built here; the other two are stock images pulled by digest. The
+# tag comes out of IMAGES rather than being repeated, so the thing built and
+# the thing looked for cannot drift.
+oracle-images:
+	@printf "\n### Building the ICU oracle image ###\n"
+	@$(GHOTI_CONTAINER_ENGINE) build \
+		-t $$(awk -F'\t' '/^icu\t/ {print $$2}' tools/oracle/containers/IMAGES) \
+		tools/oracle/containers/icu
+
 check-oracles: ## Run every differential against its outside oracle
 check-oracles: check-oracle-ldml check-oracle-ldml-parse check-oracle-temporal
 check-oracles: check-oracle-zoneinfo

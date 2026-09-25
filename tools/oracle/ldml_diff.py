@@ -18,6 +18,7 @@ Copyright 2026 by Corey Pennycuff
 
 import argparse
 import itertools
+import os
 import subprocess
 import sys
 
@@ -91,9 +92,9 @@ MILLIS = [
 ]
 
 
-def run(path, queries):
+def run(argv, queries):
     stdin = "\n".join(queries) + "\n"
-    result = subprocess.run([path], input=stdin, capture_output=True,
+    result = subprocess.run(list(argv), input=stdin, capture_output=True,
                             text=True)
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
@@ -102,33 +103,43 @@ def run(path, queries):
 
 
 
-def icu_version(icu_path):
-    """Which ICU answered, read from the driver that was compiled against it.
 
-    Recorded because it was not: this driver links whatever libicu
-    pkg-config finds on the host, another library in this suite pins its own,
-    and a disagreement is only interpretable against the Unicode data version
-    behind the release.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_env
+
+
+def icu_command(mode=None):
+    """The reference, compiled inside its image against that image's ICU.
+
+    Compiled at run time rather than shipped in the image, because the source
+    lives here and the image is deliberately ignorant of this library: what it
+    contains is an ICU and a compiler, and the driver it builds links only
+    ICU. That is the property that keeps the reference from being able to
+    reach the implementation it answers for.
+
+    In host mode the same `sh -c` runs on the host and compiles against
+    whatever libicu is installed, which is the old behaviour and now says so
+    in the line the gate prints.
     """
-    try:
-        run = subprocess.run([icu_path, "version"], capture_output=True,
-                             text=True)
-    except OSError:
-        return "unknown"
-    return run.stdout.strip() or "unknown"
+    inner = ("g++ -O1 -o /tmp/icu_format"
+             " %s/tools/oracle/icu_format.cpp -licui18n -licuuc"
+             " && exec /tmp/icu_format" % oracle_env.ROOT)
+    if mode:
+        inner += " " + mode
+    return oracle_env.command("icu", ["sh", "-c", inner])
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chron", required=True)
-    parser.add_argument("--icu", required=True)
     parser.add_argument("--max-report", type=int, default=30)
     args = parser.parse_args()
 
     queries = ["%s\t%s\t%d" % (p, z, m)
                for p, z, m in itertools.product(PATTERNS, ZONES, MILLIS)]
 
-    ours = run(args.chron, queries)
-    theirs = run(args.icu, queries)
+    ours = run([args.chron], queries)
+    theirs = run(icu_command(), queries)
     if len(ours) != len(queries) or len(theirs) != len(queries):
         sys.stderr.write("ldml_diff.py: %d queries, %d chron lines, %d icu "
                          "lines\n" % (len(queries), len(ours), len(theirs)))
@@ -160,13 +171,27 @@ def main():
                              % (query.replace("\t", " | "), ours_out,
                                 theirs_out))
 
-    print("oracle: %s" % icu_version(args.icu))
     print("%d patterns x %d zones x %d instants = %d queries"
           % (len(PATTERNS), len(ZONES), len(MILLIS), len(queries)))
     print("%d agreed, %d both refused, %d only chron refused, "
           "%d only icu refused, %d disagreed"
           % (agreed, both_refused, len(only_we_refused),
              len(only_they_refused), len(disagreed)))
+    #
+    # A differential that compared nothing is a failure, not a pass. This is
+    # not hypothetical: converting this gate to a containerised reference, the
+    # driver was briefly handed its queries in the wrong mode, ICU refused all
+    # 828 of them, and the tool printed a summary and exited 0. It was caught
+    # only because the previous run's numbers were known - which is not a
+    # property a fresh machine has.
+    #
+    if agreed == 0:
+        sys.stderr.write(
+            "ldml_diff: nothing was compared - %d queries, %d agreed. The\n"
+            "reference answered but agreed with nothing, which means it was\n"
+            "asked the wrong question rather than that the library is wrong.\n"
+            % (len(queries), agreed))
+        return 1
 
     for pattern, reason in sorted(KNOWN_DIVERGENCES.items()):
         cases = known.get(pattern)

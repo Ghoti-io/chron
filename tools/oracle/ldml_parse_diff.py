@@ -34,6 +34,7 @@ Copyright 2026 by Corey Pennycuff
 
 import argparse
 import itertools
+import os
 import subprocess
 import sys
 
@@ -83,9 +84,8 @@ MILLIS = [
 ]
 
 
-def run(path, lines, mode=None):
-    command = [path] + ([mode] if mode else [])
-    result = subprocess.run(command, input="\n".join(lines) + "\n",
+def run(argv, lines):
+    result = subprocess.run(list(argv), input="\n".join(lines) + "\n",
                             capture_output=True, text=True)
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
@@ -94,25 +94,35 @@ def run(path, lines, mode=None):
 
 
 
-def icu_version(icu_path):
-    """Which ICU answered, read from the driver that was compiled against it.
 
-    Recorded because it was not: this driver links whatever libicu
-    pkg-config finds on the host, another library in this suite pins its own,
-    and a disagreement is only interpretable against the Unicode data version
-    behind the release.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import oracle_env
+
+
+def icu_command(mode=None):
+    """The reference, compiled inside its image against that image's ICU.
+
+    Compiled at run time rather than shipped in the image, because the source
+    lives here and the image is deliberately ignorant of this library: what it
+    contains is an ICU and a compiler, and the driver it builds links only
+    ICU. That is the property that keeps the reference from being able to
+    reach the implementation it answers for.
+
+    In host mode the same `sh -c` runs on the host and compiles against
+    whatever libicu is installed, which is the old behaviour and now says so
+    in the line the gate prints.
     """
-    try:
-        run = subprocess.run([icu_path, "version"], capture_output=True,
-                             text=True)
-    except OSError:
-        return "unknown"
-    return run.stdout.strip() or "unknown"
+    inner = ("g++ -O1 -o /tmp/icu_format"
+             " %s/tools/oracle/icu_format.cpp -licui18n -licuuc"
+             " && exec /tmp/icu_format" % oracle_env.ROOT)
+    if mode:
+        inner += " " + mode
+    return oracle_env.command("icu", ["sh", "-c", inner])
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chron", required=True)
-    parser.add_argument("--icu", required=True)
     parser.add_argument("--max-report", type=int, default=25)
     args = parser.parse_args()
 
@@ -121,13 +131,13 @@ def main():
                for p, z, m in itertools.product(patterns, ZONES, MILLIS)]
 
     # ICU writes the text; both sides are then handed those exact bytes.
-    written = run(args.icu, queries)
+    written = run(icu_command(), queries)
     if len(written) != len(queries):
         sys.stderr.write("ldml_parse_diff.py: %d queries, %d icu lines\n"
                          % (len(queries), len(written)))
         return 1
-    recovered = run(args.chron, written)
-    theirs = run(args.icu, written, mode="parse")
+    recovered = run([args.chron], written)
+    theirs = run(icu_command("parse"), written)
     if len(recovered) != len(written) or len(theirs) != len(written):
         sys.stderr.write("ldml_parse_diff.py: %d icu lines, %d chron, %d icu "
                          "parse\n" % (len(written), len(recovered), len(theirs)))
@@ -167,9 +177,19 @@ def main():
             failures.append((pattern, text, got, want))
 
     total = agreed + len(failures)
-    print("oracle: %s" % icu_version(args.icu))
     print("ldml_parse_diff: %d of %d readings agreed with ICU's own"
           % (agreed, total))
+    #
+    # Zero comparisons is a failure. See the note in ldml_diff.py: this gate
+    # printed "0 of 0 readings agreed" and exited 0 while the reference was
+    # refusing every pattern it was handed.
+    #
+    if total == 0:
+        sys.stderr.write(
+            "ldml_parse_diff: nothing was compared. The reference answered "
+            "but read none of the %d patterns, which points at the question "
+            "rather than at the library.\n" % len(queries))
+        return 1
     print("  %d partial patterns refused, as section 8.7 says they must"
           % incomplete)
     if icu_refused:
