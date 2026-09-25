@@ -93,6 +93,22 @@ def run(path, lines, mode=None):
     return result.stdout.splitlines()
 
 
+
+def icu_version(icu_path):
+    """Which ICU answered, read from the driver that was compiled against it.
+
+    Recorded because it was not: this driver links whatever libicu
+    pkg-config finds on the host, another library in this suite pins its own,
+    and a disagreement is only interpretable against the Unicode data version
+    behind the release.
+    """
+    try:
+        run = subprocess.run([icu_path, "version"], capture_output=True,
+                             text=True)
+    except OSError:
+        return "unknown"
+    return run.stdout.strip() or "unknown"
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chron", required=True)
@@ -151,6 +167,7 @@ def main():
             failures.append((pattern, text, got, want))
 
     total = agreed + len(failures)
+    print("oracle: %s" % icu_version(args.icu))
     print("ldml_parse_diff: %d of %d readings agreed with ICU's own"
           % (agreed, total))
     print("  %d partial patterns refused, as section 8.7 says they must"

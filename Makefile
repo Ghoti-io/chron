@@ -1739,7 +1739,7 @@ check-oracles: ## Run every differential against its outside oracle
 check-oracles: check-oracle-ldml check-oracle-ldml-parse check-oracle-temporal
 check-oracles: check-oracle-zoneinfo
 
-check-oracle-zoneinfo: ## Check every zone against Python's zoneinfo (needs python3)
+check-oracle-zoneinfo: ## Check every zone the system database holds against Python's zoneinfo
 check-oracle-zoneinfo: $(APP_DIR)/tools/gchron_zone$(EXE_EXTENSION)
 	@if ! command -v python3 >/dev/null 2>&1; then \
 		printf "\033[0;31mcheck-oracle-zoneinfo: python3 is not installed.\033[0m\n" >&2; \

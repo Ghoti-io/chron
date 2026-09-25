@@ -31,6 +31,7 @@
  */
 
 #include <unicode/calendar.h>
+#include <unicode/uvernum.h>
 #include <unicode/locid.h>
 #include <unicode/smpdtfmt.h>
 #include <unicode/timezone.h>
@@ -42,6 +43,20 @@
 #include <string>
 
 int main(int argc, char ** argv) {
+  /*
+   * `version` answers which ICU this binary was compiled against, which no
+   * gate used to record. Two libraries in this suite ask ICU questions and
+   * they do not necessarily ask the same ICU: this one takes whatever
+   * pkg-config finds on the host. The number that decides whether a
+   * disagreement can be a defect at all is the Unicode data version rather
+   * than the release, so both are printed, and both come from the headers
+   * this file compiles against rather than from a library queried at runtime.
+   */
+  if (argc > 1 && std::string(argv[1]) == "version") {
+    std::printf("icu %s\tunicode %s\n", U_ICU_VERSION, U_UNICODE_VERSION);
+    return 0;
+  }
+
   const bool parsing = (argc > 1 && std::string(argv[1]) == "parse");
   std::string line;
 

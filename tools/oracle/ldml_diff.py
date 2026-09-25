@@ -101,6 +101,22 @@ def run(path, queries):
     return result.stdout.splitlines()
 
 
+
+def icu_version(icu_path):
+    """Which ICU answered, read from the driver that was compiled against it.
+
+    Recorded because it was not: this driver links whatever libicu
+    pkg-config finds on the host, another library in this suite pins its own,
+    and a disagreement is only interpretable against the Unicode data version
+    behind the release.
+    """
+    try:
+        run = subprocess.run([icu_path, "version"], capture_output=True,
+                             text=True)
+    except OSError:
+        return "unknown"
+    return run.stdout.strip() or "unknown"
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chron", required=True)
@@ -144,6 +160,7 @@ def main():
                              % (query.replace("\t", " | "), ours_out,
                                 theirs_out))
 
+    print("oracle: %s" % icu_version(args.icu))
     print("%d patterns x %d zones x %d instants = %d queries"
           % (len(PATTERNS), len(ZONES), len(MILLIS), len(queries)))
     print("%d agreed, %d both refused, %d only chron refused, "

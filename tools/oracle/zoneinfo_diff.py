@@ -52,6 +52,45 @@ FIXED = [
 ]
 
 
+def tzdata_release(tzdir):
+    """The tzdb release the files under `tzdir` came from, or None."""
+    try:
+        with open(os.path.join(tzdir, "tzdata.zi"), "r") as handle:
+            for line in handle:
+                if line.startswith("# version "):
+                    return line.split(None, 2)[2].strip()
+    except OSError:
+        pass
+    return None
+
+
+def system_zones(tzdir):
+    """Every zone the database holds, named the way it names them.
+
+    A zone is a file whose first four bytes are `TZif`, which is what the
+    library's own reader requires; `posixrules` is excluded because it is the
+    POSIX fallback rule set rather than a zone anyone can ask for by name.
+    """
+    found = set()
+    root = pathlib.Path(tzdir)
+    if not root.is_dir():
+        return found
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            with open(path, "rb") as handle:
+                if handle.read(4) != b"TZif":
+                    continue
+        except OSError:
+            continue
+        name = str(path.relative_to(root))
+        if name == "posixrules":
+            continue
+        found.add(name)
+    return found
+
+
 def lattice(step):
     start = calendar.timegm((2024, 1, 1, 0, 0, 0, 0, 0, 0))
     end = calendar.timegm((2028, 1, 1, 0, 0, 0, 0, 0, 0))
@@ -86,13 +125,27 @@ def main():
 
     tzdir = os.environ.get("TZDIR", "/usr/share/zoneinfo")
     try:
-        zones = sorted(zoneinfo.available_timezones())
+        listed = set(zoneinfo.available_timezones())
     except Exception as error:
         sys.stderr.write("zoneinfo.py: %s\n" % error)
         return 1
+    #
+    # The population is the *database's*, which is what the docstring above
+    # claims and what this did not do: it swept
+    # zoneinfo.available_timezones(), so the set being checked was the
+    # oracle's and a zone the database holds that the oracle cannot construct
+    # was not skipped, not reported, and not in any denominator - it simply
+    # was not a question. On this machine the two sets differ by one file and
+    # that file is not a zone, so the narrowing was invisible; on a machine
+    # whose tzdata omits the backward-compatibility links while the database
+    # carries them, it would not be.
+    #
+    held = system_zones(tzdir)
+    zones = sorted(held | listed)
     if not zones:
         sys.stderr.write("zoneinfo.py: no zones available; nothing checked\n")
         return 1
+    unaskable = sorted(held - listed)
 
     instants = FIXED + lattice(args.step)
     queries = []
@@ -130,10 +183,29 @@ def main():
             continue
         checked += 1
 
-    print("tzdir %s: %d zones, %d probes each" % (tzdir, len(zones),
-                                                  len(instants)))
+    release = tzdata_release(tzdir)
+    print("tzdir %s (tzdata %s): %d zones, %d probes each"
+          % (tzdir, release or "unknown", len(zones), len(instants)))
     print("%d agreed, %d could not be asked, %d disagreed"
           % (checked, skipped, len(queries) - checked - skipped))
+    #
+    # Named rather than merely counted: a zone the database holds and the
+    # oracle cannot construct is the one case where a green line means less
+    # than it looks like, so it is worth reading rather than inferring from
+    # two totals.
+    #
+    if unaskable:
+        print("%d zone(s) the database holds that this oracle cannot "
+              "construct, so nothing here checks them:" % len(unaskable))
+        for name in unaskable[:25]:
+            print("  %s" % name)
+        if len(unaskable) > 25:
+            print("  ... and %d more" % (len(unaskable) - 25))
+    #
+    # This is the *system* database, which gchron_zone drives through
+    # gchron_zonedb_system(). The embedded table is a different population and
+    # no differential reaches it; notes/chron/ORACLES-OPEN.md has the detail.
+    #
     if mismatches:
         print("\nfirst disagreements:")
         print("\n".join(mismatches))
