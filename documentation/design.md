@@ -1,10 +1,8 @@
-# The design of ghoti.io-chron
+# Design
 
-**Status:** all five phases have shipped. This
-page says what exists and why, so that the code can be judged against it
-rather than the other way round. A change of mind lands here first, in the
-same commit as the code that needs it (`CONVENTIONS.md` §9), and §16 marks
-what is built.
+This page is the design: the types, the rules, and why they are shaped
+that way. The behaviour it describes is what the library implements. The
+grammars are in [text-formats.md](text-formats.md).
 
 `chron` is the suite's time library: instants, civil dates and times, time
 zones, calendars, durations, and the parsing and formatting of all of them. It
@@ -30,7 +28,7 @@ without thinking. Each word is a mechanism:
 | Property | Mechanism |
 | --- | --- |
 | **Correct** | Absolute time and civil time are different types and the conversion between them is a function that can fail (§3). Every policy enum's zero value refuses rather than guesses (§3.7). The arithmetic is integer, checked, and returns a result code (§7). Every rule is checked against an outside reference - `zdump`, glibc's `tzset`, Python's `zoneinfo`, ICU, the published calendar tables - never against this library's own opinion (§12). |
-| **Cross-platform** | Tiers 0 and 1 (§2) touch no operating-system API at all and behave identically everywhere by construction. The two places that do touch the OS - the clock and the zone-file loader - are one file each, with a Windows branch marked per `CONVENTIONS.md` §11. |
+| **Cross-platform** | Civil time, instants and the named grammars touch no operating-system API and behave identically everywhere by construction. The two places that do touch the OS - the clock and the zone-file loader - are one file each, with a Windows branch marked per `CONVENTIONS.md` §11. |
 | **Dependency-free** | The only link dependency is `cutil`, for the allocator, checked size math, a mutex, path joining and whole-file reading. Time-zone data comes from the operating system's `zoneinfo` directory or from a table the build generates from the IANA source; ICU is used as an *oracle* in the tests and is never linked (§12). |
 | **Enterprise-ready** | No global state: no `TZ` read the caller did not ask for, no `tzset()`, no static return buffers, no hidden "system default zone" (§3.8). "Now" is injectable, so anything that depends on it is testable (§9). The data that answered a question - the tzdata version, the leap table's expiry - is queryable, because "which rules produced this timestamp" is an audit question (§6.6). |
 | **Useful** | The first consumers exist today and their exact needs are enumerated in §11. Named formats exist so that nobody types `YYYY` when they meant `yyyy` (§8.4). The encodings other systems use - `FILETIME`, NTP, Excel serials, DOS timestamps - are converted by name, each with its classic defect documented (§10). |
@@ -102,18 +100,17 @@ so the list comes first, and the rest of the design refers back to it by row.
 
 ## 3. The type system
 
-Four tiers, split by **what data each one needs**. The tier boundary is the
-dependency boundary, and it is why `text` can use this library without
-pulling in a single data file.
+The library splits by **what data a call needs**. That split is why `text`
+can use this library without pulling in a single data file.
 
-| Tier | Holds | Needs | Consumers |
+| What | Holds | Needs | Who uses it |
 | --- | --- | --- | --- |
-| 0 | civil arithmetic: dates, times, day-of-week, weeks, epoch days; calendars | nothing | everyone |
-| 1 | instants, exact durations, fixed offsets, RFC 3339 / ISO 8601 / RFC 9557 text | nothing | `text`, `compress`, `image` |
-| 2 | named time zones, DST transitions, the local zone | TZif files or the embedded table | `ctang`, applications |
-| 3 | presentation: month and day names, LDML patterns, `strftime` | a names provider (English is built in) | `ctang` |
+| Civil time | dates, times, day-of-week, weeks, epoch days; calendars | nothing | everyone |
+| Instants and fixed offsets | instants, exact durations, fixed offsets, RFC 3339 / ISO 8601 text | nothing | `text`, `compress`, `image` |
+| Named zones | DST transitions, the local zone, RFC 9557 | TZif files or the embedded table | `ctang`, applications |
+| Presentation | month and day names, LDML patterns, `strftime` | a names provider (English is built in) | `ctang` |
 
-Nothing in tier *n* includes a header from tier *n+1*, and
+A header that needs no data file does not include one that does, and
 `make check-layering` fails the build if it does (§13).
 
 ### 3.1 Value types
@@ -538,8 +535,7 @@ describes the rule for every instant after the last listed transition.
 Reading it is a few hundred lines. Python's `zoneinfo`, Go's `time` and
 Rust's `chrono-tz` do exactly this; ICU bundles a copy of the same data and
 its own reader. What ICU sells beyond that is CLDR - names and formats in
-three hundred locales - which is tier 3 and is not needed to know what time
-it is in Paris.
+three hundred locales - which is not needed to know what time it is in Paris.
 
 This machine's copy is tzdata **2026c** in TZif version 2 files, built
 `-b fat` as Debian does: the transition tables are pre-expanded to 2037.
@@ -930,7 +926,7 @@ this library emitting `GMT+0`, `GMT-4` and `GMT+00:09:21` and declining to read
 any of them.
 
 What made that visible was nothing in the repository. `take_offset()` had carried
-a complete, documented reader for all three shapes since phase 3, reachable from
+a complete, documented reader for all three shapes, reachable from
 no call site, because the scan's offset arm listed three item kinds and computed
 three styles where the emitter has four. `gchron_format_is_invertible()` refused
 the letter; the differential that reads ICU's own bytes had no pattern carrying
@@ -1145,28 +1141,27 @@ value does not fit, and none rounds a sub-unit fraction without being asked.
 **`SYSTEMTIME` is in the table above and is not implemented.** No
 `gchron_interop_to_systemtime()` or `..._from_systemtime()` exists in
 `interop.h`; the row describes an encoding this library does not convert.
-It is phase 5's, together with ASN.1 `UTCTime`/`GeneralizedTime` - what
-X.509 and LDAP carry - and `struct timeval`. The row is left standing rather
-than deleted because the gap it records is real; a table of encodings is not
+ASN.1 `UTCTime`, `GeneralizedTime` and `struct timeval` do. The row is left
+standing because the gap it records is real; a table of encodings is not
 evidence that any of them are reachable, and this one was read that way.
 
 ---
 
 ## 11. The consumers, and what each one needs
 
-| Consumer | Uses | Tier | Notes |
-| --- | --- | --- | --- |
-| `text` YAML | the YAML 1.1 timestamp grammar; `GCHRON_YamlValue`; canonical output for `!!timestamp` | 1 | replaces the `has_timestamp` side-car in `yaml_resolve.c` and `yaml_internal.h` with a `GCHRON_YamlValue` on the scalar; the public `GTEXT_YAML_Timestamp` becomes a thin view or is replaced outright, which is free while `text` has no consumers |
-| `text` TOML | the TOML grammar; all four civil/offset types; `TRUNCATE` | 1 | TOML's Local Time is the one shape `yaml_resolve.c` cannot hold today |
-| `text` JSON Schema | `format`: `date-time`, `date`, `time`, `duration` with `GCHRON_LEAP_MINUTE` | 1 | the JSON-Schema-Test-Suite optional vectors become passable |
-| `ctang` | everything: parse, zones, arithmetic, LDML and a PHP letter table, the names provider | 0–3 | the first consumer of tiers 2 and 3; where an ICU-backed `GCHRON_Names` would live if `ctang` keeps ICU |
-| `compress` | gzip `MTIME`, DOS date/time | 1 | via `interop.h`; `compress` currently writes these fields by hand |
-| `image` | PNG `tIME`, EXIF `DateTime` and `OffsetTime`, TIFF `DateTime` | 1 | via `interop.h` |
-| `cjelly` | `GCHRON_Tick` for frame timing; later, a date picker | 0, 2 | |
-| games | tabular calendars; nine-digit years; the hybrid calendar's gap semantics as a template for a world's own reform | 0 | the reason the range in §3.2 is what it is |
+| Consumer | Uses | Notes |
+| --- | --- | --- |
+| `text` YAML | the YAML 1.1 timestamp grammar; `GCHRON_YamlValue`; canonical output for `!!timestamp` | replaces the `has_timestamp` side-car in `yaml_resolve.c` and `yaml_internal.h` with a `GCHRON_YamlValue` on the scalar; the public `GTEXT_YAML_Timestamp` becomes a thin view or is replaced outright, which is free while `text` has no consumers |
+| `text` TOML | the TOML grammar; all four civil/offset types; `TRUNCATE` | TOML's Local Time is the one shape `yaml_resolve.c` cannot hold today |
+| `text` JSON Schema | `format`: `date-time`, `date`, `time`, `duration` with `GCHRON_LEAP_MINUTE` | the JSON-Schema-Test-Suite optional vectors become passable |
+| `ctang` | everything: parse, zones, arithmetic, LDML and a PHP letter table, the names provider | the first consumer of named zones and of month and day names; where an ICU-backed `GCHRON_Names` would live if `ctang` keeps ICU |
+| `compress` | gzip `MTIME`, DOS date/time | via `interop.h`; `compress` currently writes these fields by hand |
+| `image` | PNG `tIME`, EXIF `DateTime` and `OffsetTime`, TIFF `DateTime` | via `interop.h` |
+| `cjelly` | `GCHRON_Tick` for frame timing; later, a date picker | |
+| games | tabular calendars; nine-digit years; the hybrid calendar's gap semantics as a template for a world's own reform | the reason the range in §3.2 is what it is |
 
-**`text` links `chron`** (decided 2026-09-20; §15). Tiers 0–1 are a few
-thousand lines with no data and no OS calls, a provider seam would have to
+**`text` links `chron`** (decided 2026-09-20; §15). Civil time, instants
+and the named grammars are a few thousand lines with no data and no OS calls, a provider seam would have to
 expose most of their surface anyway, and `text` already depends on `cutil`,
 so the DAG stays a DAG (`cutil → chron → text`). The parent `README.md`'s
 dependency graph gains the edge when the first `text` commit uses a
@@ -1238,12 +1233,9 @@ Every row of `regex`'s `testing.md` §9 table applies, and one is added: the
 is edited by hand. A conformance runner that cannot be made to fail is not
 measuring anything.
 
-This applies to the build gates as much as to the vector runners, and phase 3
-found two that had never been checked: a `test-valgrind` whose bare `for` loop
-reported only its last suite's status, and an ASan build with no header
-dependency tracking, which had been silently testing stale objects. Both were
-green the entire time. A gate is not tested until it has been *observed to
-fail* - not reasoned about, run - and each one here has been.
+This applies to the build gates as much as to the vector runners. A gate is
+not tested until it has been *observed to fail* - not reasoned about, run -
+and each one here has been.
 
 ---
 
@@ -1252,21 +1244,21 @@ fail* - not reasoned about, run - and each one here has been.
 ```
 include/ghoti.io/chron/
   macros.h libver.h libver_gen.h namespace.h allocator.h    per CONVENTIONS.md §2
-  core.h        GCHRON_Result (+4), GCHRON_Limits, GCHRON_Error, GCHRON_Diag, units      [tier 0]
+  core.h        GCHRON_Result (+4), GCHRON_Limits, GCHRON_Error, GCHRON_Diag, units
   civil.h       Date, Time, DateTime, YearMonth, MonthDay, epoch day, JDN, R.D.,
-                ISO week, ordinal, day-of-week, nth-weekday helpers                       [tier 0]
-  calendar.h    GCHRON_Calendar, gregory, julian, hybrid, tabular                         [tier 0]
-  duration.h    GCHRON_Duration, balance, until, ISO 8601 duration text                   [tier 0/1]
-  instant.h     GCHRON_Instant, Interval, exact arithmetic, rounding                       [tier 1]
-  offset.h      GCHRON_OffsetDateTime                                                     [tier 1]
+                ISO week, ordinal, day-of-week, nth-weekday helpers
+  calendar.h    GCHRON_Calendar, gregory, julian, hybrid, tabular
+  duration.h    GCHRON_Duration, balance, until, ISO 8601 duration text
+  instant.h     GCHRON_Instant, Interval, exact arithmetic, rounding
+  offset.h      GCHRON_OffsetDateTime
   parse.h       every grammar in §8.1 in *both* directions, GCHRON_ParseInfo,
-                GCHRON_WriteOptions, the policies                                          [tier 1 (+2 for RFC 9557 zones)]
-  format.h      GCHRON_Format, the compiler, named formats, GCHRON_Names                   [tier 3]
-  zone.h        GCHRON_ZoneDb, GCHRON_Zone, transitions, GCHRON_Resolve                    [tier 2]
-  zoned.h       GCHRON_ZonedDateTime                                                       [tier 2]
-  clock.h       GCHRON_Clock, GCHRON_Tick                                                  [tier 1]
-  leap.h        the leap table, GCHRON_TaiInstant                                          [tier 1, optional data]
-  interop.h     §10                                                                        [tier 1]
+                GCHRON_WriteOptions, the policies. RFC 9557 zones are in zoned.h
+  format.h      GCHRON_Format, the compiler, named formats, GCHRON_Names
+  zone.h        GCHRON_ZoneDb, GCHRON_Zone, transitions, GCHRON_Resolve
+  zoned.h       GCHRON_ZonedDateTime
+  clock.h       GCHRON_Clock, GCHRON_Tick
+  leap.h        the leap table, GCHRON_TaiInstant
+  interop.h     §10
   chron.h       umbrella
 
 src/core/       core.c allocator.c  (result strings, limits, diagnostics,
@@ -1303,16 +1295,16 @@ tests/data/vectors/ zones/ parse/ calendar/ leap/
 tests/fuzz/     §12.2
 ```
 
-The writers for the tier-1 grammars live in `parse.h` beside the parsers they
+The writers for the named grammars live in `parse.h` beside the parsers they
 invert, so that `parse(write(x))` is one header's promise and so that a
 consumer whose only use of this library is `text`'s can produce an RFC 3339
-timestamp without linking the tier-3 pattern compiler. `format.h`'s named
+timestamp without linking the pattern compiler. `format.h`'s named
 formats (§8.4) are a second route to the same text for a caller who is
 already compiling patterns.
 
-`make check-layering` greps for an include of a higher tier's header from a
-lower tier's source and fails naming the file, as `regex` does for its
-engine/syntax boundary. It is written as a make macro applied once per tier
+`make check-layering` greps for an include of a header that needs data from
+one that does not, and fails naming the file, as `regex` does for its
+engine/syntax boundary. It is written as a make macro applied once per group
 rather than as a loop over a packed string: the forbidden pattern is a regular
 alternation and so contains `|` itself, which a loop splitting on `|` cuts in
 half - leaving a check that passes on everything, a violation included. It was
@@ -1322,7 +1314,7 @@ watching the build fail.
 
 ### 13.1 Allocation
 
-Tiers 0 and 1 allocate nothing. The objects that do - `GCHRON_ZoneDb`,
+Civil time, instants and the named grammars allocate nothing. The objects that do - `GCHRON_ZoneDb`,
 `GCHRON_Zone` (owned by its database), `GCHRON_Format`, a tabular
 `GCHRON_Calendar`, the leap table - take a `GCHRON_Allocator` (a typedef of
 `GCU_Allocator`) at creation and free through it. Nothing is allocated for
@@ -1345,11 +1337,9 @@ the caller on a failing call, and the `CountingAllocator` pattern from
 Zero means no limit; `gchron_limits_default()` fills them; every parser and
 loader takes one; `ERR_LIMIT` names the field in the message.
 
-`GCHRON_Limits` carries only the fields something enforces **today** -
-`max_parse_length` after phase 0, and `max_tzif_bytes`, `max_transitions`,
-`max_zone_types` and `max_zones` after phase 1, and `max_tzdata_bytes` when
-the two hardcoded caps on `tzdata.zi` were found to disagree with each other -
-and each of the rest arrives in the phase that enforces it. A limit nothing reads is a promise nothing keeps, and this
+`GCHRON_Limits` carries only the fields something enforces:
+`max_parse_length`, `max_tzif_bytes`, `max_transitions`, `max_zone_types`,
+`max_zones` and `max_tzdata_bytes`. A limit nothing reads is a promise nothing keeps, and this
 suite has the scar: `regex` declared table flags it never consulted, and the
 mechanism they implied was designed twice before anyone noticed the field was
 dead.
@@ -1381,10 +1371,9 @@ other shared state.
 - **Locale-dependent behaviour of any kind.** Nothing reads `LC_*`.
 - **Smearing.** The library reports the instants the OS gives it; a smeared
   clock is the OS's decision and is invisible here.
-- **Waiting.** Nothing here sleeps, and no function blocks. Phase 5 makes
-  deadlines expressible - `gchron_tick_add()`, and the milliseconds `poll()`
-  wants - because that is arithmetic. Performing the wait is not; see §15
-  decision 8.
+- **Waiting.** Nothing here sleeps, and no function blocks. Deadlines are
+  expressible - `gchron_tick_add()`, and the milliseconds `poll()` wants -
+  because that is arithmetic. Performing the wait is not; see §15 decision 8.
 
 ---
 
@@ -1426,361 +1415,11 @@ someone objects.
    that can be interrupted by a signal, which is a different contract from
    everything around it. The recommendation is that chron makes the wait
    *computable* - `gchron_tick_add()` and the saturating millisecond
-   conversion, both in phase 5 - and leaves performing it to whatever already
+   conversion - and leaves performing it to whatever already
    owns the event loop. Revisit if two consumers ask.
 
 ---
 
-## 16. Plan
-
-Phases, in dependency order, with the milestone each one unlocks. Sizes
-follow `regex`'s `plan.md`: S up to a week, M two to four, L four to eight,
-for one engineer who knows the suite.
-
-| Phase | Work | Size | Unlocks |
-| --- | --- | --- | --- |
-| 0 **(done)** | Scaffold from `model` (`CONVENTIONS.md` §12); `core.h`; `civil.h` with Gregorian; `instant.h`; `offset.h`; `duration.h`'s type and its Appendix A text; RFC 3339 and TOML grammars, both directions; the exhaustive civil tests; the JSON Schema format vectors | M | **M1: `text` can replace its timestamp side-car and pass the JSON Schema `format` vectors** - reached; all 207 vectors pass |
-| 1 **(done)** | `zone.h`: TZif, the POSIX TZ footer, `ZoneDb`, `Resolve`, transitions, the local zone (Linux/macOS); `zoned.h`; the `zdump`, `zoneinfo` and `tzset` differentials; RFC 9557 | L | **M2: `ctang` can render a date in a zone** - reached |
-| 2 **(done)** | `calendar.h`: Julian, hybrid, tabular, ISO week and ordinal; `duration.h` in full: balance, until, overflow; rounding; the R&D vectors | M | **M3: games; historical dates** - reached |
-| 3 **(done)** | `format.h`: the LDML compiler, `strftime` lowering, named formats, the names provider; the ICU and `strftime` differentials; HTTP-date and RFC 5322; `interop.h`; `clock.h` | M | **M4: `ctang` formatting; `compress`/`image` interop** - reached |
-| 4 **(done)** | `leap.h`; the embedded tzdata table, `gchron_zonedb_default()`'s version comparison, and the Windows zone mapping; `notes/suite/WINDOWS-TODO.md` entries | M | **M5: Windows; metrology** - reached for metrology; Windows needs a Windows machine, and `notes/suite/WINDOWS-TODO.md` 6b and 6c say what done is |
-| 5 **(done)** | `round()` on the instant and civil types; tick deadlines and a saturating millisecond conversion; ASN.1 `UTCTime`/`GeneralizedTime`, `SYSTEMTIME` and `struct timeval`; the ISO 8601 interval grammar | S | **M6: a consumer can bucket a timestamp, expire a thing, and read a certificate** - reached |
-
-Each phase ends with `make test`, `test-valgrind`, `test-asan`, `fuzz` and
-`check-symbols` clean from an empty build directory, serially and under
-`-j`, per `CONVENTIONS.md` §12 item 10.
-
-**What phase 5 is for.** Phases 0 to 4 built the types and the grammars. What
-phase 5 adds is the handful of operations a consumer reaches for and does not
-find - none of them a new concept, all of them currently written by the caller
-and written wrong.
-
-*Rounding a point in time.* `gchron_duration_round()` takes a `GCHRON_Unit`
-and a `GCHRON_Rounding` and has since phase 2, but nothing rounds an
-`Instant`, a `DateTime` or a `ZonedDateTime`. `gchron_zoned_start_of_day()` is
-the only truncation there is, and it is the day case of a general operation.
-So "the hour this log line belongs to", "the month this invoice covers" and
-"the fifteen-minute bucket this sample falls in" - the arithmetic every
-consumer of a time library actually performs - are expressible only by pulling
-the civil fields apart and putting them back. Which is where the caller gets
-it wrong: truncating to a day in a zone is not truncating the instant, because
-the day is 23 or 25 hours long twice a year, and the answer has to come back
-through §6.4's function that can fail. The enums, the rounding modes and the
-disambiguation policy all exist; this is entry points, not design.
-
-*Deadlines.* `GCHRON_Tick` has exactly one operation, `gchron_tick_since()`.
-A timeout, a retry backoff, a cache expiry and a rate-limit window are all the
-same shape - read the counter, add a duration, later ask how much is left -
-and the middle step has no spelling here, so a caller reaches into `.nsec` and
-the type stops protecting them at the moment it matters. `gchron_tick_add()`
-closes it. Its companion is the conversion nobody enjoys writing: what is left
-until a deadline, as the `int` milliseconds `poll()`, `epoll_wait()` and
-`WaitForSingleObject()` take, saturating at `INT_MAX` rather than wrapping and
-clamping a passed deadline to 0 rather than returning a negative that those
-three read as "block forever". That last one is the bug, and it is silent: the
-loop simply stops waking up.
-
-*Three interop encodings.* ASN.1 `UTCTime` and `GeneralizedTime` are what
-X.509 certificates, CMS and LDAP carry, and `UTCTime`'s two-digit year has a
-pivot fixed by RFC 5280 §4.1.2.5.1 - under 50 is 20xx - which is precisely the
-rule a caller guesses at. `struct timeval` belongs beside `struct timespec`
-for the `select()`-era interfaces that still take it. And `SYSTEMTIME`
-**is listed in §10's table and has never been built** - the row is there, the
-function pair is not, which is the failure §12.3 is about in documentation
-rather than in code: the table was read as a record of what exists and was
-nothing of the kind.
-
-*The ISO 8601 interval.* `GCHRON_Interval` exists, and both halves of
-`start/end`, `start/duration` and `duration/end` already parse; only the
-combined grammar and the repeating form (`R5/PT1H`) are missing. §8.1 names
-the grammars, and this is the one it names nothing for.
-
-Phase 5 deliberately does **not** sleep; §15 decision 8 says why.
-
-**What phase 4 built, and what it found.** `leap.h` - the leap-second table,
-`GCHRON_TaiInstant`, and the conversions between UTC and TAI - together with
-the embedded time-zone database, `gchron_zonedb_default()`'s choice between it
-and the system one, and the Windows zone mapping.
-
-`GCHRON_LEAP_TABLE` had been declared since phase 0 and had answered
-`GCHRON_ERR_UNSUPPORTED` ever since, because a level that quietly behaved as
-`GCHRON_LEAP_MINUTE` would give a caller a strict check that passed for the
-wrong reason. It now consults a table, and refuses `1999-06-30T23:59:60Z` -
-when no leap second occurred - while accepting `1998-12-31T23:59:60Z`, which
-is the whole difference between the two levels. Three things about it are
-worth stating:
-
-- **The table is a parameter, not an ambient fact.** `GCHRON_ParseOptions`
-  carries it, and `parse.h` forward-declares the type rather than including
-  `leap.h`, so a caller who only parses text does not link the module.
-  Selecting the level without supplying a table is `GCHRON_ERR_INVALID` - the
-  same refusal as before, for the same reason.
-- **The question is about the UTC day, not the local one.** The suite's own
-  `1998-12-31T15:59:60.123-08:00` is a leap second belonging to the next UTC
-  day, so the date the table is asked about is the one after the offset is
-  applied.
-- **A `full-time` cannot be checked at all.** It has no date, and the table's
-  question is about a date, so a `:60` under this level is
-  `GCHRON_ERR_UNSUPPORTED` rather than silently settled at `MINUTE`'s
-  strictness.
-
-The table is checked against the tzdb's *other* leap-second file. The built-in
-one is generated from `leap-seconds.list`, so checking it against that would
-prove only that the generator can read back what it wrote; `leapseconds` is
-the same facts restated in zic's syntax by zic's maintainers, and agreeing
-with it is evidence. The complement is checked too - every day from 1972 to
-the table's expiry that is *not* in the list must not be a leap day - because
-a `gchron_leap_is_leap_day()` that simply answered "yes" would pass a list of
-positives.
-
-**The defect phase 4 found was in phase 0's code.**
-`gchron_parse_options_default()` assigned its fields one at a time, so the
-`leap_table` field this phase added was left holding whatever was on the
-caller's stack: a garbage pointer, returned under the name of a default. The
-same shape was in `gchron_write_options_default()` and
-`gchron_parse_info_clear()`. All three now zero the struct wholesale, which
-works precisely because section 3.7's "zero is strict" is true of every field
-- each policy enum's zero is its `REJECT`. Assigning the fields is the kind of
-correct that stops being correct when somebody adds a field. The regression
-test fills each struct with `0xAB` first, so a forgotten field shows up as
-that byte rather than as a zero that happened to be there.
-
-**What the embedded database is for.** There is no `/usr/share/zoneinfo` on
-Windows, so `gchron_zonedb_system()` fails there by design and
-`gchron_zonedb_default()` falls through - which makes the embedded path the
-one every Windows caller uses and the one Linux exercises least. It is 485
-zone names over 436 distinct TZif images, generated by `tools/tzdata/embed.py`
-and **not committed**: it is 2.3MB of C, it regenerates in under a second, and
-a copy in the repository would be one distribution's snapshot in every diff.
-
-It can do one thing a directory-backed database cannot. TZif has nowhere to
-record that `America/Atka` is a link to `America/Adak`, so a database that
-walks a directory has no way to know - but the generator can see that the file
-is a symbolic link, so an embedded database answers
-`gchron_zone_canonical_id()` truthfully. Each says what it actually knows
-rather than inventing the rest.
-
-`gchron_zonedb_default()` now chooses by currency. tzdata releases are `YYYYx`
-and order lexically, so the comparison is `strcmp` and not an approximation of
-one; ties and unknown versions both go to the system database, on the
-reasoning that the operating system's copy is the one somebody is updating.
-
-**The Windows mapping, and the gap it exposed.** CLDR's `windowsZones.xml`
-gives 139 Windows zone names - `"Pacific Standard Time"` and the rest - and
-`tools/tzdata/windows_zones.py` turns it into a committed table.
-`tools/tzdata/fetch-cldr.sh` downloads it; the build never reaches the
-network, which is why this one table is committed while the tzdata one is not.
-
-Checking those 139 identifiers against the embedded database found a real
-gap, and then a larger one behind it. Seven of them - `Asia/Calcutta`,
-`Europe/Kiev`, `America/Godthab` and four more - are backward-compatibility
-names, and Debian ships those as a separate `tzdata-legacy` package that is
-not installed by default. So the embedded table, built from the files present
-in the zoneinfo directory, lacked precisely the names Windows would hand it.
-
-The larger gap was that **the same was true of every database built from a
-directory**, which on Linux is the one `gchron_zonedb_default()` picks. A
-caller on a stock Debian could not open `Asia/Calcutta`, `Europe/Kiev` or
-`US/Eastern` at all - names that CLDR, Java and a great deal of existing
-configuration still use - while the embedded database could. The default
-therefore answered differently depending on which source it had chosen, which
-is exactly what §6.2 says must not happen.
-
-Both are fixed from the same place: `tzdata.zi`, which ships with base tzdata,
-lists every link the tzdb defines, and this library already read that file for
-its version string. The generator folds those links into the embedded table
-(485 zone names became 598), and a directory-backed database consults them
-when a file is not there - for the lookup, for the listing, and for
-`gchron_zone_canonical_id()`, which a directory-backed database could not
-previously answer at all. The two sources now agree on which names exist and
-on what each resolves to, which is what a test asserts.
-
-The test sweeps every row of the Windows mapping rather than sampling,
-because the seven missing names were exactly the ones a spot check would not
-have thought to include.
-
-The Windows branch of `gchron_zonedb_local()` is written, marked
-`TODO(windows):`, and listed in `notes/suite/WINDOWS-TODO.md` as 6b and 6c.
-Nothing here
-has been run on Windows and, per `CONVENTIONS.md` section 11, it is not
-claimed to work: "done" is a machine set to Pacific Standard Time returning
-`America/Los_Angeles`.
-
-**What phase 3 built, and what found its defects.** `format.h`: the LDML
-(TR35) pattern compiler, `strftime` lowered onto the same item list, the
-eleven named formats, and the names provider that keeps CLDR data out of the
-library. With it, `interop.h`'s thirteen foreign encodings and `clock.h`.
-
-The differential against ICU's `SimpleDateFormat` - 89 patterns across 7
-zones and 6 instants, 3,639 comparisons - found four disagreements, all of
-them chron's:
-
-1. **Offset seconds were dropped.** `Z`, `ZZ`, `ZZZ`, `O` and `OOOO` wrote
-   hours and minutes only. The tzdb records pre-standard local mean time to
-   the second, so `Europe/Amsterdam` before 1937 is `+00:19:32`, and every
-   one of those instants printed a different time than it named.
-2. **`ZZZZZ` did not write `Z` at a zero offset.** It follows `X`'s rule,
-   not `Z`'s - which is the one difference that makes it a separate spelling.
-3. **The week letters used ISO rules unconditionally.** `w` and `W` are
-   locale-dependent: the first day of the week and the minimal days in the
-   first week both come from the locale, and only a locale that says Monday
-   and four agrees with ISO. The rule is now transcribed from ICU's
-   `Calendar::weekNumber` and driven from the provider, so a provider that
-   says Sunday-and-one gets Sunday-and-one.
-4. **`EEEEEE` had nowhere to read from.** The short weekday is a sixth width,
-   distinct from the narrow one; `GCHRON_NAME_SHORT` was added for it.
-
-Three divergences remain and are stated rather than fixed: `z`, `zz` and
-`zzz` print the tzdb abbreviation (`EDT`) where CLDR root, having no zone
-names at all, falls back to `GMT-4`. A provider with CLDR data would print
-what CLDR says. The gate knows about these three and fails on a fourth.
-
-The fifth defect came from `fuzz_format`, which asserts that the bound
-`gchron_format_max_length` declares really bounds the output:
-
-5. **The declared bound omitted the sign on a padded year.** `u` and `Y`
-   write a negative year's sign *outside* the zero padding, so a count past
-   nine digits - `uuuuuuuuuuu` on year -1 - needed one byte more than the
-   library had promised. A caller who allocated exactly what it was told got
-   `GCHRON_ERR_LIMIT` from a buffer sized to its own contract. `y` was never
-   affected: the year of the era is always positive. The regression test
-   sweeps every letter at every count the compiler accepts, against the
-   values whose fields are widest, and asserts a buffer of exactly the
-   declared size is always enough - 2,880 combinations.
-
-**What phase 3 found in its own gates.** Two of them could not do their job,
-and neither failure was visible from a passing run:
-
-- **The ASan build had no header dependency tracking.** Its rules were
-  written without `-MMD -MP`, and because it builds into its own directory
-  nothing in the ordinary build's graph reached it. `GCHRON_Limits` grew a
-  field in this phase, and ASan reported a stack-buffer-overflow in
-  `gchron_limits_default` writing past a `GCHRON_Limits` local - a genuine
-  overflow of a phase-1 struct by a phase-3 function, in objects that should
-  have been rebuilt. The gate that exists to find memory errors was the only
-  build capable of manufacturing them. The fuzz build had the same hole.
-- **`test-valgrind` could not fail.** It was a bare `for` loop, which reports
-  the exit status of its *last* iteration, so the target passed whenever the
-  alphabetically-last suite passed regardless of the others. `--error-exitcode=1`
-  had been set the whole time and had nothing to report to. It now collects
-  the failures and names them, and was verified to fail on a failing first
-  suite followed by a passing one - the exact shape that used to slip through.
-
-**What phase 3 deliberately did not build.** No CLDR data ships with the
-library: `gchron_names_english()` is the root locale and nothing else, and
-§8.5's provider is the whole of the localisation story until a consumer needs
-more. Leap seconds stay absent - `GCHRON_LEAP_TABLE` still answers
-`GCHRON_ERR_UNSUPPORTED` rather than quietly behaving as `GCHRON_LEAP_MINUTE`.
-
-**What phase 2 built, and the two defects its own properties found.** The
-Julian, hybrid and tabular calendars; duration arithmetic in full - `add`,
-`until`, `balance`, `round` - and the permissive ISO 8601 duration grammar
-that phase 0 deferred. `convertdate`, which implements Reingold and
-Dershowitz's algorithms, supplies 35,906 Julian vectors and 120 rows around
-the three cut-overs.
-
-The two defects were both found by the round-trip property
-`from + until(from, to) == to`, which is the whole contract of a difference:
-
-1. **`until` composed its units differently from `add`.** `gchron_datetime_add`
-   applies years and months *together*, so `2000-02-29 + P26Y6M` is 2026-08-29
-   - the day survives because August has thirty-one. A `until` that found the
-   years first, re-anchored on the clamped 2026-02-28, and then found the
-   months from there produced `P26Y6M23D`, which adds back up to the wrong
-   day. `until` is now a refinement loop in which every probe re-adds the
-   **whole accumulated duration** from the start, so the two compose
-   identically by construction.
-2. **A difference held in nanoseconds spans only 292 years.** `int64_t`
-   nanoseconds reach 9.2e18, and three centuries is 9.5e18; every pair further
-   apart than that failed with `GCHRON_ERR_RANGE`. Differences and additions
-   now carry seconds plus a nanosecond remainder, which spans 292 *billion*
-   years - comfortably past what a nine-digit year can express.
-
-Both are the kind of defect no oracle finds, because no oracle is asked
-whether a library agrees with itself.
-
-**Where phase 2 departs from this page.** §5.2 says every function taking a
-`GCHRON_Date` takes a calendar argument, with `NULL` meaning Gregorian. The
-calendar-taking functions are in `calendar.h` instead, and `civil.h`'s keep
-their shorter Gregorian-only signatures -
-`gchron_date_to_epoch_day(date, &day)` rather than
-`gchron_date_to_epoch_day(NULL, date, &day)`. `text`, `compress` and `image`
-want the Gregorian case and nothing else, and a parameter they would always
-pass `NULL` to is noise in the header they actually read. The rule §5.2 states
-still holds wherever a calendar is accepted.
-
-§5.5 sketches a `leap_years_in_cycle` field beside the leap pattern.
-`GCHRON_LeapRule` does not have one: it is a popcount of the pattern, two ways
-of saying one thing are two ways for them to disagree, and this suite has the
-scar from `regex`'s unread table flags.
-
-**What phase 1 built, and what it found.** The TZif reader, the POSIX TZ
-footer, the database and its cache, `Resolve`, the local zone, `zoned.h` and
-RFC 9557. Three oracles agree with it: `zdump` over 8,540 transition rows of
-twenty zones; glibc's `tzset` over 548,960 probes covering **every distinct
-footer rule in the system database**, harvested rather than typed; and Python's
-`zoneinfo` over 105,948 probes covering **every zone**, run by
-`make check-oracle-zoneinfo`.
-
-The fuzzers found three defects the oracles could not, because all three need
-input no real database contains:
-
-1. A seventy-four byte file whose header claimed 987,654,144 transitions. The
-   reader sized an allocation from the count before checking the file was big
-   enough to hold them, and asked for eight gigabytes. A limits field would
-   not have caught it - zero means *no limit*, which is a legitimate setting.
-   The counts are now bounded by the file's own length, which no header can
-   inflate.
-2. `BST5CDT,M1.1.0/0,M1.1.0/1`, whose two changeovers land on the same
-   instant: the daylight-saving span is empty, so nothing ever changes. The
-   offset lookup already said so and the transition search did not.
-3. `BSTST5CDT1,M1.1.0/0,M1.1.1`, which runs daylight saving from the first
-   Sunday of January to the first *Monday* of January - so which changeover
-   comes first flips from year to year and the span wraps a year boundary.
-   The transition search deduced the offsets either side from which end of
-   the rule produced the candidate, which is only equivalent while the span
-   stays inside one year.
-
-The third is the one worth generalising. `gchron_posixtz_next_transition` now
-**reads the two sides back out of the offset lookup** rather than deducing
-them, so the two agree by construction; and a candidate whose two sides come
-out identical is not reported at all, because a transition that changes
-nothing is not a transition. The fuzz harness asserts exactly that invariant,
-which is why it found the case rather than merely surviving it - a harness
-that only checked for crashes would have passed all three of these.
-
-**What phase 1 deliberately did not build.** `gchron_zonedb_embedded()`
-returns `GCHRON_ERR_UNSUPPORTED` until phase 4 generates its table, rather
-than an empty database that answers every lookup with the same code and hides
-the reason; `gchron_zonedb_default()` therefore has only one candidate and
-nothing to compare versions of. `gchron_zone_canonical_id()` returns the
-identifier a zone was asked for, because TZif has nowhere to record what a
-link points at and the canonical-name table arrives with the embedded
-database. The Windows branches are written, marked `TODO(windows):` and listed
-in `notes/suite/WINDOWS-TODO.md`.
-
-**Where phase 1 departs from this page.** §13's layout puts every grammar in
-`parse.h`; RFC 9557 is declared in `zoned.h` instead, and implemented in
-`src/zone/rfc9557.c`. Resolving `[Europe/Paris]` needs a zone database, so
-putting it in `parse.h` would have meant that header reaching tier 2 - and the
-property the tier rule exists to protect is precisely that a consumer parsing
-RFC 3339 timestamps never sees a zone type. The `GCHRON_ZoneConflict` policy
-stays in `parse.h` beside the other three, so that §3.7's rule is still
-checkable in one place.
-
-**What phase 0 built, and what it deliberately did not.** `duration.h` carries
-the type, its sign invariant, `GCHRON_Overflow`, and the RFC 3339 Appendix A
-grammar in both directions - because M1's wording is "pass the JSON Schema
-`format` vectors" and one of the four vector files is `duration.json`. The
-arithmetic the plan assigns to phase 2 - `balance`, `until` with a largest
-unit, applying a calendar unit, rounding - is absent rather than stubbed, and
-so is the permissive ISO 8601 duration grammar. `GCHRON_LEAP_TABLE` is
-declared and returns `GCHRON_ERR_UNSUPPORTED` until phase 4 builds the table,
-rather than quietly behaving as `GCHRON_LEAP_MINUTE`: a caller who asked for
-the strict reading and silently got the loose one has a check that passes for
-the wrong reason.
-
----
 
 ## References
 

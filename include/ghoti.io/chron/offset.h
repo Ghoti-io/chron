@@ -23,8 +23,6 @@
  *
  * Civil time with a fixed offset from UTC: what an RFC 3339 timestamp says.
  *
- * Tier 1 (design.md section 3).
- *
  * Reference: RFC 3339 sections 4.3 and 5.6.
  */
 

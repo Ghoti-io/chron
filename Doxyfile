@@ -332,6 +332,10 @@ EXTENSION_MAPPING      =
 
 MARKDOWN_SUPPORT       = YES
 
+# GitHub-style heading ids, so a link written (#before-you-call-it) resolves.
+# The default, autotoc_mdN, does not match the anchors in the markdown.
+MARKDOWN_ID_STYLE      = GITHUB
+
 # When the TOC_INCLUDE_HEADINGS tag is set to a non-zero value, all headings up
 # to that level are automatically included in the table of contents, even if
 # they do not have an id attribute.

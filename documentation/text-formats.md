@@ -1,4 +1,4 @@
-# The text formats `chron` reads and writes
+# Text formats
 
 **Status:** describes what phases 0 through 4 shipped, plus the YAML 1.1
 timestamp added for `text`. The grammars `documentation/design.md` §8.1 lists
@@ -216,7 +216,7 @@ which is the rule in design §3.7 rather than a guess dressed as a default.
 
 Implemented in full: `gchron_parse_rfc9557` and `gchron_write_rfc9557`, in
 `zoned.h` rather than `parse.h` because resolving a zone name needs a zone
-database and `parse.h` is tier 1.
+database, and `parse.h` does not.
 
 RFC 9557 is RFC 3339 plus annotations in square brackets:
 

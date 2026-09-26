@@ -23,8 +23,6 @@
  *
  * Durations: an amount of time, in calendar units, exact units, or both.
  *
- * Tier 0/1 (design.md section 3).
- *
  * Reference: RFC 3339 appendix A; ISO 8601-1:2019 section 5.5.2.
  */
 

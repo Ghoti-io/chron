@@ -23,7 +23,7 @@
  *
  * Instants: a point on the timeline, with no calendar and no zone attached.
  *
- * Tier 1 (design.md section 3): needs no data file and no operating-system
+ * Needs no data file and no operating-system
  * call. A GCHRON_Instant and a GCHRON_DateTime are different types, and
  * converting between them needs an offset or a zone - which is the first and
  * largest of the mistakes this library exists not to repeat (design.md,

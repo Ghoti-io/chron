@@ -23,9 +23,8 @@
  *
  * Formatting: turning a value into text a person reads.
  *
- * Tier 3 (design.md section 3): the first thing here that needs data beyond
- * the value itself - month names, day names, era names - and the last tier a
- * consumer has to opt into.
+ * This is the part that needs data beyond the value itself: month names,
+ * day names and era names. Include this header to get them.
  *
  * A pattern is **compiled once** into a GCHRON_Format, immutable and
  * shareable, and applied many times - the same shape as `GRX_Regex` and for

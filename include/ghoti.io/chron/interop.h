@@ -23,7 +23,7 @@
  *
  * The encodings other systems use for a timestamp, converted by name.
  *
- * Tier 1 (design.md section 3). One function pair per foreign encoding, and
+ * One function pair per foreign encoding, and
  * **the defect in each encoding written in the header beside it** - because
  * mistake M17 is that Excel's 1900 leap year, NTP's 2036 era, DOS's local
  * time and FILETIME's 1601 epoch get rediscovered by each program that meets

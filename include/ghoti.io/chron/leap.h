@@ -23,7 +23,7 @@
  *
  * Leap seconds, and the one time scale that counts them.
  *
- * Tier 1 (design.md section 3), and **optional**: nothing else in this
+ * **Optional**: nothing else in this
  * library includes this header, and an application that does not convert to
  * TAI never links a byte of it. That separation is the whole design (mistake
  * M15). Section 5.1 says why `GCHRON_Instant` is Unix time and not TAI - no

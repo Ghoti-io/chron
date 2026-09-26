@@ -70,14 +70,14 @@
 /* Parsing                                                            */
 /* ------------------------------------------------------------------ */
 
-/** A cursor over one line. */
-typedef struct Line {
+/** A cursor over one line of the leap-second file. */
+typedef struct LeapCursor {
   const char * text;
   size_t len;
   size_t pos;
-} Line;
+} LeapCursor;
 
-static void skip_blanks(Line * l) {
+static void skip_blanks(LeapCursor * l) {
   while (l->pos < l->len && (l->text[l->pos] == ' ' || l->text[l->pos] == '\t')) {
     l->pos += 1;
   }
@@ -88,7 +88,7 @@ static void skip_blanks(Line * l) {
  *
  * @return true when at least one digit was read and nothing overflowed.
  */
-static bool read_u64(Line * l, int64_t * out) {
+static bool read_u64(LeapCursor * l, int64_t * out) {
   int64_t value = 0;
   size_t start = l->pos;
 
@@ -112,7 +112,7 @@ static bool read_u64(Line * l, int64_t * out) {
 }
 
 /** Whether the line, from `pos`, is blank or a comment. */
-static bool at_end_or_comment(const Line * l) {
+static bool at_end_or_comment(const LeapCursor * l) {
   size_t i = l->pos;
   while (i < l->len && (l->text[i] == ' ' || l->text[i] == '\t')) {
     i += 1;
@@ -145,7 +145,7 @@ GCHRON_Result gchron_leap_table_parse(const char * text, size_t len,
   while (pos < len) {
     size_t line_start = pos;
     size_t line_end = pos;
-    Line l;
+    LeapCursor l;
 
     while (line_end < len && text[line_end] != '\n') {
       line_end += 1;

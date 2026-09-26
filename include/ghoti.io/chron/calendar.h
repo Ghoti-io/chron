@@ -31,7 +31,7 @@
  * sees Julian dates *and* the same instants, offsets and zones as everybody
  * else (design.md section 5.2).
  *
- * Tier 0 (design.md section 3): needs nothing, allocates only for the
+ * Needs nothing, allocates only for the
  * calendars that are built at run time.
  *
  * `civil.h` is this header with the calendar left out. Every function there

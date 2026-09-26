@@ -24,7 +24,7 @@
  * Named time zones: what offset a place was on at an instant, when that last
  * changed, and what instants a wall-clock reading could have named.
  *
- * Tier 2 (design.md section 3): this is the first header that needs data on
+ * This is the first header that needs data on
  * disk. A consumer that only parses timestamps never includes it and never
  * loads a byte of time-zone data.
  *

@@ -24,7 +24,7 @@
  * Civil dates and times: the reading on a wall clock and a calendar, with no
  * time zone and no point on the timeline attached to it.
  *
- * Tier 0 (design.md section 3): needs nothing, allocates nothing, touches no
+ * Needs nothing, allocates nothing, touches no
  * operating-system call. Everything here is proleptic Gregorian; the other
  * calendars arrive with calendar.h.
  *

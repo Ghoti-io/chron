@@ -23,7 +23,7 @@
  *
  * Clocks: "now", as a parameter rather than a call.
  *
- * Tier 1 (design.md section 3). **Nothing inside this library calls
+ * **Nothing inside this library calls
  * gchron_clock_system().** The two places a "now" is needed - RFC 850's
  * two-digit-year rule, and a caller's own - take a GCHRON_Clock, so that a
  * test can pin the date and the behaviour on 31 December 2049 can be checked

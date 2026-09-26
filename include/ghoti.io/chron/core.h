@@ -23,7 +23,7 @@
  *
  * Result codes, diagnostics, limits and units for the Ghoti.io Chron library.
  *
- * Tier 0 (documentation/design.md section 3): this header needs nothing but
+ * This header needs nothing but
  * the C library, and every other header in the library reaches it.
  */
 

@@ -28,10 +28,10 @@
  * `Date.parse("2026-09-20")` came to give a different day in different
  * browsers (design.md section 8.1).
  *
- * Tier 1 (design.md section 3): no data file, no operating-system call. The
- * writers live here beside the parsers they invert, so that `parse(write(x))`
- * is one header's promise; format.h's pattern compiler is a separate, tier-3
- * route to the same text and is not needed to produce an RFC 3339 timestamp.
+ * No data file, no operating-system call. The writers live here beside the
+ * parsers they invert, so that `parse(write(x))` is one header's promise.
+ * `format.h`'s pattern compiler is a separate route to the same text and is
+ * not needed to produce an RFC 3339 timestamp.
  *
  * Phase 0 (design.md section 16) implements RFC 3339 - `date-time`,
  * `full-date`, `full-time` and appendix A's `duration` - and TOML 1.0.0's

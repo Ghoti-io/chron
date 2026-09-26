@@ -23,8 +23,8 @@
  *
  * Umbrella header for the Ghoti.io Chron library.
  *
- * Including this pulls in every tier. A consumer that wants only civil
- * arithmetic, or only the tier-1 text grammars, includes those headers
+ * Including this pulls in the whole library. A consumer that wants only civil
+ * arithmetic, or only the text grammars in `parse.h`, includes those headers
  * instead and links nothing it does not use (design.md section 3).
  */
 

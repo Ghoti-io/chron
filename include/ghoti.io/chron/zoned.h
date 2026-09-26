@@ -24,7 +24,6 @@
  * An instant, in a zone: the type that knows both what moment it is and what
  * a clock in that place reads.
  *
- * Tier 2 (design.md section 3).
  */
 
 #ifndef GHOTI_IO_GCHRON_ZONED_H
