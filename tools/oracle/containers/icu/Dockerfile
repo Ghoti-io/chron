@@ -17,18 +17,17 @@
 # **78.3, raised from 76.1 on 2026-09-25, and from source rather than from
 # Debian.** 76.1 is Debian 13's libicu-dev and an apt install of it was the
 # cheap and correct option while that was the pin. It stops being available the
-# moment the pin moves: 78.3 is in sid, and notes/suite/CONTAINERS.md section
-# 2.6 reasons out why an exact apt pin into sid is the wrong instrument for a
-# gate whose disagreement means a defect - sid moves continuously, so such a pin
-# expires, while a source release has no expiry. So this now builds what
-# `unicode`'s equivalent builds, the same way.
+# moment the pin moves: 78.3 is in sid. An exact apt pin into sid is the wrong
+# instrument for a gate whose disagreement means a defect - sid moves
+# continuously, so such a pin expires, while a source release has no expiry.
+# So this now builds what `unicode`'s equivalent builds, the same way.
 #
 # 78.3 is also the newest ICU4C release there is (2026-03-17; the later 79.x
 # tags on that repository are icu4x, which is the Rust project and not this
 # library's reference), and it is what `unicode` pins - so raising to it also
 # ends the suite asking one question of two CLDR versions.
 #
-# What is pinned, per section 2.6's two-part rule for a built-here image:
+# What is pinned, for a built-here image:
 #
 #   - the base, by digest
 #   - the source tarball, by the **SHA-512 the Unicode Consortium publishes**
@@ -88,8 +87,8 @@ RUN printf '%s\n' \
 
 # The root locale is what the differential asks in, and a formatter that reads
 # the environment's locale would answer a different question on a machine whose
-# LANG is set. notes/suite/CONTAINERS.md records this costing regex 1,855 rows
-# of false disagreement when its vim oracle inherited $LANG.
+# LANG is set. That cost regex 1,855 rows of false disagreement when its vim
+# oracle inherited $LANG.
 #
 # LD_LIBRARY_PATH because this ICU is in /usr/local rather than where the
 # distribution puts one, and the driver is compiled at run time against the

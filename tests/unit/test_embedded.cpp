@@ -5,7 +5,7 @@
  *
  * On Linux this path is the one that gets exercised least, because the system
  * database is always there and always preferred. On Windows it is the only
- * one there is (WINDOWS-TODO.md 6c), so it is tested here deliberately rather
+ * one there is, so it is tested here deliberately rather
  * than incidentally.
  *
  * Copyright 2026 by Corey Pennycuff
@@ -249,7 +249,7 @@ TEST(WindowsZones, EveryNameItCarriesResolvesInTheEmbeddedDatabase) {
   GCHRON_ZoneDb * db = nullptr;
   ASSERT_EQ(GCHRON_OK, gchron_zonedb_embedded(nullptr, nullptr, &db));
 
-  // The case WINDOWS-TODO.md 6b names as done.
+  // Pacific Standard Time is the row a Windows machine has to return.
   const char * id = nullptr;
   ASSERT_EQ(GCHRON_OK,
       gchron_zone_id_from_windows("Pacific Standard Time", &id));

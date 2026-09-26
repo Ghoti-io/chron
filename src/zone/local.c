@@ -232,8 +232,7 @@ GCHRON_Result gchron_zonedb_local(GCHRON_ZoneDb * db,
    *
    * TODO(windows): one case stays untried, and it is the one this table
    * cannot answer by construction - a machine whose zone Windows added after
-   * the CLDR release the table was built from. That is item 6b in the
-   * workspace's notes/suite/WINDOWS-TODO.md.
+   * the CLDR release the table was built from.
    *
    * Windows reports a zone by a name of its own - "Pacific Standard Time" -
    * and CLDR publishes what those mean in IANA terms. A name the table does

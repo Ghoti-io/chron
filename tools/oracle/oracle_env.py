@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """How an oracle is spelled, so that no tool here spells one itself.
 
-The pattern comes from the suite-wide exploration in
-`notes/suite/CONTAINERS.md`, and `unicode` landed it first. What it fixes here
+The pattern comes from the same exploration the other libraries adopted, and
+`unicode` landed it first. What it fixes here
 is that three of this library's four differentials used to *be* their own
 reference: `zoneinfo_diff.py` called `zoneinfo.ZoneInfo` in its own process,
 `temporal_diff.js` ran under whichever node was on PATH, and `icu_format`

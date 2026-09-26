@@ -91,8 +91,7 @@ static GCHRON_Result system_resolution(const GCHRON_Clock * self,
  * TODO(windows): that settles less than it sounds like. Reading both counters
  * shows they answer; it does not show the one property the pair exists to
  * express, which is that across a suspend one of them stops and the other
- * does not. Only a machine that can actually sleep shows that, and it is item
- * 6d in the workspace's notes/suite/WINDOWS-TODO.md.
+ * does not. Only a machine that can actually sleep shows that.
  *
  * QueryPerformanceCounter is deliberately *not* used here, though it was
  * before this pair existed and though it has the finer resolution. Microsoft

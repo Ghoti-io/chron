@@ -81,7 +81,7 @@ node	docker.io/library/node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea4195
 # it is not a defect here either - the specification now says both things, and
 # ldml_diff.py's CONDITIONAL_DIVERGENCES carries the citation and the minimal
 # pair. Whether this library follows CLDR 48 on output is a separate decision
-# about text users read; notes/chron/ORACLES-OPEN.md holds it.
+# about text users read.
 #
 # 78.3 is also the newest ICU4C release (2026-03-17) and what `unicode` pins,
 # so this raise also ends the suite asking one question of two CLDR versions.
@@ -89,8 +89,8 @@ node	docker.io/library/node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea4195
 # **Built here, and now from source rather than from Debian**, which the raise
 # forced and which is the right instrument anyway. 76.1 is Debian 13's own
 # libicu-dev, so an apt install was cheap and stable while that was the pin;
-# 78.3 exists only in sid, and CONTAINERS.md section 2.6 is right that an exact
-# apt pin into sid expires sooner than a source release, which has no expiry.
+# 78.3 exists only in sid, and an exact apt pin into sid expires sooner than a
+# source release, which has no expiry.
 # This is the one gate whose disagreement means a defect, so an expiring pin is
 # the worst place to put it.
 #

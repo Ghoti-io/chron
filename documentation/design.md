@@ -660,10 +660,9 @@ order:
    for the name in that case.
 3. On Windows, `GetDynamicTimeZoneInformation()` gives a Windows zone name,
    which the CLDR `windowsZones.xml` table maps to an IANA identifier. The
-   branch is written, marked `TODO(windows):`, and listed in the parent
-   `notes/suite/WINDOWS-TODO.md` with "done when" being that
-   `gchron_zonedb_local()` on
-   a machine set to Pacific Standard Time returns `America/Los_Angeles`.
+   branch is written and marked `TODO(windows):`. It is done when
+   `gchron_zonedb_local()` on a machine set to Pacific Standard Time returns
+   `America/Los_Angeles`.
 
 Nothing else in the library calls this. A `ZonedDateTime` never has an
 implicit zone.
@@ -1095,9 +1094,7 @@ the platform. The `Precise` variants are used because the plain ones advance
 only on the timer tick, roughly every 15 ms, which would round a frame time
 to zero or to a whole frame.
 
-None of the Windows half has been run; the workspace's
-`notes/suite/WINDOWS-TODO.md` §6d says what would
-settle it. Neither can the suspend behaviour be tested anywhere in CI, because
+None of the Windows half has been run. Neither can the suspend behaviour be tested anywhere in CI, because
 a test cannot suspend the machine it runs on: `tests/unit/test_clock.cpp`
 checks the ordering, the refusals and the tagging, and **skips with a stated
 reason** on a machine that has not slept since it booted. The first draft of

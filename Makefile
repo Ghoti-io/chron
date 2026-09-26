@@ -535,8 +535,6 @@ TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
 # there" from "never asked there". The default stays lenient; `make test-full`
 # sets this, and a release is measured with it.
 #
-# notes/suite/SUITE-TODO.md item 17.
-#
 REQUIRE_ORACLES ?=
 #
 # A gate that skips leaves a note here, and one that runs removes its own.
@@ -550,7 +548,7 @@ REQUIRE_ORACLES ?=
 #
 # This is a transitional measure. Once the oracles are containerised these
 # tools are present by construction, nothing skips, and the parenthesis never
-# appears; see notes/chron/ORACLES-OPEN.md.
+# appears.
 #
 GATE_SKIP_DIR := $(BUILD_DIR)/.gates-skipped
 
@@ -1758,8 +1756,7 @@ check-oracle-temporal: $(APP_DIR)/tools/gchron_iso$(EXE_EXTENSION)
 #
 # Every differential goes through oracle_run.py, which resolves the reference
 # and asks its version *before* the gate runs, and prints what answered on the
-# line above the gate's numbers. notes/suite/CONTAINERS.md has the pattern;
-# tools/oracle/containers/IMAGES has the pins.
+# line above the gate's numbers. tools/oracle/containers/IMAGES has the pins.
 #
 # GHOTI_ORACLE_MODE=host runs this machine's own tools instead, and says
 # `unpinned` in the line it prints. There is deliberately no fallback between
@@ -1906,7 +1903,7 @@ test: $(APP_DIR)/$(TARGET) $(TEST_EXECUTABLES) $(TEST_GATES)
 # What a release is measured with. `make test` stays lenient about a missing
 # tool, because the common case is a developer without libicu-dev who still
 # wants the suite to run; this is the run that refuses to call an unasked
-# question an answer. notes/suite/SUITE-TODO.md item 17.
+# question an answer.
 #
 test-full: ## Run the suite with every gate and every differential required
 test-full:
