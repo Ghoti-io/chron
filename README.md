@@ -120,7 +120,7 @@ the fix.
 
 ```bash
 make
-make test                    # 443 tests in 30 suites, the conformance runners included
+make test
 sudo make install
 ```
 

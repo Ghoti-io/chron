@@ -525,7 +525,7 @@ TESTFLAGS_RESOLVED := $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_LOOKUP_PATH) pkg-conf
 # run. It costs about a second and reports rather than fails when the input
 # a generator needs is not on the machine.
 TEST_GATES ?= check-symbols check-layering check-aliasing check-stamps \
-	check-generated check-docs check-license check-counts check-skip-notices
+	check-generated check-docs check-license check-skip-notices
 
 #
 # A check whose tool is missing prints a line and passes, which on one
@@ -885,7 +885,7 @@ $(APP_DIR)/examples/%$(EXE_EXTENSION): examples/%.c $(APP_DIR)/$(STATIC_TARGET) 
 # General commands
 .PHONY: clean cloc docs docs-pdf examples coverage check-symbols check-layering
 .PHONY: vectors vectors-jsonschema vectors-zones vectors-calendar vectors-calendars
-.PHONY: tools check-oracle-zoneinfo check-oracle-embedded check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license check-counts
+.PHONY: tools check-oracle-zoneinfo check-oracle-embedded check-oracle-ldml check-oracle-ldml-parse check-generated check-docs check-license
 .PHONY: check-aliasing check-stamps check-skip-notices
 .PHONY: check-oracle-temporal check-oracles test-full oracle-images
 # Release build commands
@@ -2502,49 +2502,6 @@ check-skip-notices: ## Fail if a gate can skip without saying so in the summary
 			} \
 			printf "\033[0;32mAll %d gate skip sites record themselves for the summary.\033[0m\n", total; \
 		}' Makefile
-
-check-counts: ## Fail if README.md's test count no longer matches the suites
-# The README tells a reader what `make test` will print before they run it,
-# which is worth having and is worth nothing if it is wrong.  It went stale
-# the first time tests were added without touching it, and nothing noticed:
-# the number is prose, so no compiler, no test and no other gate reads it.
-# A documented fact that nothing checks becomes a wrong one, and review
-# cannot catch this sort: the reviewer has no more idea of the true number
-# than the writer did.
-#
-# Counted by asking the built binaries rather than by grepping the sources,
-# because the binaries are what `make test` runs.  A grep over tests/ agrees
-# today, and agrees by luck:  it counts macros as written, so it would keep
-# counting a suite that stopped being linked, miss anything gtest registers
-# rather than spells, and count a DISABLED_ test that never runs.  A gate
-# that can disagree with the thing it certifies is not measuring it.
-check-counts: $(TEST_EXECUTABLES)
-ifeq ($(OS_NAME), Windows)
-	@printf "check-counts: skipped on Windows - README.md states the Linux count, and the glibc differentials are compiled out here, so the two platforms run different numbers of tests.\n"
-else
-	@tests=0; \
-	for test_exe in $(TEST_EXECUTABLES); do \
-		n=$$(LD_LIBRARY_PATH="$(TEST_LD_PATH)" $$test_exe --gtest_list_tests 2>/dev/null \
-			| grep -cE "^  ") || n=0; \
-		tests=$$((tests + n)); \
-	done; \
-	suites=$(words $(TEST_EXECUTABLES)); \
-	claimed=$$(grep -oE "# [0-9]+ tests in [0-9]+ suites" README.md | head -1); \
-	actual="# $$tests tests in $$suites suites"; \
-	if [ -z "$$claimed" ]; then \
-		printf "\033[0;31mcheck-counts: README.md no longer states a test count\033[0m\n"; \
-		printf "  expected a line containing: %s\n" "$$actual"; \
-		exit 1; \
-	fi; \
-	if [ "$$claimed" != "$$actual" ]; then \
-		printf "\033[0;31mcheck-counts: README.md is stale\033[0m\n"; \
-		printf "  README says: %s\n" "$$claimed"; \
-		printf "  the suites are: %s\n" "$$actual"; \
-		exit 1; \
-	fi; \
-	printf "\033[0;32mcheck-counts: README.md's %d tests in %d suites is what is there.\033[0m\n" \
-		"$$tests" "$$suites"
-endif
 
 check-docs: ## Fail on a documentation fault in the headers or the manual
 	@if ! command -v doxygen >/dev/null 2>&1; then \
