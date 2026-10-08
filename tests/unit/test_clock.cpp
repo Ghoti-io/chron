@@ -11,6 +11,7 @@
  * Copyright 2026 by Corey Pennycuff
  */
 
+#include <climits>
 #include <cstring>
 
 #include <gtest/gtest.h>
